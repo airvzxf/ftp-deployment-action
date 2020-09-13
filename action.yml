@@ -1,0 +1,41 @@
+name: 'ftp-deployment-action'
+author: 'Israel Roldan <israel.alberto.rv@gmail.com>'
+description: >-
+  FTP Deployment:
+  This GitHub action copy the files via FTP from your Git project to your server in a specific path.
+inputs:
+  server:
+    description: 'FTP Server'
+    required: true
+  user:
+    description: 'FTP User'
+    required: true
+  password:
+    description: 'FTP Password'
+    required: true
+  ssl_allow:
+    description: 'Allow SSL encryption'
+    required: false
+    default: 'false'
+  use_feat:
+    description: 'Use FEAT: Determining what extended features the FTP server supports'
+    required: false
+    default: 'false'
+  delete:
+    description: 'Delete all the files inside of the remote directory.'
+    required: false
+    default: 'false'
+  local_dir:
+    description: 'Local directory'
+    required: false
+    default: ''
+  remote_dir:
+    description: 'Remote directory'
+    required: false
+    default: ''
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+branding:
+  color: 'blue'
+  icon: 'upload-cloud'
