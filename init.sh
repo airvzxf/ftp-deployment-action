@@ -21,12 +21,6 @@ echo "=== List this directory ==="
 ls -lha
 echo ""
 
-if [ -z "${INPUT_LOCAL_DIR}" ]; then
-  INPUT_LOCAL_DIR="/public_html/"
-else
-  INPUT_LOCAL_DIR="/public_html/${INPUT_LOCAL_DIR}/"
-fi
-
 if [ -z "${INPUT_REMOTE_DIR}" ]; then
   INPUT_REMOTE_DIR="./"
 else
