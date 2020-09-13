@@ -39,14 +39,14 @@ Optional, you can get the last version which has the last commits using this:
 
 Option | Description | Required | Default | Example
 ---    | ---         | ---      | ---     | ---
-server | FTP Server | true | N/A | rovisoft.net
-user | FTP Username | true | N/A | myself&#64;rovisoft.net
-password | FTP Password | true | N/A | ExampleOnlyAlphabets
-ssl_allow | Allow SSL encryption | false | false | N/A
-use_feat | Determining what extended features the FTP server supports | false | false | N/A
-delete | Delete all the files inside of the remote directory before the upload process | false | false | N/A
-local_dir | Local directory | false | "" | "public_html"
-remote_dir | Remote directory | false | "" | "www/user/home"
+server | FTP Server | Yes | N/A | rovisoft.net
+user | FTP Username | Yes | N/A | myself&#64;rovisoft.net
+password | FTP Password | Yes | N/A | ExampleOnlyAlphabets
+ssl_allow | Allow SSL encryption | No | false | N/A
+use_feat | Determining what extended features the FTP server supports | No | false | N/A
+delete | Delete all the files inside of the remote directory before the upload process | No | false | N/A
+local_dir | Local directory | No | "" | "public_html"
+remote_dir | Remote directory | No | "" | "www/user/home"
 
 
 ## NOTES
