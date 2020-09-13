@@ -37,7 +37,7 @@ jobs:
 Option | Description | Required | Default | Example
 ---    | ---         | ---      | ---     | ---
 server | FTP Server | true | N/A | rovisoft.net
-user | FTP Username | true | N/A | myself@rovisoft.net
+user | FTP Username | true | N/A | myself&#64;rovisoft.net
 password | FTP Password | true | N/A | ExampleOnlyAlphabets
 ssl_allow | Allow SSL encryption | false | false | N/A
 use_feat | Determining what extended features the FTP server supports | false | false | N/A
