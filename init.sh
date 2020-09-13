@@ -18,8 +18,8 @@ if [ "${INPUT_DELETE}" = "true" ]; then
   rm -f "${FILE_LIST}"
 
   lftp \
-    -u ${INPUT_USER},${INPUT_PASSWORD} \
-    ${INPUT_SERVER} \
+    -u "${INPUT_USER}","${INPUT_PASSWORD}" \
+    "${INPUT_SERVER}" \
     -e "${FTP_SETTINGS} renlist > ${FILE_LIST}; quit;"
 
   sed -i 's/^\.$/..\n/g' "${FILE_LIST}"
@@ -35,8 +35,8 @@ if [ "${INPUT_DELETE}" = "true" ]; then
   rm -f "${FILE_LIST}"
 
   lftp \
-    -u ${INPUT_USER},${INPUT_PASSWORD} \
-    ${INPUT_SERVER} \
+    -u "${INPUT_USER}","${INPUT_PASSWORD}" \
+    "${INPUT_SERVER}" \
     -e "${FTP_SETTINGS} glob rm -rf ${DELETE_ITEMS} 2>/dev/null; quit;"
 fi
 
