@@ -1,8 +1,8 @@
 name: 'FTP Deployment'
 author: 'Israel Roldan <israel.alberto.rv@gmail.com>'
 description: >-
-  Copy the files via FTP from your Git project to your server in a specific path also you can delete the destination
-  folder before the upload.
+  Copy all the files and folders via FTP from your Git project to your server in a specific path,
+  delete remote folder before.
 inputs:
   server:
     description: 'FTP Server'
