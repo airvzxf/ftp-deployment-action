@@ -21,13 +21,19 @@ echo "=== List this directory ==="
 ls -lha
 echo ""
 
+if [ -z "${INPUT_LOCAL_DIR}" ]; then
+  INPUT_LOCAL_DIR="./"
+else
+  INPUT_LOCAL_DIR="./${INPUT_LOCAL_DIR}/"
+  echo "=== List local directory ==="
+  ls -lha "${INPUT_LOCAL_DIR}"
+  echo ""
+fi
+
 if [ -z "${INPUT_REMOTE_DIR}" ]; then
   INPUT_REMOTE_DIR="./"
 else
   INPUT_REMOTE_DIR="./${INPUT_REMOTE_DIR}/"
-  echo "=== List local directory ==="
-  ls -lha "${INPUT_REMOTE_DIR}"
-  echo ""
 fi
 
 if [ "${INPUT_DELETE}" = "true" ]; then
@@ -37,7 +43,7 @@ fi
 lftp \
   -u "${INPUT_USER}","${INPUT_PASSWORD}" \
   "${INPUT_SERVER}" \
-  -e "${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR}/ ${INPUT_REMOTE_DIR}; quit;"
+  -e "${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}; quit;"
 
 echo ""
 echo "FTP UPLOADED FINISHED!"
