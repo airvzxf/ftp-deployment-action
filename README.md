@@ -31,7 +31,7 @@ jobs:
           local_dir: "public_html"
 ```
 
-Optional, you can get the last version which has the last commits in the action using this:
+Optional, you can get the last version which has the last commits using this:
 `airvzxf/ftp-deployment-action@master`
 
 
