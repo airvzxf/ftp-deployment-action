@@ -40,5 +40,11 @@ if [ "${INPUT_DELETE}" = "true" ]; then
     -e "${FTP_SETTINGS} glob rm -rf ${DELETE_ITEMS} 2>/dev/null; quit;"
 fi
 
-pwd
-ls -lha .
+echo "INPUT_SERVER: ${INPUT_SERVER}"
+echo "INPUT_USER: ${INPUT_USER}"
+echo "INPUT_PASSWORD: ${INPUT_PASSWORD}"
+echo "INPUT_SSL_ALLOW: ${INPUT_SSL_ALLOW}"
+echo "INPUT_USE_FEAT: ${INPUT_USE_FEAT}"
+echo "INPUT_DELETE: ${INPUT_DELETE}"
+echo "INPUT_LOCAL_DIR: ${INPUT_LOCAL_DIR}"
+echo "INPUT_REMOTE_DIR: ${INPUT_REMOTE_DIR}"
