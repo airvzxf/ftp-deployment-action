@@ -1,15 +1,11 @@
-FROM debian:stable-slim
+FROM alpine:latest
+
+RUN apk add --no-cache lftp
 
 WORKDIR /app
-
-RUN apt-get -y update && \
-    apt-get install -y \
-        lftp
+WORKDIR /public_html
 
 COPY init.sh /app/init.sh
 COPY LICENSE README.md /app/
 
-RUN ["/bin/chmod", "+x", "/app/init.sh"]
-
 ENTRYPOINT ["/app/init.sh"]
-#RUN ["/bin/sh", "/app/init.sh"]
