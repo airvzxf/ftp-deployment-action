@@ -2,15 +2,6 @@
 
 # TODO: Add list of excluded delete files in two formats, string separated by space and file.
 
-INPUT_SERVER=rovisoft.net
-INPUT_USER=saint_seiya_kotz@rovisoft.net
-INPUT_PASSWORD=OpYfgb5coLyd
-INPUT_SSL_ALLOW=false
-INPUT_USE_FEAT=false
-INPUT_DELETE=true
-#INPUT_LOCAL_DIR=""
-INPUT_REMOTE_DIR=""
-
 FTP_SETTINGS='set ftp:ssl-allow '${INPUT_SSL_ALLOW}'; set ftp:use-feat '${INPUT_USE_FEAT}';'
 FILE_LIST=remote_ftp_list_$(date "+%s").tmp
 
