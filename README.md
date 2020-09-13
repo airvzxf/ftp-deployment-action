@@ -20,7 +20,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-
       # Here is the deployment action
       - name: Upload public_html via FTP
         uses: airvzxf/ftp-deployment-action@v1.0-alpha.1
@@ -31,6 +30,10 @@ jobs:
           delete: "true"
           local_dir: "public_html"
 ```
+
+Optional, you can get the last version which has the last commits in the action using this:
+`airvzxf/ftp-deployment-action@master`
+
 
 ## Settings
 
