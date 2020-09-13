@@ -60,5 +60,5 @@ lftp \
 
 echo ""
 echo "=============================="
-echo "=== FTP UPLOADED FINISHED! ==="
+echo "=   FTP UPLOADED FINISHED!   ="
 echo "=============================="
