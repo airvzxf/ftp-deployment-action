@@ -40,7 +40,7 @@ Optional, you can get the last version which has the last commits using this:
 Option | Description | Required | Default | Example
 ---    | ---         | ---      | ---     | ---
 server | FTP Server | Yes | N/A | rovisoft.net
-user | FTP Username | Yes | N/A | myself&#64;rovisoft.net
+user | FTP Username | Yes | N/A | myself@rovisoft.net
 password | FTP Password | Yes | N/A | ExampleOnlyAlphabets
 ssl_allow | Allow SSL encryption | No | false | N/A
 use_feat | Determining what extended features the FTP server supports | No | false | N/A
