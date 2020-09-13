@@ -59,4 +59,6 @@ lftp \
   -e "${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}; quit;"
 
 echo ""
-echo "FTP UPLOADED FINISHED!"
+echo "=============================="
+echo "=== FTP UPLOADED FINISHED! ==="
+echo "=============================="
