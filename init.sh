@@ -47,8 +47,13 @@ echo ""
 echo "=== LFTP ==="
 echo "lftp -> ${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}"
 echo ""
+echo "=== * NOTE * ==="
+echo "The upload should be fast depends how many files and what size they have."
+echo "If the process take for several minutes, please stop the job and run it again."
+echo ""
 
 lftp \
+  --debug \
   -u "${INPUT_USER}","${INPUT_PASSWORD}" \
   "${INPUT_SERVER}" \
   -e "${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}; quit;"
