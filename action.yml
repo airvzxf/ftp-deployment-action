@@ -22,7 +22,7 @@ inputs:
     required: false
     default: 'false'
   delete:
-    description: 'Delete all the files inside of the remote directory.'
+    description: 'Delete all the files inside of the remote directory'
     required: false
     default: 'false'
   local_dir:
