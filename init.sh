@@ -4,6 +4,8 @@
 FTP_SETTINGS="set ftp:ssl-allow ${INPUT_SSL_ALLOW};" \
   "set ftp:use-feat ${INPUT_USE_FEAT};" \
   "set net:max-retries ${INPUT_MAX_RETRIES};"
+echo "FTP_SETTINGS: ${FTP_SETTINGS}"
+
 MIRROR_COMMAND="mirror --continue --reverse --no-symlinks"
 
 echo "=== Environment variables ==="
@@ -48,7 +50,11 @@ echo "=== List local directory | ${INPUT_LOCAL_DIR} ==="
 ls -lha "${INPUT_LOCAL_DIR}"
 echo ""
 echo "=== LFTP ==="
-echo "lftp -> ${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}"
+echo "lftp"
+echo " FTP_SETTINGS     -> ${FTP_SETTINGS}"
+echo " MIRROR_COMMAND   -> ${MIRROR_COMMAND}"
+echo " INPUT_LOCAL_DIR  -> ${INPUT_LOCAL_DIR}"
+echo " INPUT_REMOTE_DIR -> ${INPUT_REMOTE_DIR}"
 echo ""
 echo "=== * NOTE * ==="
 echo "The upload should be fast depends how many files and what size they have."
