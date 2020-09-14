@@ -21,6 +21,10 @@ inputs:
     description: 'Use FEAT: Determining what extended features the FTP server supports'
     required: false
     default: 'false'
+  max_retries:
+    description: 'XXX'
+    required: false
+    default: '1'
   delete:
     description: 'Delete all the files inside of the remote directory'
     required: false

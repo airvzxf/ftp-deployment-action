@@ -43,7 +43,8 @@ server | FTP Server | Yes | N/A | rovisoft.net
 user | FTP Username | Yes | N/A | myself@rovisoft.net
 password | FTP Password | Yes | N/A | ExampleOnlyAlphabets
 ssl_allow | Allow SSL encryption | No | false | N/A
-use_feat | Determining what extended features the FTP server supports | No | false | N/A
+use_feat | FEAT: Determining what extended features the FTP server supports | No | false | N/A
+???  | Pending | No | ??? | N/A
 delete | Delete all the files inside of the remote directory before the upload process | No | false | N/A
 local_dir | Local directory | No | "" | "public_html"
 remote_dir | Remote directory | No | "" | "www/user/home"
