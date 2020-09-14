@@ -1,9 +1,7 @@
 #!/bin/sh
 # TODO: Add list of excluded delete files in two formats, string separated by space and file.
 
-FTP_SETTINGS="set ftp:ssl-allow ${INPUT_SSL_ALLOW};" \
-  "set ftp:use-feat ${INPUT_USE_FEAT};" \
-  "set net:max-retries ${INPUT_MAX_RETRIES};"
+FTP_SETTINGS="set ftp:ssl-allow ${INPUT_SSL_ALLOW}; set ftp:use-feat ${INPUT_USE_FEAT}; set net:max-retries ${INPUT_MAX_RETRIES};"
 echo "FTP_SETTINGS: ${FTP_SETTINGS}"
 
 MIRROR_COMMAND="mirror --continue --reverse --no-symlinks"
