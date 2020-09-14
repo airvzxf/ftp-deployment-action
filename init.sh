@@ -1,11 +1,6 @@
 #!/bin/sh
 # TODO: Add list of excluded delete files in two formats, string separated by space and file.
 
-FTP_SETTINGS="set ftp:ssl-allow ${INPUT_SSL_ALLOW}; set ftp:use-feat ${INPUT_USE_FEAT}; set net:max-retries ${INPUT_MAX_RETRIES};"
-echo "FTP_SETTINGS: ${FTP_SETTINGS}"
-
-MIRROR_COMMAND="mirror --continue --reverse --no-symlinks"
-
 echo "=== Environment variables ==="
 echo "INPUT_SERVER: ${INPUT_SERVER}"
 echo "INPUT_USER: ${INPUT_USER}"
@@ -23,6 +18,13 @@ echo ""
 echo "=== List this directory ==="
 ls -lha
 echo ""
+
+FTP_SETTINGS="set ftp:ssl-allow ${INPUT_SSL_ALLOW};"
+FTP_SETTINGS="${FTP_SETTINGS} set ftp:use-feat ${INPUT_USE_FEAT};"
+FTP_SETTINGS="${FTP_SETTINGS} set net:max-retries ${INPUT_MAX_RETRIES};"
+echo "FTP_SETTINGS: ${FTP_SETTINGS}"
+
+MIRROR_COMMAND="mirror --continue --reverse --no-symlinks"
 
 if [ -z "${INPUT_LOCAL_DIR}" ]; then
   INPUT_LOCAL_DIR="./"
