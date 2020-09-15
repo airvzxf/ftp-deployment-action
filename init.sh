@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/sh -xve
 # TODO: Add list of excluded delete files in two formats, string separated by space and file.
 
 echo "=== Environment variables ==="
@@ -22,7 +22,11 @@ echo ""
 FTP_SETTINGS="set ftp:ssl-allow ${INPUT_SSL_ALLOW};"
 FTP_SETTINGS="${FTP_SETTINGS} set ftp:use-feat ${INPUT_USE_FEAT};"
 FTP_SETTINGS="${FTP_SETTINGS} set net:max-retries ${INPUT_MAX_RETRIES};"
-echo "FTP_SETTINGS: ${FTP_SETTINGS}"
+FTP_SETTINGS="${FTP_SETTINGS} set dns:fatal-timeout 10s;"
+FTP_SETTINGS="${FTP_SETTINGS} set dns:max-retries 1;"
+FTP_SETTINGS="${FTP_SETTINGS} set net:timeout  10s;"
+FTP_SETTINGS="${FTP_SETTINGS} set net:persist-retries 1;"
+FTP_SETTINGS="${FTP_SETTINGS} set ftp:nop-interval 1;"
 
 MIRROR_COMMAND="mirror --continue --reverse --no-symlinks"
 
