@@ -86,9 +86,6 @@ echo "The upload should be fast depends how many files and what size they have."
 echo "If the process take for several minutes, please stop the job and run it again."
 echo ""
 
-echo ""
-echo "# LFTP"
-
 COUNTER=1
 SUCCESS=""
 
@@ -111,6 +108,10 @@ until [ ${COUNTER} -gt ${INPUT_MAX_RETRIES} ]; do
 done
 
 if [ -z "${SUCCESS}" ]; then
+  echo ""
+  echo "=============================="
+  echo "=    ERROR: UPLOAD FAILED    ="
+  echo "=============================="
   exit 1
 fi
 
