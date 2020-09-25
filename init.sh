@@ -105,6 +105,8 @@ until [ ${COUNTER} -gt ${INPUT_MAX_RETRIES} ]; do
   fi
 
   COUNTER=$((COUNTER + 1))
+  echo "Sleeping for 20 seconds..."
+  sleep 20s
 done
 
 if [ -z "${SUCCESS}" ]; then
