@@ -5,38 +5,58 @@ description: >-
   delete remote folder before.
 inputs:
   server:
-    description: 'FTP Server'
+    description: 'FTP Server.'
     required: true
   user:
-    description: 'FTP User'
+    description: 'FTP User.'
     required: true
   password:
-    description: 'FTP Password'
+    description: 'FTP Password.'
     required: true
-  ssl_allow:
-    description: 'Allow SSL encryption'
-    required: false
-    default: 'false'
-  use_feat:
-    description: 'Use FEAT: Determining what extended features the FTP server supports'
-    required: false
-    default: 'false'
-  max_retries:
-    description: 'XXX'
-    required: false
-    default: '1'
   delete:
-    description: 'Delete all the files inside of the remote directory'
+    description: 'Delete all the files inside of the remote directory.'
     required: false
     default: 'false'
   local_dir:
-    description: 'Local directory'
+    description: 'Local directory.'
     required: false
-    default: ''
+    default: './'
   remote_dir:
-    description: 'Remote directory'
+    description: 'Remote directory.'
     required: false
-    default: ''
+    default: './'
+  ftp_ssl_allow:
+    description: 'FTP - Allow SSL encryption.'
+    required: false
+    default: 'false'
+  ftp_use_feat:
+    description: 'FTP - FEAT: Determining what extended features the FTP server supports.'
+    required: false
+    default: 'false'
+  ftp_nop_interval:
+    description: 'FTP - Delay in seconds between NOOP commands when downloading tail of a file.'
+    required: false
+    default: '2'
+  net_max_retries:
+    description: 'NET - Maximum number of operation without success. 0 unlimited. 1 no retries.'
+    required: false
+    default: '1'
+  net_persist_retries:
+    description: 'NET - Ignore hard errors. When reply 5xx errors or there is too many users.'
+    required: false
+    default: '5'
+  net_timeout:
+    description: 'NET - Sets the network protocol timeout.'
+    required: false
+    default: '15s'
+  dns_max_retries:
+    description: 'DNS - 0 no limit trying to lookup an address otherwise try only this number of times.'
+    required: false
+    default: '8'
+  dns_fatal_timeout:
+    description: 'DNS - Time for DNS queries. Set to "never" to disable.'
+    required: false
+    default: '10s'
 runs:
   using: 'docker'
   image: 'Dockerfile'

@@ -1,16 +1,18 @@
-#!/bin/sh -xve
+#!/bin/sh -e
+# TODO: *** Added the new setting to this script, action.yml and the README.md files.
+
 # TODO: Add list of excluded delete files in two formats, string separated by space and file.
 
 echo "=== Environment variables ==="
 echo "INPUT_SERVER: ${INPUT_SERVER}"
 echo "INPUT_USER: ${INPUT_USER}"
 echo "INPUT_PASSWORD: ${INPUT_PASSWORD}"
-echo "INPUT_SSL_ALLOW: ${INPUT_SSL_ALLOW}"
-echo "INPUT_USE_FEAT: ${INPUT_USE_FEAT}"
-echo "INPUT_MAX_RETRIES : ${INPUT_MAX_RETRIES}"
 echo "INPUT_DELETE: ${INPUT_DELETE}"
 echo "INPUT_LOCAL_DIR: ${INPUT_LOCAL_DIR}"
 echo "INPUT_REMOTE_DIR: ${INPUT_REMOTE_DIR}"
+echo "INPUT_FTP_SSL_ALLOW: ${INPUT_FTP_SSL_ALLOW}"
+echo "INPUT_FTP_USE_FEAT: ${INPUT_FTP_USE_FEAT}"
+echo "INPUT_NET_MAX_RETRIES : ${INPUT_NET_MAX_RETRIES}"
 echo ""
 echo "=== Current location ==="
 pwd
@@ -19,27 +21,27 @@ echo "=== List this directory ==="
 ls -lha
 echo ""
 
-FTP_SETTINGS="set ftp:ssl-allow ${INPUT_SSL_ALLOW};"
-FTP_SETTINGS="${FTP_SETTINGS} set ftp:use-feat ${INPUT_USE_FEAT};"
-FTP_SETTINGS="${FTP_SETTINGS} set net:max-retries ${INPUT_MAX_RETRIES};"
-FTP_SETTINGS="${FTP_SETTINGS} set dns:fatal-timeout 10s;"
-FTP_SETTINGS="${FTP_SETTINGS} set dns:max-retries 1;"
-FTP_SETTINGS="${FTP_SETTINGS} set net:timeout  10s;"
-FTP_SETTINGS="${FTP_SETTINGS} set net:persist-retries 1;"
-FTP_SETTINGS="${FTP_SETTINGS} set ftp:nop-interval 1;"
+FTP_SETTINGS="set ftp:ssl-allow ${INPUT_FTP_SSL_ALLOW};"
+FTP_SETTINGS="${FTP_SETTINGS} set ftp:use-feat ${INPUT_FTP_USE_FEAT};"
+FTP_SETTINGS="${FTP_SETTINGS} set ftp:nop-interval ${INPUT_FTP_NOP_INTERVAL};"
+FTP_SETTINGS="${FTP_SETTINGS} set net:max-retries ${INPUT_NET_MAX_RETRIES};"
+FTP_SETTINGS="${FTP_SETTINGS} set net:persist-retries ${INPUT_NET_PERSIST_RETRIES};"
+FTP_SETTINGS="${FTP_SETTINGS} set net:timeout  ${INPUT_NET_TIMEOUT};"
+FTP_SETTINGS="${FTP_SETTINGS} set dns:max-retries ${INPUT_DNS_MAX_RETRIES};"
+FTP_SETTINGS="${FTP_SETTINGS} set dns:fatal-timeout ${INPUT_DNS_FATAL_TIMEOUT};"
 
 MIRROR_COMMAND="mirror --continue --reverse --no-symlinks"
 
 if [ -z "${INPUT_LOCAL_DIR}" ]; then
   INPUT_LOCAL_DIR="./"
 else
-  INPUT_LOCAL_DIR="./${INPUT_LOCAL_DIR}/"
+  INPUT_LOCAL_DIR="${INPUT_LOCAL_DIR}/"
 fi
 
 if [ -z "${INPUT_REMOTE_DIR}" ]; then
   INPUT_REMOTE_DIR="./"
 else
-  INPUT_REMOTE_DIR="./${INPUT_REMOTE_DIR}/"
+  INPUT_REMOTE_DIR="${INPUT_REMOTE_DIR}/"
 fi
 
 if [ "${INPUT_DELETE}" = "true" ]; then
