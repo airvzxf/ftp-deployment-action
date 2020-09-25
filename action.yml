@@ -17,6 +17,10 @@ inputs:
     description: 'Delete all the files inside of the remote directory.'
     required: false
     default: 'false'
+  max_retries:
+    description: 'Time that `lftp` will be executed if an error occur.'
+    required: false
+    default: '10'
   no_symlinks:
     description: 'Do not create symbolic links.'
     required: false

@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/sh -evx
 # TODO: *** Added the new setting to this script, action.yml and the README.md files.
 
 # TODO: Add list of excluded delete files in two formats, string separated by space and file.
@@ -7,10 +7,11 @@ echo "=== Environment variables ==="
 echo "INPUT_SERVER: ${INPUT_SERVER}"
 echo "INPUT_USER: ${INPUT_USER}"
 echo "INPUT_PASSWORD: ${INPUT_PASSWORD}"
-echo "INPUT_DELETE: ${INPUT_DELETE}"
-echo "INPUT_NO_SYMLINKS: ${INPUT_NO_SYMLINKS}"
 echo "INPUT_LOCAL_DIR: ${INPUT_LOCAL_DIR}"
 echo "INPUT_REMOTE_DIR: ${INPUT_REMOTE_DIR}"
+echo "INPUT_DELETE: ${INPUT_DELETE}"
+echo "INPUT_MAX_RETRIES: ${INPUT_MAX_RETRIES}"
+echo "INPUT_NO_SYMLINKS: ${INPUT_NO_SYMLINKS}"
 echo "INPUT_FTP_SSL_ALLOW: ${INPUT_FTP_SSL_ALLOW}"
 echo "INPUT_FTP_USE_FEAT: ${INPUT_FTP_USE_FEAT}"
 echo "INPUT_FTP_NOP_INTERVAL : ${INPUT_FTP_NOP_INTERVAL}"
@@ -37,6 +38,10 @@ FTP_SETTINGS="${FTP_SETTINGS} set dns:max-retries ${INPUT_DNS_MAX_RETRIES};"
 FTP_SETTINGS="${FTP_SETTINGS} set dns:fatal-timeout ${INPUT_DNS_FATAL_TIMEOUT};"
 
 MIRROR_COMMAND="mirror --continue --reverse"
+
+if [ -z "${INPUT_MAX_RETRIES}" ]; then
+  INPUT_MAX_RETRIES="10"
+fi
 
 if [ -z "${INPUT_LOCAL_DIR}" ]; then
   INPUT_LOCAL_DIR="./"
@@ -82,30 +87,28 @@ echo "If the process take for several minutes, please stop the job and run it ag
 echo ""
 
 echo ""
-echo "# Version 1"
-echo "# ---------------------------------------------"
-lftp \
-  --debug \
-  -u "${INPUT_USER}","${INPUT_PASSWORD}" \
-  "${INPUT_SERVER}" \
-  -e "${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}; quit;"
+echo "# LFTP"
 
-echo ""
-echo "lftp: ${?}"
-echo ""
+COUNTER=0
 
-echo ""
-echo "# Version 2"
-echo "# ---------------------------------------------"
-LFTP_RETURNED=$(lftp \
-  --debug \
-  -u "${INPUT_USER}","${INPUT_PASSWORD}" \
-  "${INPUT_SERVER}" \
-  -e "${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}; quit;")
+until [ ${COUNTER} -gt ${INPUT_MAX_RETRIES} ]; do
+  echo "# ---------------------------------------------"
+  lftp \
+    --debug \
+    -u "${INPUT_USER}","${INPUT_PASSWORD}" \
+    "${INPUT_SERVER}" \
+    -e "${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}; quit;"
 
-echo ""
-echo "LFTP_RETURNED: ${LFTP_RETURNED}"
-echo ""
+  echo ""
+  echo "lftp returned: ${?}"
+  echo ""
+
+  if [ $? -eq 0 ]; then
+    break
+  fi
+  COUNTER=$((COUNTER + 1))
+  echo "Try #: ${COUNTER}"
+done
 
 echo ""
 echo "=============================="

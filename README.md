@@ -44,10 +44,11 @@ Option | Description | Required | Default | Example
 server | FTP Server. | Yes | N/A | rovisoft.net
 user | FTP Username. | Yes | N/A | myself@rovisoft.net
 password | FTP Password. | Yes | N/A | ExampleOnlyAlphabets
-delete | Delete all the files inside of the remote directory before the upload process. | No | false | N/A
-no_symlinks | Do not create symbolic links. | No | true | N/A
 local_dir | Local directory. | No | "./" | "./public_html"
 remote_dir | Remote directory. | No | "./" | "/www/user/home"
+delete | Delete all the files inside of the remote directory before the upload process. | No | false | N/A
+max_retries | Time that `lftp` will be executed if an error occur. | No | 10 | N/A
+no_symlinks | Do not create symbolic links. | No | true | N/A
 ftp_ssl_allow | FTP - Allow SSL encryption | No | false | N/A
 ftp_use_feat | FTP - FEAT: Determining what extended features the FTP server supports. | No | false | N/A
 ftp_nop_interval | FTP - Delay in seconds between NOOP commands when downloading tail of a file. | No | 2 | N/A
