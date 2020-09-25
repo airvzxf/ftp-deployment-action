@@ -91,7 +91,6 @@ jobs:
 ```
 
 ## NOTES
-This Alpha version is for personal usage but in a short future will be robust for any Github developer.
 
 Main features:
 - Copy all the files inside of the specific folder from your Github repository to the specific folder in your server.
