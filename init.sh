@@ -81,11 +81,31 @@ echo "The upload should be fast depends how many files and what size they have."
 echo "If the process take for several minutes, please stop the job and run it again."
 echo ""
 
+echo ""
+echo "# Version 1"
+echo "# ---------------------------------------------"
 lftp \
   --debug \
   -u "${INPUT_USER}","${INPUT_PASSWORD}" \
   "${INPUT_SERVER}" \
   -e "${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}; quit;"
+
+echo ""
+echo "lftp: ${?}"
+echo ""
+
+echo ""
+echo "# Version 2"
+echo "# ---------------------------------------------"
+LFTP_RETURNED=$(lftp \
+  --debug \
+  -u "${INPUT_USER}","${INPUT_PASSWORD}" \
+  "${INPUT_SERVER}" \
+  -e "${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}; quit;")
+
+echo ""
+echo "LFTP_RETURNED: ${LFTP_RETURNED}"
+echo ""
 
 echo ""
 echo "=============================="
