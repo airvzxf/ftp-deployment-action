@@ -1,4 +1,4 @@
-#!/bin/sh -evx
+#!/bin/sh -e
 # TODO: *** Added the new setting to this script, action.yml and the README.md files.
 
 # TODO: Add list of excluded delete files in two formats, string separated by space and file.
@@ -90,9 +90,11 @@ echo ""
 echo "# LFTP"
 
 COUNTER=1
-SUCCESS="false"
+SUCCESS=""
 
 until [ ${COUNTER} -gt ${INPUT_MAX_RETRIES} ]; do
+  echo ""
+  echo "Try #: ${COUNTER}"
   echo "# ---------------------------------------------"
   lftp \
     --debug \
@@ -101,14 +103,16 @@ until [ ${COUNTER} -gt ${INPUT_MAX_RETRIES} ]; do
     -e "${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}; quit;" &&
     SUCCESS="true"
 
-  if [ ${SUCCESS} = "true" ]; then
+  if [ -n "${SUCCESS}" ]; then
     break
   fi
 
-  echo ""
-  echo "Try #: ${COUNTER}"
   COUNTER=$((COUNTER + 1))
 done
+
+if [ -z "${SUCCESS}" ]; then
+  exit 1
+fi
 
 echo ""
 echo "=============================="
