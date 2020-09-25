@@ -44,7 +44,7 @@ inputs:
   net_max_retries:
     description: 'NET - Maximum number of operation without success. 0 unlimited. 1 no retries.'
     required: false
-    default: '0'
+    default: '5'
   net_persist_retries:
     description: 'NET - Ignore hard errors. When reply 5xx errors or there is too many users.'
     required: false
