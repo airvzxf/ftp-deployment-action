@@ -31,7 +31,7 @@ jobs:
           delete: "false"
 ```
 
-Optional, you can get the live version which has the last commits using this:
+Optional, you can get the live version which has the last commits using the `master` branch like this:<br>
 `uses: airvzxf/ftp-deployment-action@master`
 
 
@@ -47,7 +47,7 @@ password | FTP Password. | Yes | N/A | ExampleOnlyAlphabets
 local_dir | Local directory. | No | "./" | "./public_html"
 remote_dir | Remote directory. | No | "./" | "/www/user/home"
 delete | Delete all the files inside of the remote directory before the upload process. | No | false | N/A
-max_retries | Time that `lftp` will be executed if an error occur. | No | 10 | N/A
+max_retries | Times that the `lftp` will be executed if an error occurred. | No | 10 | N/A
 no_symlinks | Do not create symbolic links. | No | true | N/A
 ftp_ssl_allow | FTP - Allow SSL encryption | No | false | N/A
 ftp_use_feat | FTP - FEAT: Determining what extended features the FTP server supports. | No | false | N/A

@@ -26,7 +26,7 @@ inputs:
     required: false
     default: 'false'
   max_retries:
-    description: 'Time that `lftp` will be executed if an error occur.'
+    description: 'Times that the lftp will be executed if an error occurred.'
     required: false
     default: '10'
   no_symlinks:
