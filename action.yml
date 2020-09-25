@@ -17,6 +17,10 @@ inputs:
     description: 'Delete all the files inside of the remote directory.'
     required: false
     default: 'false'
+  no_symlinks:
+    description: 'Do not create symbolic links.'
+    required: false
+    default: 'true'
   local_dir:
     description: 'Local directory.'
     required: false

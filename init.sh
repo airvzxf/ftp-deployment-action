@@ -8,11 +8,17 @@ echo "INPUT_SERVER: ${INPUT_SERVER}"
 echo "INPUT_USER: ${INPUT_USER}"
 echo "INPUT_PASSWORD: ${INPUT_PASSWORD}"
 echo "INPUT_DELETE: ${INPUT_DELETE}"
+echo "INPUT_NO_SYMLINKS: ${INPUT_NO_SYMLINKS}"
 echo "INPUT_LOCAL_DIR: ${INPUT_LOCAL_DIR}"
 echo "INPUT_REMOTE_DIR: ${INPUT_REMOTE_DIR}"
 echo "INPUT_FTP_SSL_ALLOW: ${INPUT_FTP_SSL_ALLOW}"
 echo "INPUT_FTP_USE_FEAT: ${INPUT_FTP_USE_FEAT}"
+echo "INPUT_FTP_NOP_INTERVAL : ${INPUT_FTP_NOP_INTERVAL}"
 echo "INPUT_NET_MAX_RETRIES : ${INPUT_NET_MAX_RETRIES}"
+echo "INPUT_NET_PERSIST_RETRIES : ${INPUT_NET_PERSIST_RETRIES}"
+echo "INPUT_NET_TIMEOUT : ${INPUT_NET_TIMEOUT}"
+echo "INPUT_DNS_MAX_RETRIES : ${INPUT_DNS_MAX_RETRIES}"
+echo "INPUT_DNS_FATAL_TIMEOUT : ${INPUT_DNS_FATAL_TIMEOUT}"
 echo ""
 echo "=== Current location ==="
 pwd
@@ -30,18 +36,26 @@ FTP_SETTINGS="${FTP_SETTINGS} set net:timeout  ${INPUT_NET_TIMEOUT};"
 FTP_SETTINGS="${FTP_SETTINGS} set dns:max-retries ${INPUT_DNS_MAX_RETRIES};"
 FTP_SETTINGS="${FTP_SETTINGS} set dns:fatal-timeout ${INPUT_DNS_FATAL_TIMEOUT};"
 
-MIRROR_COMMAND="mirror --continue --reverse --no-symlinks"
+MIRROR_COMMAND="mirror --continue --reverse"
 
 if [ -z "${INPUT_LOCAL_DIR}" ]; then
   INPUT_LOCAL_DIR="./"
 else
-  INPUT_LOCAL_DIR="${INPUT_LOCAL_DIR}/"
+  if [ "${INPUT_LOCAL_DIR}" != "./" ]; then
+    INPUT_LOCAL_DIR="${INPUT_LOCAL_DIR}/"
+  fi
 fi
 
 if [ -z "${INPUT_REMOTE_DIR}" ]; then
   INPUT_REMOTE_DIR="./"
 else
-  INPUT_REMOTE_DIR="${INPUT_REMOTE_DIR}/"
+  if [ "${INPUT_REMOTE_DIR}" != "./" ]; then
+    INPUT_REMOTE_DIR="${INPUT_REMOTE_DIR}/"
+  fi
+fi
+
+if [ "${INPUT_NO_SYMLINKS}" = "true" ]; then
+  MIRROR_COMMAND="${MIRROR_COMMAND} --no-symlinks"
 fi
 
 if [ "${INPUT_DELETE}" = "true" ]; then

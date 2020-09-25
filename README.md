@@ -45,6 +45,7 @@ server | FTP Server. | Yes | N/A | rovisoft.net
 user | FTP Username. | Yes | N/A | myself@rovisoft.net
 password | FTP Password. | Yes | N/A | ExampleOnlyAlphabets
 delete | Delete all the files inside of the remote directory before the upload process. | No | false | N/A
+no_symlinks | Do not create symbolic links. | No | true | N/A
 local_dir | Local directory. | No | "./" | "./public_html"
 remote_dir | Remote directory. | No | "./" | "/www/user/home"
 ftp_ssl_allow | FTP - Allow SSL encryption | No | false | N/A
@@ -78,6 +79,7 @@ jobs:
           user: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
           delete: "true"
+          no_symlinks: "false"
           local_dir: "./public_html"
           remote_dir: "/www/sub-domain/games/myself"
           ftp_ssl_allow: "true"
@@ -100,7 +102,6 @@ Main features:
 
 TODOs:
 - Add options for exclude delete files.
-- Add the property/option for the upload the Symlinks.
 
 
 [1]: https://docs.github.com/en/actions/configuring-and-managing-workflows/creating-and-storing-encrypted-secrets
