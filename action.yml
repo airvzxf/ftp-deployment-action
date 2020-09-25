@@ -13,6 +13,14 @@ inputs:
   password:
     description: 'FTP Password.'
     required: true
+  local_dir:
+    description: 'Local directory.'
+    required: false
+    default: './'
+  remote_dir:
+    description: 'Remote directory.'
+    required: false
+    default: './'
   delete:
     description: 'Delete all the files inside of the remote directory.'
     required: false
@@ -25,14 +33,6 @@ inputs:
     description: 'Do not create symbolic links.'
     required: false
     default: 'true'
-  local_dir:
-    description: 'Local directory.'
-    required: false
-    default: './'
-  remote_dir:
-    description: 'Remote directory.'
-    required: false
-    default: './'
   ftp_ssl_allow:
     description: 'FTP - Allow SSL encryption.'
     required: false

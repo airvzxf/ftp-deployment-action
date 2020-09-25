@@ -27,8 +27,8 @@ jobs:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          delete: "false"
           local_dir: "./public_html"
+          delete: "false"
 ```
 
 Optional, you can get the live version which has the last commits using this:
@@ -79,11 +79,11 @@ jobs:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
+          local_dir: "./public_html"
+          remote_dir: "/www/sub-domain/games/myself"
           delete: "true"
           max_retries: "7"
           no_symlinks: "false"
-          local_dir: "./public_html"
-          remote_dir: "/www/sub-domain/games/myself"
           ftp_ssl_allow: "true"
           ftp_use_feat: "true"
           ftp_nop_interval: "9"
