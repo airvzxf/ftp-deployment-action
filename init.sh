@@ -1,7 +1,4 @@
 #!/bin/sh -e
-# TODO: *** Added the new setting to this script, action.yml and the README.md files.
-
-# TODO: Add list of excluded delete files in two formats, string separated by space and file.
 
 echo "=== Environment variables ==="
 echo "INPUT_SERVER: ${INPUT_SERVER}"
