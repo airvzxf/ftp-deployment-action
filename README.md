@@ -80,16 +80,17 @@ jobs:
           user: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
           delete: "true"
+          max_retries: "7"
           no_symlinks: "false"
           local_dir: "./public_html"
           remote_dir: "/www/sub-domain/games/myself"
           ftp_ssl_allow: "true"
           ftp_use_feat: "true"
-          ftp_nop_interval: "6"
+          ftp_nop_interval: "9"
           net_max_retries: "0"
-          net_persist_retries: "7"
-          net_timeout: "18s"
-          dns_max_retries: "9"
+          net_persist_retries: "11"
+          net_timeout: "13s"
+          dns_max_retries: "17"
           dns_fatal_timeout: "never"
 ```
 

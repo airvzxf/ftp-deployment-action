@@ -89,7 +89,8 @@ echo ""
 echo ""
 echo "# LFTP"
 
-COUNTER=0
+COUNTER=1
+SUCCESS="false"
 
 until [ ${COUNTER} -gt ${INPUT_MAX_RETRIES} ]; do
   echo "# ---------------------------------------------"
@@ -97,17 +98,16 @@ until [ ${COUNTER} -gt ${INPUT_MAX_RETRIES} ]; do
     --debug \
     -u "${INPUT_USER}","${INPUT_PASSWORD}" \
     "${INPUT_SERVER}" \
-    -e "${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}; quit;"
+    -e "${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}; quit;" &&
+    SUCCESS="true"
 
-  echo ""
-  echo "lftp returned: ${?}"
-  echo ""
-
-  if [ $? -eq 0 ]; then
+  if [ ${SUCCESS} = "true" ]; then
     break
   fi
-  COUNTER=$((COUNTER + 1))
+
+  echo ""
   echo "Try #: ${COUNTER}"
+  COUNTER=$((COUNTER + 1))
 done
 
 echo ""
