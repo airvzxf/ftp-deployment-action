@@ -104,7 +104,7 @@ Main features:
 
 TODOs:
 - Add options for exclude delete files.
-
+- Take all the logs from the Linux container then attach all into the Workflow Artifacts, to review unknown errors. 
 
 [1]: https://docs.github.com/en/actions/configuring-and-managing-workflows/creating-and-storing-encrypted-secrets
 [2]: http://lftp.tech/lftp-man.html
