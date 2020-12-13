@@ -101,6 +101,7 @@ until [ ${COUNTER} -gt ${INPUT_MAX_RETRIES} ]; do
     break
   fi
 
+  sleep 1m
   COUNTER=$((COUNTER + 1))
 done
 
