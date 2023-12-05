@@ -1,4 +1,4 @@
-FROM alpine:3.16.7
+FROM alpine:3.18.5
 
 RUN apk add --no-cache lftp
 
