@@ -5,6 +5,98 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## [2.1.0] - 2026-07-05
+
+Bundles three things: the release pipeline (already on `main`),
+the digest pinning of the base image (also already on `main`
+under `[Unreleased]`), and two follow-up PRs:
+
+* **PR #50** (`fix(b02,b18)`) — quick wins + docs.
+* **PR #51** (`feat:`) — deprecation warning for EOL / `@latest` /
+  `@master` / older v1.x refs.
+
+### Added
+
+- **Deprecation warning** (PR #51). At the very start of `init.sh`,
+  the action inspects `$GITHUB_ACTION_REF` and emits a
+  `::warning::`, `::notice::`, or `::error::` workflow command:
+
+  | Ref                          | Severity   | Reason                                                |
+  |------------------------------|------------|-------------------------------------------------------|
+  | `@latest`                    | `warning`  | moving target, pin to `@v2` or `@<sha>`               |
+  | `@master` / `@main`          | `warning`  | development branch, use a tag                         |
+  | v1.0-alpha.1, v1.0-alpha.2   | `warning`  | EOL (see SECURITY.md: only v1.4+ supported)          |
+  | v1.1, v1.2.0                 | `warning`  | EOL                                                   |
+  | v1.3.0 … v1.3.3              | `warning`  | EOL                                                   |
+  | v1.4 … v1.9                  | `notice`   | v2 is available (BREAKING: `ssl_verify_certificate` default flipped to `true`) |
+  | v2.x, anything not in the list | (silent) | current line                                          |
+
+  The actual image version is baked into `/app/VERSION` at build
+  time (`ARG VERSION=<tag>` from `release.yml`, default `dev` for
+  local builds) and shown in the warning text.
+
+  Strategy: hardcoded EOL list. No network call, no latency, no
+  rate limit. Updated on each major-line cut (next cut: v3, when
+  v2 becomes EOL).
+
+- **`fail_on_deprecated` input** (PR #51, default `false`). When
+  `true` and the ref is EOL, the warning is upgraded to
+  `::error::` and the action exits 1. Other warnings stay
+  advisory. Useful for orgs with a "no EOL versions" policy.
+
+- **Troubleshooting section** in the README (PR #50). Five most
+  common lftp errors (530, 550, TLS verify failed, connection
+  refused, mirror access failed) with cause + fix in tabular form.
+
+- **Header badges** in the README (PR #50): CI status, latest
+  release, license.
+
+- **`.github/workflows/release.yml`** (already on `main` under
+  `[Unreleased]`): on every pushed `v*.*.*` tag (and via manual
+  `workflow_dispatch` with a tag input), the workflow:
+  - builds the Docker image with `docker/build-push-action@v6`
+    using GitHub Actions cache (`type=gha`),
+  - pushes the result to `ghcr.io/airvzxf/ftp-deployment-action`
+    with tags `<version>` and `v<version>` plus OCI image labels
+    (source, license, version),
+  - generates a CycloneDX SBOM with `anchore/sbom-action@v0` and
+    attaches it to the image as an in-toto attestation via
+    `actions/attest@v4`,
+  - signs the image with `cosign sign --yes` (keyless, OIDC).
+
+- **CI and release workflows use `actions/checkout@v5`** (was v4).
+  v5 targets Node 24, which silences the deprecation warning
+  every push produced since Node 20 was deprecated on the GH
+  Actions runners. No user-facing behaviour change.
+
+### Fixed
+
+- **B-02** (PR #50): `max_retries=0` now means "retry forever"
+  (the only exits are lftp success or the 5h global timeout). The
+  README and `action.yml` description already implied this but
+  `init.sh` treated 0 as a single attempt. The loop guard now
+  skips the counter check when `INPUT_MAX_RETRIES` is 0.
+  Non-breaking for every caller that uses the default
+  `max_retries=10`; only callers that explicitly passed
+  `max_retries=0` see the change.
+
+- **B-13** (already on `main` under `[Unreleased]`): Dockerfile
+  now pins the base image by digest
+  (`alpine@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659`,
+  the digest of `alpine:3.23.3` at the time of v2.0.1). The
+  package versions are pinned too (`lftp=4.9.2-r9`,
+  `ca-certificates=20260611-r0`), which resolves hadolint
+  `DL3018`. Bumping the base image is now a controlled cadence
+  done via the release pipeline; the next bump will need a digest
+  refresh in the same commit that bumps the tag.
+
+- **B-18** (PR #50): README examples now use `@v2` instead of
+  `@latest`, with a callout recommending major-version pins over
+  floating tags. The `@latest` / `@main` antipattern is now
+  additionally enforced from inside the action via the
+  deprecation warning above.
+
 ## [2.0.0] - 2026-07-05
 
 ### Breaking
@@ -29,6 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default and the opt-out path; the warning is no longer about a
   known-insecure default but about the rare case of a user
   explicitly opting back into the v1.x lax behaviour.
+
 
 ## [1.5.0] - 2026-07-05
 
@@ -107,46 +200,13 @@ malformed input).
 - Password and other input values are no longer printed to the workflow
   log by default.
 
+
 ## [1.3.3] - 2024-XX-XX
 
 Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 
-## [Unreleased]
 
-### Changed
-- CI and release workflows now use `actions/checkout@v5` (was v4).
-  v5 targets Node 24, which silences the deprecation warning
-  every push produced since Node 20 was deprecated on the GH
-  Actions runners. No user-facing behaviour change.
-
-### Added
-- `.github/workflows/release.yml`: on every pushed `v*.*.*` tag
-  (and via manual `workflow_dispatch` with a tag input), the
-  workflow:
-  - builds the Docker image with `docker/build-push-action@v6`
-    using GitHub Actions cache (`type=gha`),
-  - pushes the result to `ghcr.io/airvzxf/ftp-deployment-action`
-    with tags `<version>` and `v<version>` plus OCI image labels
-    (source, license, version),
-  - generates a CycloneDX SBOM with `anchore/sbom-action@v0` and
-    attaches it to the image as an in-toto attestation via
-    `actions/attest@v4`,
-  - signs the image with `cosign sign --yes` (keyless, OIDC).
-  After this lands, the next `v2.x.y` tag will produce a signed
-  image at `ghcr.io/airvzxf/ftp-deployment-action:<version>` with
-  an attached SBOM, automatically.
-
-### Fixed
-- B-13: Dockerfile now pins the base image by digest
-  (`alpine@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659`,
-  the digest of `alpine:3.23.3` at the time of v2.0.1). The
-  package versions are pinned too (`lftp=4.9.2-r9`,
-  `ca-certificates=20260611-r0`), which resolves hadolint
-  `DL3018`. Bumping the base image is now a controlled cadence
-  done via the release pipeline; the next bump will need a digest
-  refresh in the same commit that bumps the tag.
-
-[Unreleased]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.0.1...HEAD
+[2.1.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.0.1...v2.1.0
 [2.0.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v1.5.0...v2.0.0
 [1.5.0]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.5.0
 [1.3.3]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.3.3
