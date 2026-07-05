@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - TBD
+
+### Breaking
+
+- `ssl_verify_certificate` default changed from `"false"` to `"true"`.
+  This is a behaviour change for every existing v1.x user that relied
+  on the lax default to connect to a self-signed or direct-IP
+  server. With v2.0.0, the action refuses to connect to a server
+  with an invalid, expired, or hostname-mismatched certificate.
+  To opt back into the v1.x behaviour, set
+  `ssl_verify_certificate: "false"` explicitly in your workflow.
+
+  This is the breaking change promised in the original audit
+  (PROPOSAL.md §3.1 #1 and the MP-1 entry). All other v1.x→v2.0.0
+  changes are behaviour-preserving (the security hardening and
+  validation work in v1.4.0 and v1.5.0 is compatible with the
+  v1.x contract).
+
+### Changed
+
+- README: the "Security and SSL" section now documents the new
+  default and the opt-out path; the warning is no longer about a
+  known-insecure default but about the rare case of a user
+  explicitly opting back into the v1.x lax behaviour.
+
 ## [Unreleased]
 
 ### Added
@@ -81,5 +106,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 
-[Unreleased]: https://github.com/airvzxf/ftp-deployment-action/compare/v1.3.3...HEAD
+[Unreleased]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v1.3.3...v2.0.0
 [1.3.3]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.3.3

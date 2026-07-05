@@ -4,9 +4,9 @@ This GitHub action copies the files via FTP from your Git project to your server
 
 ## Security and SSL
 
-By default, `ftp_ssl_allow` is set to `true` to ensure your connection is encrypted. However, `ssl_verify_certificate` is set to `false` by default. This means your data is encrypted during transfer, but the Action does not verify if the server's certificate is valid or matches the hostname. This prevents connection errors with self-signed certificates or direct IP connections but leaves you vulnerable to Man-in-the-Middle (MITM) attacks if someone spoofs your DNS.
+By default, `ftp_ssl_allow` is set to `true` to ensure your connection is encrypted, and `ssl_verify_certificate` is also set to `true`, so the action refuses to connect to a server with an invalid, expired, or hostname-mismatched certificate. **This is a breaking change from v1.x**: if you connect to a server with a self-signed certificate or a direct IP, the action will now fail with a TLS error. To opt back into the v1.x behaviour, set `ssl_verify_certificate: false` explicitly in your workflow.
 
-If you require strict security, set `ssl_verify_certificate: true` and ensure your server has a valid certificate matching the hostname used.
+> **Note on direct-IP connections**: lftp cannot validate a hostname against an IP-address certificate, so `ssl_verify_certificate: true` requires both a valid certificate and a hostname (not a bare IP) in the `server` input.
 
 ## Usage Example
 

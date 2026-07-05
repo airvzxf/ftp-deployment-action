@@ -189,7 +189,7 @@ fi
 if [ -n "${INPUT_SSL_VERIFY_CERTIFICATE}" ]; then
   FTP_SETTINGS="${FTP_SETTINGS}set ssl:verify-certificate ${INPUT_SSL_VERIFY_CERTIFICATE};"
 else
-  FTP_SETTINGS="${FTP_SETTINGS}set ssl:verify-certificate false;"
+  FTP_SETTINGS="${FTP_SETTINGS}set ssl:verify-certificate true;"
 fi
 
 # ssl:check-hostname
