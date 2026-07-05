@@ -1,4 +1,10 @@
-#!/bin/sh -e
+#!/bin/sh -eu
+# pipefail is busybox ash (the shell that actually runs in alpine); it
+# fails the script on the first command in a pipeline that returns
+# non-zero, instead of only the last one. POSIX sh does not define it
+# (shellcheck SC3040), but the runtime guarantees it is available.
+# shellcheck disable=SC3040
+set -o pipefail
 
 # ------------------------------------------------------------------------------
 # Helpers.
@@ -157,11 +163,31 @@ _deprecated_check() {
 _deprecated_check
 
 # ------------------------------------------------------------------------------
+# Defence-in-depth: ask the runner to mask sensitive values in the log
+# even if they ever leak outside the .netrc plumbing. GitHub already
+# auto-masks inputs named *password* / *token* / *secret*, but `user`
+# and `server` are not in that list. If the user opts in to debug mode
+# (INPUT_DEBUG=true) the server, user and password values are echoed
+# below; this mask prevents them from showing up in any other
+# downstream log line.
+# ------------------------------------------------------------------------------
+if [ -n "${INPUT_PASSWORD:-}" ]; then
+  printf '::add-mask::%s\n' "${INPUT_PASSWORD}"
+fi
+if [ -n "${INPUT_USER:-}" ]; then
+  printf '::add-mask::%s\n' "${INPUT_USER}"
+fi
+if [ -n "${INPUT_SERVER:-}" ]; then
+  printf '::add-mask::%s\n' "${INPUT_SERVER}"
+fi
+
+# ------------------------------------------------------------------------------
 # Display environment variables.
 #
 # B-10: By default, only show which inputs were received (no values). Set
 # INPUT_DEBUG=true to print resolved values for troubleshooting.
 # ------------------------------------------------------------------------------
+printf '::group::Inputs received\n'
 echo "=== Inputs received ==="
 if [ "${INPUT_DEBUG}" = "true" ]; then
   printf '  %-26s %s\n' "server:"                  "${INPUT_SERVER}"
@@ -202,6 +228,7 @@ else
   done
 fi
 echo ""
+printf '::endgroup::\n'
 echo "=== Current location ==="
 pwd
 echo ""
@@ -374,6 +401,7 @@ fi
 # ------------------------------------------------------------------------------
 # Display LFTP settings.
 # ------------------------------------------------------------------------------
+printf '::group::Resolved configuration\n'
 echo "=== Directories ==="
 echo "INPUT_LOCAL_DIR: ${INPUT_LOCAL_DIR}"
 echo "INPUT_REMOTE_DIR: ${INPUT_REMOTE_DIR}"
@@ -392,6 +420,7 @@ echo ""
 echo "=== * NOTE * ==="
 echo "The upload should be fast depends how many files and what size they have."
 echo "If the process take for several minutes or hours, please stop the job and run it again."
+printf '::endgroup::\n'
 
 # ------------------------------------------------------------------------------
 # B-03: write credentials to a private .netrc and let lftp read it.
@@ -451,6 +480,7 @@ SUCCESS=""
 LFTP_TIMEOUT="5h"
 LFTP_KILL_AFTER="30s"
 
+printf '::group::Upload\n'
 while true; do
   echo ""
   echo "Try #${COUNTER}"
@@ -506,6 +536,7 @@ while true; do
   echo "  Backing off ${SLEEP_S}s before retry..."
   sleep "${SLEEP_S}"
 done
+printf '::endgroup::\n'
 
 # ------------------------------------------------------------------------------
 # Display the status of the LFTP actions.

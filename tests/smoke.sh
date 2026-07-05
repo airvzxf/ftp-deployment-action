@@ -103,11 +103,26 @@ pass "debug=true echoes the password value"
 # ----------------------------------------------------------------------------
 # Test 4: default dump does NOT echo the password value
 # ----------------------------------------------------------------------------
-# Use a distinctive password so we can grep for it precisely.
+# Use a distinctive password so we can grep for it precisely. Since
+# PR-C, init.sh emits `::add-mask::<value>` for sensitive inputs as
+# defence-in-depth; the literal password value appears once in the
+# log in that mask line, but never inside the "Inputs received" dump.
+# The masked occurrence is what the user wants: GitHub auto-redacts
+# those values in the rendered log.
 out=$(run_init "INPUT_PASSWORD=SecretTokenDoNotLeakXYZ" 30)
-echo "${out}" | grep -q "SecretTokenDoNotLeakXYZ" \
-  && fail "default dump leaked the password value; output was:\n${out}"
-pass "default dump does not echo the password value"
+# 1. The password value MUST appear at least once, in the ::add-mask:: line.
+n_mask=$(printf '%s\n' "${out}" | grep -cF '::add-mask::SecretTokenDoNotLeakXYZ')
+if [ "${n_mask}" -ne 1 ]; then
+  fail "expected exactly one ::add-mask:: line for the password, got ${n_mask}; output was:\n${out}"
+fi
+# 2. The password MUST NOT appear inside the Inputs received dump.
+#    Extract the dump block (between the first "=== Inputs received ==="
+#    and the next "::endgroup::") and grep that.
+dump=$(printf '%s\n' "${out}" | awk '/=== Inputs received ===/{flag=1;next}/::endgroup::/{flag=0}flag')
+if printf '%s' "${dump}" | grep -qF 'SecretTokenDoNotLeakXYZ'; then
+  fail "password value leaked into the Inputs received dump; output was:\n${out}"
+fi
+pass "default dump does not echo the password value (masked once, dump clean)"
 
 # ----------------------------------------------------------------------------
 # Test 5: mirror_verbose is honoured (output mentions verbose=2)
@@ -217,19 +232,22 @@ pass "documented lftp_settings (3 ';' chained) passes validation"
 # Test 13: B-03 — password is NOT visible on the lftp command line
 # ----------------------------------------------------------------------------
 # Run with debug=true so that resolved values are echoed. Then verify
-# the secret password does not appear in the lftp command line. The
-# init.sh now writes the password to a .netrc and omits the `-u` arg,
-# so even with debug=true the only place the password appears is the
-# explicit "password: <value>" line of the env dump.
+# the secret password does not appear inside the ::group::Upload block
+# (which is where lftp is actually invoked). The init.sh now writes the
+# password to a .netrc and omits the `-u` arg, so even with debug=true
+# the only places the password appears are:
+#   1. the ::add-mask:: line (defence-in-depth),
+#   2. the "password: <value>" line of the env dump (debug only).
+# Both are fine. What we MUST NOT see is the password inside the
+# Upload group, where the lftp process and its stderr are captured.
 _env_str=$(printf 'INPUT_PASSWORD=SuperSecretDoNotLeakZZZ\nINPUT_DEBUG=true')
 out=$(run_init "${_env_str}" 30)
-# Count how many times the secret appears in the output.
-n=$(printf '%s\n' "${out}" | grep -cF 'SuperSecretDoNotLeakZZZ')
-# Expect exactly 1 occurrence: the explicit env-dump line.
-if [ "${n}" -ne 1 ]; then
-  fail "expected password to appear once (env dump); got ${n}. Output:\n${out}"
+upload_block=$(printf '%s\n' "${out}" | awk '/::group::Upload/{flag=1;next}/::endgroup::/{flag=0;exit}flag')
+n=$(printf '%s\n' "${upload_block}" | grep -cF 'SuperSecretDoNotLeakZZZ')
+if [ "${n}" -ne 0 ]; then
+  fail "password leaked into the Upload group (${n} occurrences); output was:\n${out}"
 fi
-pass "password appears only in the env-dump line, not in the lftp call"
+pass "password is not visible inside the Upload group (lftp command line)"
 
 # ----------------------------------------------------------------------------
 # Test 14: B-02 — max_retries=0 means "retry forever".
