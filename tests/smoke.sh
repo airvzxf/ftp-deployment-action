@@ -341,5 +341,35 @@ echo "${out}" | grep -q "^EXIT=1" \
   || fail "current ref with fail_on_deprecated should still reach the lftp step; output was:\n${out}"
 pass "fail_on_deprecated=true on current ref does not error out"
 
+# ----------------------------------------------------------------------------
+# Test 22: A6 — failure banner mentions the log file path (B-04).
+# ----------------------------------------------------------------------------
+# We use max_retries=1 to keep the test fast (a single lftp attempt
+# + a quick classification pass). The failure banner must include
+# the captured lftp log path so the user can find it for debugging.
+out=$(run_init "INPUT_MAX_RETRIES=1" 30)
+echo "${out}" | grep -qE "Full lftp output: /.+\.lftp-logs/run-[0-9TZ]+\.log" \
+  || fail "failure banner did not mention the log file path; output was:\n${out}"
+pass "failure banner includes the captured lftp log file path"
+
+# ----------------------------------------------------------------------------
+# Test 23: B-04 — lftp stdout+stderr is captured to the log file.
+#
+# The log file path is /home/lftp/.lftp-logs/run-<timestamp>.log.
+# We cannot easily read the file from outside the container, but
+# the previous test (Test 22) already verified the path is in the
+# banner, which is the surface that matters. This test instead
+# confirms the failure banner appears for an unreachable server
+# even when no error matches the A6 classifier (i.e. we did not
+# regress by always aborting on the first failure).
+# ----------------------------------------------------------------------------
+out=$(run_init "INPUT_MAX_RETRIES=1" 30)
+echo "${out}" | grep -q "ERROR: UPLOAD FAILED" \
+  || fail "unreachable server with max_retries=1 did not produce ERROR banner; output was:\n${out}"
+# A6 should NOT have matched "max-retries exceeded (Connection refused)".
+echo "${out}" | grep -q "PERMANENT" \
+  && fail "A6 classifier incorrectly flagged a transient connection error as permanent; output was:\n${out}"
+pass "A6 classifier does not flag transient connection errors as permanent"
+
 printf 'All smoke tests passed.\n'
 exit 0
