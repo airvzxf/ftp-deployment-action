@@ -148,7 +148,9 @@ pass 'remote_dir="../foo" is rejected with exit 2'
 out=$(run_init 'INPUT_LOCAL_DIR=-rf' 10)
 echo "${out}" | grep -q "starts with a dash" \
   || fail "local_dir starting with dash was not rejected; output was:\n${out}"
-pass "local_dir starting with a dash is rejected"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "local_dir starting with dash did not exit 2; output was:\n${out}"
+pass "local_dir starting with a dash is rejected (exit 2)"
 
 # ----------------------------------------------------------------------------
 # Test 10: B-16 — lftp_settings with a backtick is rejected
@@ -159,7 +161,9 @@ backtick_val=$(printf 'set foo:bar %cuname' '`')
 out=$(run_init "INPUT_LFTP_SETTINGS=${backtick_val}" 10)
 echo "${out}" | grep -q "lftp_settings contains backtick" \
   || fail "lftp_settings with backtick was not rejected; output was:\n${out}"
-pass "lftp_settings with backtick is rejected"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "lftp_settings with backtick did not exit 2; output was:\n${out}"
+pass "lftp_settings with backtick is rejected (exit 2)"
 
 # ----------------------------------------------------------------------------
 # Test 11: B-16 — lftp_settings with more than 3 ';' is rejected
@@ -167,7 +171,33 @@ pass "lftp_settings with backtick is rejected"
 out=$(run_init 'INPUT_LFTP_SETTINGS=set a:1;set b:2;set c:3;set d:4;' 10)
 echo "${out}" | grep -q "lftp_settings has 4" \
   || fail "lftp_settings with 4 ';' was not rejected; output was:\n${out}"
-pass "lftp_settings with 4 ';' is rejected"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "lftp_settings with 4 ';' did not exit 2; output was:\n${out}"
+pass "lftp_settings with 4 ';' is rejected (exit 2)"
+
+# ----------------------------------------------------------------------------
+# Test 11b: B-16 — lftp_settings with '!' (lftp shell escape) is rejected
+# ----------------------------------------------------------------------------
+out=$(run_init 'INPUT_LFTP_SETTINGS=set x:y; !uname; set a:b' 10)
+echo "${out}" | grep -q 'lftp_settings contains "!"' \
+  || fail "lftp_settings with '!' was not rejected; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "lftp_settings with '!' did not exit 2; output was:\n${out}"
+pass 'lftp_settings with "!" (lftp shell escape) is rejected (exit 2)'
+
+# ----------------------------------------------------------------------------
+# Test 11c: B-03 — bracketed IPv6 server is parsed correctly
+# ----------------------------------------------------------------------------
+# We can't actually connect to [::1] in the test container, but the
+# host extraction should at least not error out on the URL form.
+out=$(run_init 'INPUT_SERVER=ftp://[::1]:21 INPUT_PASSWORD=foo' 30)
+# If the script runs at all (vs. aborting with a parse error), the
+# IPv6 host extraction is functional.
+echo "${out}" | grep -qE "ERROR: (max_retries|local_dir|remote_dir|lftp_settings)" \
+  && fail "IPv6 host triggered a validation error; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=1" \
+  || fail "IPv6 host test did not exit 1 (expected connection failure); output was:\n${out}"
+pass "bracketed IPv6 host does not break the script"
 
 # ----------------------------------------------------------------------------
 # Test 12: B-16 — documented lftp_settings (3 ';' chained) is accepted

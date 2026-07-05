@@ -18,10 +18,12 @@ validate_int() {
 
 # validate_path NAME VALUE
 #   Exit 2 if VALUE looks unsafe for a local or remote path passed to
-#   lftp: path-traversal components, leading dash (would be read as an
-#   lftp option), control characters, or shell metacharacters. Allowed
-#   are forward slashes, dots, alphanumerics, dash, underscore, plus
-#   and a handful of characters that show up in real-world paths.
+#   lftp. The function is a *deny-list*: it rejects a small set of
+#   known-dangerous patterns (path-traversal components, leading dash
+#   which lftp would misread as an option, control characters, shell
+#   metacharacters). Anything else is allowed; if you need a stricter
+#   policy, build a `validate_path_strict` that allow-lists only
+#   `[A-Za-z0-9._/-]`.
 validate_path() {
   _vp_name=$1
   _vp_value=$2
@@ -58,9 +60,9 @@ validate_path() {
 #   Light sanitization of the free-form lftp_settings input (B-16). The
 #   documented use case is 1-3 'set' directives chained with ';', so
 #   we allow up to 3 ';' characters but reject control characters,
-#   backtick and dollar (defense in depth: lftp's argument is passed
-#   inside shell quotes, so these wouldn't actually substitute, but we
-#   keep the reject-list explicit for the future).
+#   backtick, dollar, and the '!' character (lftp's own shell escape,
+#   which would otherwise let an attacker run arbitrary commands
+#   inside the container even within the 3-';' limit).
 validate_lftp_settings() {
   _vls_value=$1
   if printf '%s' "${_vls_value}" | grep -qE '[[:cntrl:]]'; then
@@ -73,6 +75,10 @@ validate_lftp_settings() {
   fi
   if printf '%s' "${_vls_value}" | grep -qF '$'; then
     printf 'ERROR: lftp_settings contains dollar (shell substitution)\n' >&2
+    exit 2
+  fi
+  if printf '%s' "${_vls_value}" | grep -qF '!'; then
+    printf 'ERROR: lftp_settings contains "!" (lftp shell escape)\n' >&2
     exit 2
   fi
   _vls_n=$(printf '%s' "${_vls_value}" | tr -cd ';' | wc -c | tr -d ' ')
@@ -333,10 +339,21 @@ echo "If the process take for several minutes or hours, please stop the job and 
 # ------------------------------------------------------------------------------
 : "${HOME:=/home/lftp}"
 NETRC="${HOME}/.netrc"
+# Extract the hostname (or bracketed IPv6 literal) from the (possibly
+# decorated) server URL: strip the scheme and the optional userinfo,
+# then either match the [...] bracket pair for IPv6 or strip ":port" /
+# "/path" for everything else.
 NETRC_HOST=$(printf '%s' "${INPUT_SERVER}" \
   | sed -E 's|^[a-zA-Z]+://||' \
-  | sed -E 's|^[^@/]*@||' \
-  | sed -E 's|[:/].*||')
+  | sed -E 's|^[^@/]*@||')
+case "${NETRC_HOST}" in
+  \[*\])
+    NETRC_HOST=$(printf '%s' "${NETRC_HOST}" | sed -nE 's|^\[([^]]*)\].*|\1|p')
+    ;;
+  *)
+    NETRC_HOST=$(printf '%s' "${NETRC_HOST}" | sed -E 's|[:/].*||')
+    ;;
+esac
 {
   printf 'machine %s login %s password %s\n' \
     "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
