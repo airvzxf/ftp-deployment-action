@@ -67,6 +67,10 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
+          # Bake the resolved tag into /app/VERSION so init.sh's
+          # deprecation warning can print the actual image version
+          # (default in the Dockerfile is "dev" for local builds).
+          build-args: VERSION=${{ steps.meta.outputs.tag }}
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}

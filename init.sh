@@ -89,6 +89,74 @@ validate_lftp_settings() {
 }
 
 # ------------------------------------------------------------------------------
+# _deprecated_check
+#
+# Emit a deprecation / EOL / major-out-of-date notice based on the ref the
+# user pinned this action to. Driven by $GITHUB_ACTION_REF (set by the
+# runner) and the /app/VERSION file baked at build time by release.yml.
+#
+# Strategy: hardcoded EOL list. No network call, no latency, no rate
+# limit. Update on each major-line cut.
+#
+#   * @latest                  -> ::warning:: "moving target" (B-18)
+#   * @master / @main / empty  -> ::warning:: "development branch"
+#   * v1.0-alpha.* | v1.1 |
+#     v1.2.0 | v1.3.*          -> ::warning:: "end-of-life" (SECURITY.md)
+#   * v1.4* - v1.9*            -> ::notice::  "v2 is available"
+#   * anything else            -> silent (current line)
+#
+# If INPUT_FAIL_ON_DEPRECATED=true AND the ref is in the EOL list, exit 1
+# via ::error::. Other warnings (latest, master) are advisory only.
+# ------------------------------------------------------------------------------
+_deprecated_check() {
+  _ref="${GITHUB_ACTION_REF:-}"
+  _img_ver=$(cat /app/VERSION 2>/dev/null || echo "unknown")
+  _eol_pattern='v1\.0-alpha\.[12]|v1\.1|v1\.2\.0|v1\.3\.[0-9]+'
+
+  case "${_ref}" in
+    latest)
+      printf '::warning file=action.yml,title=Deprecated usage::' >&2
+      printf 'You are using @latest, a moving target. ' >&2
+      printf 'Pin to @v2 or @<sha>. (image version: %s)\n' "${_img_ver}" >&2
+      ;;
+    "")
+      # No GITHUB_ACTION_REF means the workflow invoked the action from
+      # the same repo (`uses: ./` or local checkout). Not a user-facing
+      # warning, but still useful to know the image version.
+      ;;
+    master|main)
+      printf '::warning file=action.yml,title=Branch usage::' >&2
+      printf 'You are using @%s, a development branch. ' "${_ref}" >&2
+      printf 'Use a tagged release (current image: %s).\n' "${_img_ver}" >&2
+      ;;
+    v1.0-alpha.1|v1.0-alpha.2|v1.1|v1.2.0|v1.3.0|v1.3.1|v1.3.2|v1.3.3)
+      printf '::warning file=action.yml,title=End-of-life version::' >&2
+      printf 'Version %s is end-of-life (SECURITY.md: only v1.4+ is supported). ' "${_ref}" >&2
+      printf 'Upgrade to v2: https://github.com/airvzxf/ftp-deployment-action/releases\n' >&2
+      if [ "${INPUT_FAIL_ON_DEPRECATED:-false}" = "true" ]; then
+        printf '::error file=action.yml::fail_on_deprecated is true and ref %s is EOL.\n' "${_ref}" >&2
+        exit 1
+      fi
+      ;;
+    v1.4*|v1.5*|v1.6*|v1.7*|v1.8*|v1.9*)
+      printf '::notice file=action.yml,title=New major available::' >&2
+      printf 'You are on %s. v2 is available (BREAKING: ssl_verify_certificate default is now true). ' "${_ref}" >&2
+      printf 'See CHANGELOG.md. (image version: %s)\n' "${_img_ver}" >&2
+      ;;
+    *)
+      # Current line (v2.x, or anything not yet in the EOL list).
+      ;;
+  esac
+}
+
+# ------------------------------------------------------------------------------
+# Emit a deprecation / EOL warning based on the ref the user pinned this
+# action to. Runs *before* any other echo so the warning is the first
+# thing the user sees in the log.
+# ------------------------------------------------------------------------------
+_deprecated_check
+
+# ------------------------------------------------------------------------------
 # Display environment variables.
 #
 # B-10: By default, only show which inputs were received (no values). Set
@@ -123,7 +191,7 @@ else
             NO_SYMLINKS MIRROR_VERBOSE FTP_SSL_ALLOW SSL_VERIFY_CERTIFICATE \
             SSL_CHECK_HOSTNAME FTP_PASSIVE_MODE FTP_USE_FEAT FTP_NOP_INTERVAL \
             NET_MAX_RETRIES NET_PERSIST_RETRIES NET_TIMEOUT DNS_MAX_RETRIES \
-            DNS_FATAL_TIMEOUT LFTP_SETTINGS DEBUG; do
+            DNS_FATAL_TIMEOUT LFTP_SETTINGS DEBUG FAIL_ON_DEPRECATED; do
     _label=$(printf '%s' "${_v}" | tr '[:upper:]' '[:lower:]')
     eval "_cur=\${INPUT_${_v}}"
     if [ -n "${_cur}" ]; then
