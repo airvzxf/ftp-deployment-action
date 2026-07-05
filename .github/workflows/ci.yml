@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck --version
+      - name: Run shellcheck
+        run: |
+          set -e
+          shellcheck init.sh
+          shellcheck tests/contract.sh
+          shellcheck tests/smoke.sh
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rhysd/actionlint is a Go binary, not a JavaScript action. We install
+      # it directly from the upstream release instead of using a wrapper
+      # action, which keeps the dependency footprint small and the version
+      # pin explicit.
+      - name: Install actionlint
+        run: |
+          set -e
+          ver=1.7.7
+          curl -sSL -o /tmp/actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ver}/actionlint_${ver}_linux_amd64.tar.gz"
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          sudo mv /tmp/actionlint /usr/local/bin/actionlint
+          actionlint --version
+      - name: Run actionlint
+        run: actionlint -color
+
+  hadolint:
+    name: hadolint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pin to a specific tag because the upstream has no floating "v3" ref
+      # (only v3.0.0, v3.1.0, ...). Using `@v3` makes the resolver fail.
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          # DL3018 (pin apk versions) is a real concern but fixing it is
+          # out of scope for this PR — it will be addressed alongside
+          # the image digest pinning work. Treat as info for now.
+          failure-threshold: error
+
+  contract:
+    name: Contract test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify action.yml ↔ init.sh consistency
+        run: tests/contract.sh
+
+  smoke:
+    name: Smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run init.sh smoke tests in alpine
+        run: tests/smoke.sh

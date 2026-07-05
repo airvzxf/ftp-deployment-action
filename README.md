@@ -65,10 +65,17 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | dns_max_retries        | DNS - 0 no limit trying to lookup an address otherwise try only this number of times. | No       | 8       | N/A                                                                                               |
 | dns_fatal_timeout      | DNS - Time for DNS queries.<br> Set to "never" to disable.                            | No       | 10s     | N/A                                                                                               |
 | lftp_settings          | Any other settings that you find in the MAN pages for the LFTP package.               | No       | ""      | "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';" |
+| debug                  | If "true", print resolved input values to the log.                                    | No       | false   | N/A                                                                                               |
 
 More information on the official site for [lftp - Manual pages][2].
 
-Example with NO DEFAULT settings:
+### Minimal example (only required inputs)
+
+The example above shows the **minimum** required inputs (`server`, `user`, `password`, `local_dir`).
+All other settings use the defaults shown in the table above. For full control see the
+extended example below.
+
+### Example with NO DEFAULT settings
 
 ```yaml
 name: CI -> Deploy to My website
@@ -113,6 +120,26 @@ Main features:
 - Option to delete all the files in the specific remote folder before the upload.
 - Using Alpine container means small size and faster creation of the container.
 - Show messages in the console logs for every executed command.
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0`  | Upload finished successfully. |
+| `1`  | Upload failed after all retries; the last lftp error is printed above. |
+| `2`  | Invalid input (a non-integer was passed to a numeric option such as `max_retries`). |
+
+When the global 5-hour timeout is reached the lftp process is killed and the
+action exits with `1` (the most recent lftp exit code is also printed to the
+log for debugging).
+
+## Security
+
+For how to report vulnerabilities please see [`SECURITY.md`](./SECURITY.md).
+
+## Changelog
+
+See [`CHANGELOG.md`](./CHANGELOG.md) for release notes.
 
 TODOs:
 
