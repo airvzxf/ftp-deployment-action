@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0] - TBD
+## [2.0.0] - 2026-07-05
 
 ### Breaking
 
@@ -30,7 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   known-insecure default but about the rare case of a user
   explicitly opting back into the v1.x lax behaviour.
 
-## [Unreleased]
+## [1.5.0] - 2026-07-05
+
+Bundles two PRs on top of v1.3.3 with no behaviour change for the
+happy path (all changes are either bug fixes, new optional
+inputs, or hardening that is observable only via exit code 2 on
+malformed input).
 
 ### Added
 - `mirror_verbose` input (was documented in the README but never declared in
@@ -106,6 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 
-[Unreleased]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.0.0...HEAD
-[2.0.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v1.3.3...v2.0.0
+[Unreleased]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.0.1...HEAD
+[2.0.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v1.5.0...v2.0.0
+[1.5.0]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.5.0
 [1.3.3]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.3.3
