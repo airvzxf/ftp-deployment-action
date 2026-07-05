@@ -93,6 +93,10 @@ inputs:
     description: 'If "true", exit 1 when the ref used to invoke this action is end-of-life (v1.0-alpha.*, v1.1, v1.2.0, v1.3.*). Useful for orgs with a "no EOL versions" policy. The deprecation warning is still printed either way; this input only controls whether the action fails.'
     required: false
     default: 'false'
+  dry_run:
+    description: 'If "true", perform a dry run: lftp will compute the mirror plan but not transfer or delete any file. Useful to preview what the action would change before a destructive run. The action still exits 0 on success (i.e. on a clean dry-run plan) and 1 on a hard error.'
+    required: false
+    default: 'false'
 runs:
   using: 'docker'
   image: 'Dockerfile'
