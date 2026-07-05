@@ -32,16 +32,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rhysd/actionlint@v1
-        with:
-          ignore: SC2096
+      # rhysd/actionlint is a Go binary, not a JavaScript action. We install
+      # it directly from the upstream release instead of using a wrapper
+      # action, which keeps the dependency footprint small and the version
+      # pin explicit.
+      - name: Install actionlint
+        run: |
+          set -e
+          ver=1.7.7
+          curl -sSL -o /tmp/actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ver}/actionlint_${ver}_linux_amd64.tar.gz"
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          sudo mv /tmp/actionlint /usr/local/bin/actionlint
+          actionlint --version
+      - name: Run actionlint
+        run: actionlint -color
 
   hadolint:
     name: hadolint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: hadolint/hadolint-action@v3
+      # Pin to a specific tag because the upstream has no floating "v3" ref
+      # (only v3.0.0, v3.1.0, ...). Using `@v3` makes the resolver fail.
+      - uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: Dockerfile
           # DL3018 (pin apk versions) is a real concern but fixing it is
