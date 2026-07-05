@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `2` invalid input).
 - `validate_int` helper in `init.sh` that fails fast with a clear error
   when an integer input (e.g. `max_retries`) is not a non-negative integer.
+- `validate_path` helper for `local_dir` / `remote_dir`: rejects
+  `..` path-traversal components, leading dashes (which `lftp` would
+  misread as options), control characters, and shell metacharacters
+  (`;`, `&`, `|`, backtick, dollar).
+- `validate_lftp_settings` helper: light sanitization of the
+  free-form `lftp_settings` input (rejects control characters,
+  backtick, dollar, and more than three `;`-chained directives).
 - Global 5-hour wall-clock timeout around each `lftp` invocation.
 - Exponential backoff with jitter between retries (1s, 2s, 4s, 8s, 16s,
   then capped at 30s), replacing the previous flat 60s sleep.
@@ -53,6 +60,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the build context.
 
 ### Security
+- B-03: password is no longer passed to `lftp` on the command line. The
+  script now writes credentials to `~/.netrc` with mode `0600` for the
+  duration of the run, and removes the file via an `EXIT` trap on any
+  exit path (success, error, `set -e` abort, SIGINT).
+- B-04: `local_dir` and `remote_dir` are validated against
+  `..` path-traversal components, leading dashes, control characters,
+  and shell metacharacters.
+- B-14: the container now runs as the unprivileged `lftp` user (an
+  `addgroup` / `adduser` was added in the Dockerfile and a `USER lftp`
+  directive runs every process under that uid). The previous
+  container ran every process as root.
+- B-16: `lftp_settings` is lightly sanitised: control characters,
+  backtick, dollar, and more than three `;`-chained directives are
+  rejected at the input layer.
 - Password and other input values are no longer printed to the workflow
   log by default.
 
