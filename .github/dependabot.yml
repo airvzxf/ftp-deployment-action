@@ -1,0 +1,70 @@
+---
+# Dependabot config for ftp-deployment-action.
+#
+# Two ecosystems: docker (the base image + apt packages in the
+# Dockerfile) and github-actions (the actions referenced from
+# .github/workflows/*.yml).
+#
+# Notes:
+# * `lftp` updates have been historically rare and risky (the
+#   project's mirror semantics occasionally change between minor
+#   versions), so we ignore major and minor bumps and only take
+#   patches. The current pin is lftp=4.9.2-r9; a minor bump
+#   (4.9.2-r10) is auto-merge, a major (5.x) is reviewed.
+# * `alpine` itself is pinned by digest in the Dockerfile, so
+#   dependabot's "docker" ecosystem will only propose apt updates
+#   for the lftp / ca-certificates lines. The base image bump
+#   is a manual cadence driven by the release pipeline.
+# * For github-actions we take minor and patch; major bumps of
+#   `actions/checkout`, `actions/attest`, etc. are reviewed
+#   because they often require runner version bumps.
+
+version: 2
+updates:
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "docker"
+    ignore:
+      # Only follow patch-level bumps of the lftp package; major and
+      # minor bumps have historically changed mirror semantics.
+      - dependency-name: "lftp"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # ca-certificates follows Mozilla's NSS bug-fix cadence;
+      # patches are auto-merge, majors (a CA root change) are reviewed.
+      - dependency-name: "ca-certificates"
+        update-types: ["version-update:semver-major"]
+    groups:
+      # One PR per base image digest bump (which only happens when
+      # the Dockerfile is updated manually). lftp + ca-certificates
+      # get their own weekly PR.
+      dockerfile-base:
+        patterns: ["*"]
+        exclude-patterns: ["lftp", "ca-certificates"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      # One PR per action major. Keeps the surface of any single
+      # review manageable and the git log clean.
+      actions-checkout:
+        patterns: ["actions/checkout"]
+      actions-docker:
+        patterns: ["docker/*"]
+      actions-attest:
+        patterns: ["actions/attest"]
+      actions-others:
+        patterns: ["*"]
+        exclude-patterns: ["actions/checkout", "docker/*", "actions/attest"]
