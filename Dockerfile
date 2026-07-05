@@ -1,9 +1,16 @@
-FROM alpine:3.23.3
+FROM alpine@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
 
-# B-14: create an unprivileged user and group for lftp to run as.
-# All credentials, cache and .netrc files are written under this user's
-# $HOME (/home/lftp), so the user must own it before the USER directive.
-RUN apk add --no-cache lftp ca-certificates \
+# B-13: pin the base image by digest (resolved against the alpine:3.23.3
+# tag at the time of v2.0.1). Bump on a controlled cadence via the
+# release pipeline; the digest is recorded in the corresponding tag
+# message.
+#
+# Pin the package versions too (resolves hadolint DL3018).
+# lftp=4.9.2-r9 and ca-certificates=20260611-r0 are the current
+# versions in alpine 3.23.3; bump them together with the base image.
+RUN apk add --no-cache \
+      lftp=4.9.2-r9 \
+      ca-certificates=20260611-r0 \
  && addgroup -S lftp \
  && adduser -S lftp -G lftp -h /home/lftp \
  && mkdir -p /home/lftp \

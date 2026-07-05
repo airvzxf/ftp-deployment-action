@@ -111,6 +111,35 @@ malformed input).
 
 Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 
+## [Unreleased]
+
+### Added
+- `.github/workflows/release.yml`: on every pushed `v*.*.*` tag
+  (and via manual `workflow_dispatch` with a tag input), the
+  workflow:
+  - builds the Docker image with `docker/build-push-action@v6`
+    using GitHub Actions cache (`type=gha`),
+  - pushes the result to `ghcr.io/airvzxf/ftp-deployment-action`
+    with tags `<version>` and `v<version>` plus OCI image labels
+    (source, license, version),
+  - generates a CycloneDX SBOM with `anchore/sbom-action@v0` and
+    attaches it to the image as an in-toto attestation via
+    `actions/attest@v4`,
+  - signs the image with `cosign sign --yes` (keyless, OIDC).
+  After this lands, the next `v2.x.y` tag will produce a signed
+  image at `ghcr.io/airvzxf/ftp-deployment-action:<version>` with
+  an attached SBOM, automatically.
+
+### Fixed
+- B-13: Dockerfile now pins the base image by digest
+  (`alpine@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659`,
+  the digest of `alpine:3.23.3` at the time of v2.0.1). The
+  package versions are pinned too (`lftp=4.9.2-r9`,
+  `ca-certificates=20260611-r0`), which resolves hadolint
+  `DL3018`. Bumping the base image is now a controlled cadence
+  done via the release pipeline; the next bump will need a digest
+  refresh in the same commit that bumps the tag.
+
 [Unreleased]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.0.1...HEAD
 [2.0.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v1.5.0...v2.0.0
 [1.5.0]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.5.0
