@@ -44,7 +44,7 @@ inputs:
   ssl_verify_certificate:
     description: 'Verify SSL certificate.'
     required: false
-    default: 'false'
+    default: 'true'
   ssl_check_hostname:
     description: 'Check certificate hostname.'
     required: false
