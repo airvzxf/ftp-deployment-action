@@ -35,8 +35,8 @@ jobs:
           local_dir: "./public_html"
 ```
 
-Optionally, you can get the live version which has the last commits using the `master` branch like this:
-`uses: airvzxf/ftp-deployment-action@master`.
+Optionally, you can get the live version which has the last commits using the `main` branch like this:
+`uses: airvzxf/ftp-deployment-action@main`.
 
 ## Settings
 
