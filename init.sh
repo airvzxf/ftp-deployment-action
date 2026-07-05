@@ -217,7 +217,7 @@ else
             NO_SYMLINKS MIRROR_VERBOSE FTP_SSL_ALLOW SSL_VERIFY_CERTIFICATE \
             SSL_CHECK_HOSTNAME FTP_PASSIVE_MODE FTP_USE_FEAT FTP_NOP_INTERVAL \
             NET_MAX_RETRIES NET_PERSIST_RETRIES NET_TIMEOUT DNS_MAX_RETRIES \
-            DNS_FATAL_TIMEOUT LFTP_SETTINGS DEBUG FAIL_ON_DEPRECATED; do
+            DNS_FATAL_TIMEOUT LFTP_SETTINGS DEBUG FAIL_ON_DEPRECATED DRY_RUN; do
     _label=$(printf '%s' "${_v}" | tr '[:upper:]' '[:lower:]')
     eval "_cur=\${INPUT_${_v}}"
     if [ -n "${_cur}" ]; then
@@ -396,6 +396,14 @@ fi
 # Delete files not present at the source
 if [ "${INPUT_DELETE}" = "true" ]; then
   MIRROR_COMMAND="${MIRROR_COMMAND} --delete"
+fi
+
+# Dry run: compute the mirror plan but do not transfer or delete
+# anything. lftp's --dry-run makes mirror print every file it
+# *would* act on, then quit without writing. Safe to combine with
+# --delete: the deletion list is reported but not executed.
+if [ "${INPUT_DRY_RUN}" = "true" ]; then
+  MIRROR_COMMAND="${MIRROR_COMMAND} --dry-run"
 fi
 
 # ------------------------------------------------------------------------------
@@ -598,5 +606,10 @@ fi
 
 echo ""
 echo "=============================="
-echo "=   FTP UPLOADED FINISHED!   ="
+if [ "${INPUT_DRY_RUN}" = "true" ]; then
+  echo "=  FTP DRY RUN COMPLETED     ="
+  echo "=  (no files transferred)    ="
+else
+  echo "=   FTP UPLOADED FINISHED!   ="
+fi
 echo "=============================="

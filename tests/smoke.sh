@@ -371,5 +371,19 @@ echo "${out}" | grep -q "PERMANENT" \
   && fail "A6 classifier incorrectly flagged a transient connection error as permanent; output was:\n${out}"
 pass "A6 classifier does not flag transient connection errors as permanent"
 
+# ----------------------------------------------------------------------------
+# Test 24: dry_run=true — the mirror command gets --dry-run, and the
+# final banner switches to the DRY RUN variant.
+# ----------------------------------------------------------------------------
+out=$(run_init "INPUT_DRY_RUN=true" 30)
+echo "${out}" | grep -q "MIRROR_COMMAND.*--dry-run" \
+  || fail "INPUT_DRY_RUN=true was not reflected in MIRROR_COMMAND; output was:\n${out}"
+echo "${out}" | grep -q "FTP DRY RUN COMPLETED" \
+  || fail "dry-run final banner was not shown; output was:\n${out}"
+if echo "${out}" | grep -q "FTP UPLOADED FINISHED!"; then
+  fail "dry-run run should not show the regular success banner; output was:\n${out}"
+fi
+pass "dry_run=true adds --dry-run to the mirror command and the DRY RUN banner"
+
 printf 'All smoke tests passed.\n'
 exit 0

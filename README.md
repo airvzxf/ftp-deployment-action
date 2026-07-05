@@ -72,6 +72,8 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | dns_fatal_timeout      | DNS - Time for DNS queries.<br> Set to "never" to disable.                            | No       | 10s     | N/A                                                                                               |
 | lftp_settings          | Any other settings that you find in the MAN pages for the LFTP package.               | No       | ""      | "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';" |
 | debug                  | If "true", print resolved input values to the log.                                    | No       | false   | N/A                                                                                               |
+| fail_on_deprecated     | If "true", exit 1 when the pinned ref is end-of-life (v1.x).                         | No       | false   | N/A                                                                                               |
+| dry_run                | If "true", compute the mirror plan but do not transfer or delete any file.           | No       | false   | N/A                                                                                               |
 
 More information on the official site for [lftp - Manual pages][2].
 
