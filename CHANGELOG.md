@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-07-05
+
+Four PRs on top of v2.1.0. No breaking change.
+
+### Added
+
+- **PR #52** (`feat(observability)`) — script hardening + log
+  ergonomics:
+  - Shebang is now `#!/bin/sh -eu` and the script enables
+    `pipefail` immediately after. Catches silent typos in
+    variable names (`set -u`) and a failing command in a
+    pipeline (`pipefail`).
+  - `::add-mask::` for `INPUT_PASSWORD`, `INPUT_USER` and
+    `INPUT_SERVER` so even future log lines that echo the
+    value will be redacted in the rendered log.
+  - `::group::` / `::endgroup::` around the four heavy
+    log phases (Inputs received, Resolved configuration,
+    Upload, final result) so the GitHub Actions UI can
+    collapse them.
+
+- **PR #53** (`chore(devx)`) — developer-experience polish:
+  - `.github/dependabot.yml` with weekly scans for both
+    `docker` and `github-actions` ecosystems. lftp bumps are
+    restricted to patches; actions are grouped per major.
+  - ASCII flow diagram of `init.sh` added to the README.
+  - `Makefile` with `lint`, `test`, `build`, `run`, `release`
+    and `clean` targets (all no-op if the underlying tool
+    is not installed).
+
+- **PR #59** (`feat:`) — error classification and log
+  capture:
+  - Permanent lftp errors (530 login, 550 permission, 550
+    no such file) are detected in the captured output and
+    abort the retry loop early, saving minutes of waiting
+    on a backoff that would never succeed.
+  - Every lftp invocation's combined stdout+stderr is
+    written to a timestamped log file at
+    `~/.lftp-logs/run-<UTC>.log`. The path is exposed as
+    the `log_file` action output (via `$GITHUB_OUTPUT`)
+    so a follow-up step can attach it as a workflow
+    artifact, and it is printed in the failure banner.
+
+- **PR #60** (`feat:`) — `dry_run` input (default `false`).
+  When set to `true`, the mirror command gets lftp's
+  `--dry-run` flag, the plan is reported without any
+  transfer or delete, and the final success banner switches
+  to *FTP DRY RUN COMPLETED (no files transferred)* so a
+  casual reader cannot mistake a dry run for a real upload.
+  Long-standing TODO in the README.
+
+### Changed
+
+- **Relicense to AGPL-3.0** (commit `f9bfc80`). The
+  project moves from GPL-3.0 to the GNU Affero General
+  Public License v3.0 to add the network use clause
+  (section 13 of the AGPL), ensuring the source remains
+  available to users interacting with the software over a
+  network. No code change; only `LICENSE` is updated.
+
+[2.2.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.1.0...v2.2.0
+[2.1.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.0.1...v2.1.0
+[2.0.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v1.5.0...v2.0.0
+[1.5.0]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.5.0
+[1.3.3]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.3.3
 
 ## [2.1.0] - 2026-07-05
 
