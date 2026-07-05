@@ -67,11 +67,30 @@ pwd
 echo ""
 
 # ------------------------------------------------------------------------------
-# B-07: Validate integer inputs early so failures are clear.
+# B-07: Normalize integer inputs to their effective defaults, then validate.
+#   In a real GitHub Actions run these are always populated by the
+#   action.yml default, but init.sh can also be run outside that
+#   mechanism (tests, manual invocation), so we apply the same
+#   defaults here before validating. This avoids a false-positive
+#   exit 2 on an empty numeric input.
 # ------------------------------------------------------------------------------
-# Max number of retries
 if [ -z "${INPUT_MAX_RETRIES}" ]; then
   INPUT_MAX_RETRIES="10"
+fi
+if [ -z "${INPUT_MIRROR_VERBOSE}" ]; then
+  INPUT_MIRROR_VERBOSE="1"
+fi
+if [ -z "${INPUT_FTP_NOP_INTERVAL}" ]; then
+  INPUT_FTP_NOP_INTERVAL="2"
+fi
+if [ -z "${INPUT_NET_MAX_RETRIES}" ]; then
+  INPUT_NET_MAX_RETRIES="1"
+fi
+if [ -z "${INPUT_NET_PERSIST_RETRIES}" ]; then
+  INPUT_NET_PERSIST_RETRIES="5"
+fi
+if [ -z "${INPUT_DNS_MAX_RETRIES}" ]; then
+  INPUT_DNS_MAX_RETRIES="8"
 fi
 validate_int "max_retries"         "${INPUT_MAX_RETRIES}"
 validate_int "mirror_verbose"      "${INPUT_MIRROR_VERBOSE}"
@@ -286,9 +305,12 @@ while true; do
     *) DELAY=30 ;;
   esac
   if [ "${DELAY}" -gt 1 ]; then
-    HALF=$(( DELAY / 2 ))
+    # ±50% jitter: range is [-DELAY/2, +DELAY/2] so DELAY=4 -> ±2s,
+    # DELAY=2 -> ±1s, DELAY=8 -> ±4s. The previous formula
+    # `(RANDOM % (HALF + 1)) - (HALF / 2)` was off because for small
+    # DELAY the integer division collapsed the negative half.
     # shellcheck disable=SC3028  # RANDOM is a busybox ash extension (the shell we actually run in).
-    JITTER=$(( (RANDOM % (HALF + 1)) - (HALF / 2) ))
+    JITTER=$(( RANDOM % (DELAY + 1) - DELAY / 2 ))
     SLEEP_S=$(( DELAY + JITTER ))
   else
     SLEEP_S="${DELAY}"
