@@ -122,5 +122,81 @@ echo "${out}" | grep -q "Backing off" \
   || fail "retry backoff not visible in the log; output was:\n${out}"
 pass "retry backoff is visible in the log"
 
+# ----------------------------------------------------------------------------
+# Test 7: B-04 — local_dir with ".." path traversal is rejected
+# ----------------------------------------------------------------------------
+out=$(run_init 'INPUT_LOCAL_DIR=../../etc' 10)
+echo "${out}" | grep -q 'local_dir contains ".." path traversal' \
+  || fail "path traversal in local_dir was not rejected; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "path traversal did not exit 2; output was:\n${out}"
+pass 'local_dir="../../etc" is rejected with exit 2'
+
+# ----------------------------------------------------------------------------
+# Test 8: B-04 — remote_dir with ".." is also rejected
+# ----------------------------------------------------------------------------
+out=$(run_init 'INPUT_REMOTE_DIR=../foo' 10)
+echo "${out}" | grep -q 'remote_dir contains ".." path traversal' \
+  || fail "path traversal in remote_dir was not rejected; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "remote_dir path traversal did not exit 2; output was:\n${out}"
+pass 'remote_dir="../foo" is rejected with exit 2'
+
+# ----------------------------------------------------------------------------
+# Test 9: B-04 — local_dir starting with '-' is rejected
+# ----------------------------------------------------------------------------
+out=$(run_init 'INPUT_LOCAL_DIR=-rf' 10)
+echo "${out}" | grep -q "starts with a dash" \
+  || fail "local_dir starting with dash was not rejected; output was:\n${out}"
+pass "local_dir starting with a dash is rejected"
+
+# ----------------------------------------------------------------------------
+# Test 10: B-16 — lftp_settings with a backtick is rejected
+# ----------------------------------------------------------------------------
+# Build the value with printf to keep shellcheck happy and avoid the
+# backtick being interpreted by the test harness.
+backtick_val=$(printf 'set foo:bar %cuname' '`')
+out=$(run_init "INPUT_LFTP_SETTINGS=${backtick_val}" 10)
+echo "${out}" | grep -q "lftp_settings contains backtick" \
+  || fail "lftp_settings with backtick was not rejected; output was:\n${out}"
+pass "lftp_settings with backtick is rejected"
+
+# ----------------------------------------------------------------------------
+# Test 11: B-16 — lftp_settings with more than 3 ';' is rejected
+# ----------------------------------------------------------------------------
+out=$(run_init 'INPUT_LFTP_SETTINGS=set a:1;set b:2;set c:3;set d:4;' 10)
+echo "${out}" | grep -q "lftp_settings has 4" \
+  || fail "lftp_settings with 4 ';' was not rejected; output was:\n${out}"
+pass "lftp_settings with 4 ';' is rejected"
+
+# ----------------------------------------------------------------------------
+# Test 12: B-16 — documented lftp_settings (3 ';' chained) is accepted
+# ----------------------------------------------------------------------------
+out=$(run_init 'INPUT_LFTP_SETTINGS=set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent "firefox";' 30)
+# If validation passed, there should be no "ERROR: lftp_settings ..."
+# line. The lftp call itself will still fail (unreachable server) but
+# the failure should be the standard "lftp exited with code" path.
+echo "${out}" | grep -qE "ERROR: lftp_settings" \
+  && fail "lftp_settings validation unexpectedly failed; output was:\n${out}"
+pass "documented lftp_settings (3 ';' chained) passes validation"
+
+# ----------------------------------------------------------------------------
+# Test 13: B-03 — password is NOT visible on the lftp command line
+# ----------------------------------------------------------------------------
+# Run with debug=true so that resolved values are echoed. Then verify
+# the secret password does not appear in the lftp command line. The
+# init.sh now writes the password to a .netrc and omits the `-u` arg,
+# so even with debug=true the only place the password appears is the
+# explicit "password: <value>" line of the env dump.
+_env_str=$(printf 'INPUT_PASSWORD=SuperSecretDoNotLeakZZZ\nINPUT_DEBUG=true')
+out=$(run_init "${_env_str}" 30)
+# Count how many times the secret appears in the output.
+n=$(printf '%s\n' "${out}" | grep -cF 'SuperSecretDoNotLeakZZZ')
+# Expect exactly 1 occurrence: the explicit env-dump line.
+if [ "${n}" -ne 1 ]; then
+  fail "expected password to appear once (env dump); got ${n}. Output:\n${out}"
+fi
+pass "password appears only in the env-dump line, not in the lftp call"
+
 printf 'All smoke tests passed.\n'
 exit 0

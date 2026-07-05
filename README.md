@@ -127,7 +127,7 @@ Main features:
 |------|---------|
 | `0`  | Upload finished successfully. |
 | `1`  | Upload failed after all retries; the last lftp error is printed above. |
-| `2`  | Invalid input (a non-integer was passed to a numeric option such as `max_retries`). |
+| `2`  | Invalid input. This includes: a non-integer numeric option (e.g. `max_retries`); a `local_dir` / `remote_dir` that fails the path-traversal or shell-metacharacter guard; an `lftp_settings` value that contains control characters, a backtick, a dollar sign, or more than three `;`-chained directives. |
 
 When the global 5-hour timeout is reached the lftp process is killed and the
 action exits with `1` (the most recent lftp exit code is also printed to the
@@ -136,6 +136,22 @@ log for debugging).
 ## Security
 
 For how to report vulnerabilities please see [`SECURITY.md`](./SECURITY.md).
+
+This action runs as the unprivileged `lftp` user inside the container
+(Dockerfile `USER lftp`). The `password` input is never passed to
+`lftp` on the command line: it is written to `~/.netrc` with mode
+`0600` for the duration of the run and removed via an `EXIT` trap
+on any exit path (success, error, `set -e` abort, SIGINT). Combined,
+these mean the password never appears in `/proc/<pid>/cmdline` or in
+the GitHub Actions runner log.
+
+`local_dir` and `remote_dir` are validated against `..` path-traversal
+components, leading dashes (which `lftp` would misread as options),
+control characters, and shell metacharacters (`;`, `&`, `|`, backtick,
+dollar). `lftp_settings` is lightly sanitised: control characters,
+backtick, dollar, and more than three `;`-chained directives are
+rejected. The action exits with code `2` and a clear error on any
+of these.
 
 ## Changelog
 
