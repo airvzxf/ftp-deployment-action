@@ -475,10 +475,21 @@ trap 'rm -f "${NETRC}"' EXIT
 # ------------------------------------------------------------------------------
 COUNTER=1
 SUCCESS=""
+PERMANENT_ERROR=""
 
 # B-09: hard cap on the total wall-clock time of one lftp invocation.
 LFTP_TIMEOUT="5h"
 LFTP_KILL_AFTER="30s"
+
+# B-04: capture every lftp invocation's combined stdout+stderr to a
+# timestamped log file under ~/.lftp-logs/. The path is exported via
+# the GITHUB_OUTPUT file so a downstream step can upload it as a
+# workflow artifact (or just download it from the runner). The
+# directory is created here rather than at the top of the script
+# so test runs that exit before the loop (validate_int / deprecated
+# ref) do not leave an empty .lftp-logs directory behind.
+mkdir -p "${HOME}/.lftp-logs"
+LOG_FILE="${HOME}/.lftp-logs/run-$(date -u +%Y%m%dT%H%M%SZ).log"
 
 printf '::group::Upload\n'
 while true; do
@@ -488,9 +499,13 @@ while true; do
 
   set +e
   # B-03: no -u USER,PASS — lftp reads credentials from ${NETRC}.
+  # B-04: redirect combined stdout+stderr to the timestamped log file
+  # so the captured output can be inspected after the fact and, if
+  # the user wishes, attached as a workflow artifact.
   timeout -k "${LFTP_KILL_AFTER}" "${LFTP_TIMEOUT}" lftp \
     "${INPUT_SERVER}" \
-    -e "${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}; quit;"
+    -e "${FTP_SETTINGS} ${MIRROR_COMMAND} ${INPUT_LOCAL_DIR} ${INPUT_REMOTE_DIR}; quit;" \
+    > "${LOG_FILE}" 2>&1
   LFTP_RC=$?
   set -e
 
@@ -500,6 +515,16 @@ while true; do
   fi
 
   echo "  lftp exited with code ${LFTP_RC}"
+
+  # A6: classify the failure. Some errors are permanent (no point in
+  # retrying with the same credentials and same path): bad login,
+  # permission denied, missing file. Detect them in the captured log
+  # and abort the retry loop early.
+  if grep -qiE '(^|[^0-9])(530 |login authentication failed|login incorrect|login failed|not logged in|550 permission denied|550 .*no such file|550 .*not found)' "${LOG_FILE}"; then
+    PERMANENT_ERROR="true"
+    echo "  Detected permanent error in lftp output; aborting retries."
+    break
+  fi
 
   COUNTER=$((COUNTER + 1))
   # B-02: `max_retries=0` is the documented sentinel for "retry forever"
@@ -538,6 +563,14 @@ while true; do
 done
 printf '::endgroup::\n'
 
+# B-04: expose the log file path as an action output so a follow-up
+# step can attach it as a workflow artifact. Only do this if the
+# runner set GITHUB_OUTPUT (i.e. the user invoked us with `id:` in
+# their step and declared `log_file` in the step's outputs).
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  printf 'log_file=%s\n' "${LOG_FILE}" >> "${GITHUB_OUTPUT}"
+fi
+
 # ------------------------------------------------------------------------------
 # Display the status of the LFTP actions.
 # ------------------------------------------------------------------------------
@@ -546,6 +579,11 @@ if [ -z "${SUCCESS}" ]; then
   echo "=============================="
   echo "=    ERROR: UPLOAD FAILED    ="
   echo "=============================="
+  if [ -n "${PERMANENT_ERROR}" ]; then
+    echo "Failure type: PERMANENT (no point retrying with the same inputs)."
+    echo "Check credentials, the remote_dir path, and the FTP user's"
+    echo "permissions; see the log file below for the server's message."
+  fi
   if [ -n "${LFTP_RC}" ]; then
     echo "Last lftp exit code: ${LFTP_RC}"
     echo "Common codes:"
@@ -554,6 +592,7 @@ if [ -z "${SUCCESS}" ]; then
     echo "  124  timeout reached (max wall-clock ${LFTP_TIMEOUT})"
     echo "  137  process killed (SIGKILL after ${LFTP_KILL_AFTER} grace)"
   fi
+  echo "Full lftp output: ${LOG_FILE}"
   exit 1
 fi
 
