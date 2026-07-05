@@ -47,30 +47,27 @@ common_env() {
     "INPUT_FTP_SSL_ALLOW=false"
 }
 
-# run_init ENV_VARS TIMEOUT_SECONDS [VERSION]
+# run_init ENV_VARS TIMEOUT_SECONDS
 #   Runs init.sh in alpine, returns combined stdout+stderr.
-#   VERSION is baked into /app/VERSION so the deprecation warning can
-#   read it. Defaults to "test-local".
+#   Reads /app/VERSION from the bind-mount of the repo root, which is
+#   the 'dev' string committed in VERSION. release.yml passes the
+#   resolved tag as --build-arg VERSION in production images.
 run_init() {
   _env=$1
   _t=${2:-15}
-  _ver=${3:-test-local}
   _env_file=$(mktemp) || return 1
-  _ver_file=$(mktemp) || return 1
   {
     common_env
     printf '%s\n' "${_env}"
   } > "${_env_file}"
-  printf '%s\n' "${_ver}" > "${_ver_file}"
   ${RUNTIME} run --rm \
     -v "${ROOT}:/app:ro" \
-    -v "${_ver_file}:/app/VERSION:ro" \
     -w /app \
     --env-file "${_env_file}" \
     alpine:3.23.3 \
     /bin/sh -c "apk add --no-cache lftp ca-certificates >/dev/null 2>&1 && timeout ${_t} sh ${INIT_REL} 2>&1; echo EXIT=\$?" \
     2>&1
-  rm -f "${_env_file}" "${_ver_file}"
+  rm -f "${_env_file}"
 }
 
 # ----------------------------------------------------------------------------
@@ -259,7 +256,7 @@ pass "max_retries=0 retries past the first failure (saw ${n} attempts in 25s)"
 # ----------------------------------------------------------------------------
 # Test 15: deprecation warning fires for EOL ref (v1.3.3).
 # ----------------------------------------------------------------------------
-out=$(run_init 'GITHUB_ACTION_REF=v1.3.3' 10 "v2.1.0-test")
+out=$(run_init 'GITHUB_ACTION_REF=v1.3.3' 10)
 echo "${out}" | grep -q "::warning file=action.yml,title=End-of-life version::" \
   || fail "no ::warning:: emitted for EOL ref v1.3.3; output was:\n${out}"
 echo "${out}" | grep -q "v1.3.3 is end-of-life" \
@@ -269,7 +266,7 @@ pass "::warning:: emitted for EOL ref v1.3.3"
 # ----------------------------------------------------------------------------
 # Test 16: ::notice:: fires for older-but-supported v1.x refs.
 # ----------------------------------------------------------------------------
-out=$(run_init 'GITHUB_ACTION_REF=v1.5.0' 10 "v2.1.0-test")
+out=$(run_init 'GITHUB_ACTION_REF=v1.5.0' 10)
 echo "${out}" | grep -q "::notice file=action.yml,title=New major available::" \
   || fail "no ::notice:: emitted for v1.5.0; output was:\n${out}"
 echo "${out}" | grep -q "v2 is available" \
@@ -279,7 +276,7 @@ pass "::notice:: emitted for v1.5.0 ('v2 is available')"
 # ----------------------------------------------------------------------------
 # Test 17: current line (v2.0.1) is silent.
 # ----------------------------------------------------------------------------
-out=$(run_init 'GITHUB_ACTION_REF=v2.0.1' 10 "v2.1.0-test")
+out=$(run_init 'GITHUB_ACTION_REF=v2.0.1' 10)
 if echo "${out}" | grep -qE "::warning|::notice|::error file=action.yml,title="; then
   fail "unexpected deprecation notice for current ref v2.0.1; output was:\n${out}"
 fi
@@ -288,7 +285,7 @@ pass "no deprecation notice for current ref v2.0.1"
 # ----------------------------------------------------------------------------
 # Test 18: @latest emits a ::warning::.
 # ----------------------------------------------------------------------------
-out=$(run_init 'GITHUB_ACTION_REF=latest' 10 "v2.1.0-test")
+out=$(run_init 'GITHUB_ACTION_REF=latest' 10)
 echo "${out}" | grep -q "::warning file=action.yml,title=Deprecated usage::" \
   || fail "no ::warning:: emitted for @latest; output was:\n${out}"
 echo "${out}" | grep -q "moving target" \
@@ -298,7 +295,7 @@ pass "::warning:: emitted for @latest"
 # ----------------------------------------------------------------------------
 # Test 19: @master emits a ::warning::.
 # ----------------------------------------------------------------------------
-out=$(run_init 'GITHUB_ACTION_REF=master' 10 "v2.1.0-test")
+out=$(run_init 'GITHUB_ACTION_REF=master' 10)
 echo "${out}" | grep -q "::warning file=action.yml,title=Branch usage::" \
   || fail "no ::warning:: emitted for @master; output was:\n${out}"
 pass "::warning:: emitted for @master"
@@ -307,7 +304,7 @@ pass "::warning:: emitted for @master"
 # Test 20: fail_on_deprecated=true + EOL ref -> ::error:: and exit 1.
 # ----------------------------------------------------------------------------
 out=$(run_init 'GITHUB_ACTION_REF=v1.3.3
-INPUT_FAIL_ON_DEPRECATED=true' 10 "v2.1.0-test")
+INPUT_FAIL_ON_DEPRECATED=true' 10)
 echo "${out}" | grep -q "::error file=action.yml::" \
   || fail "no ::error:: emitted with fail_on_deprecated=true; output was:\n${out}"
 echo "${out}" | grep -q "^EXIT=1" \
@@ -318,7 +315,7 @@ pass "fail_on_deprecated=true on EOL ref exits 1 with ::error::"
 # Test 21: fail_on_deprecated=true + current ref -> no ::error::, action runs.
 # ----------------------------------------------------------------------------
 out=$(run_init 'GITHUB_ACTION_REF=v2.0.1
-INPUT_FAIL_ON_DEPRECATED=true' 25 "v2.1.0-test")
+INPUT_FAIL_ON_DEPRECATED=true' 25)
 if echo "${out}" | grep -q "::error file=action.yml::"; then
   fail "fail_on_deprecated=true on current ref unexpectedly fired; output was:\n${out}"
 fi
