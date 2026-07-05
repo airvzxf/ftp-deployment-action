@@ -69,6 +69,7 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.image }}:latest
           labels: |
             org.opencontainers.image.title=ftp-deployment-action
             org.opencontainers.image.description=GitHub Action that copies files via FTP/FTPS using lftp
