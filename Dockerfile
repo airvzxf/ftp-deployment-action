@@ -21,6 +21,13 @@ WORKDIR /app
 COPY init.sh /app/init.sh
 COPY LICENSE README.md /app/
 
+# Bake the image version into /app/VERSION so the deprecation warning
+# in init.sh can print the actual version even on local builds.
+# `release.yml` passes --build-arg VERSION=<tag>; local `docker build`
+# gets the default "dev".
+ARG VERSION=dev
+RUN echo "$VERSION" > /app/VERSION
+
 RUN ["/bin/chmod", "+x", "/app/init.sh"]
 
 # B-03 / B-14: the script writes the .netrc file at $HOME/.netrc, so
