@@ -118,6 +118,52 @@ jobs:
           lftp_settings: "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';"
 ```
 
+## How it works
+
+```
++--------------------------+
+|   GitHub Actions runner  |
+|   invokes the action     |
++------------+-------------+
+             |
+             v
++--------------------------+
+|  init.sh starts          |
+|                          |
+|  1. Deprecation check    |--- EOL / @latest / @master  -->  ::warning::
+|     (reads GITHUB_       |                                (::error:: + exit 1
+|      ACTION_REF +        |                                 if fail_on_deprecated)
+|      /app/VERSION)       |
+|                          |
+|  2. Mask sensitive       |--- ::add-mask:: password / user / server
+|     inputs               |
+|                          |
+|  3. Validate inputs      |--- path traversal? shell metachars?     --> exit 2
+|     (validate_int,       |
+|      validate_path,      |
+|      validate_lftp_      |
+|      settings)           |
+|                          |
+|  4. Build FTP_SETTINGS   |--- one 'set foo bar' per input
+|     + MIRROR_COMMAND     |
+|                          |
+|  5. Write .netrc         |--- 0600, removed by EXIT trap
+|                          |
+|  6. lftp -e "..."        |--- +global 5h timeout
+|     (retry loop with     |   + exponential backoff with jitter
+|      max_retries=0..N)   |   + per-attempt net/dns timeouts
+|                          |
+|  7. Result banner        |--- ERROR: UPLOAD FAILED + last lftp exit code
++------------+-------------+
+             |
+             v
++--------------------------+
+|  PASS  -> exit 0         |
+|  FAIL  -> exit 1         |
+|  INPUT -> exit 2         |
++--------------------------+
+```
+
 ## NOTES
 
 Main features:
