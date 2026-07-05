@@ -33,6 +33,10 @@ inputs:
     description: 'Do not create symbolic links.'
     required: false
     default: 'true'
+  mirror_verbose:
+    description: 'Mirror verbosity level (0-3). Passed as --verbose=N to lftp mirror.'
+    required: false
+    default: '1'
   ftp_ssl_allow:
     description: 'FTP - Allow SSL encryption.'
     required: false
@@ -77,6 +81,14 @@ inputs:
     description: 'DNS - Time for DNS queries. Set to "never" to disable.'
     required: false
     default: '10s'
+  lftp_settings:
+    description: 'Additional raw lftp settings, e.g. "set cache:cache-empty-listings true; set cmd:status-interval 1s;". Use with care: this is appended to the lftp `-e` command and not validated.'
+    required: false
+    default: ''
+  debug:
+    description: 'If "true", print resolved input values to the log. Default is "false" (only show which inputs were received, not their values).'
+    required: false
+    default: 'false'
 runs:
   using: 'docker'
   image: 'Dockerfile'

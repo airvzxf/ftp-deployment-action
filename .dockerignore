@@ -1,0 +1,12 @@
+.git
+.github
+.idea
+.vscode
+.opencode
+.env
+.env.*
+*.bak
+*.log
+*.swp
+.DS_Store
+PROPOSAL.md
