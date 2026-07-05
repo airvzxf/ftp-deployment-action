@@ -85,6 +85,9 @@ jobs:
           format: cyclonedx-json
           artifact-name: sbom.cyclonedx.json
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
       - name: Sign image with cosign (keyless, OIDC)
         env:
           COSIGN_EXPERIMENTAL: '1'
