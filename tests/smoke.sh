@@ -228,5 +228,27 @@ if [ "${n}" -ne 1 ]; then
 fi
 pass "password appears only in the env-dump line, not in the lftp call"
 
+# ----------------------------------------------------------------------------
+# Test 14: B-02 — max_retries=0 means "retry forever".
+#
+# We can't actually run forever, so we run with a 25s outer timeout and
+# verify that the script performs MORE than one attempt before being
+# killed. With max_retries=1 (the old default for this test scenario) the
+# script would give up after the first failure and print the ERROR
+# banner. With max_retries=0 it must keep retrying.
+# ----------------------------------------------------------------------------
+out=$(run_init 'INPUT_MAX_RETRIES=0' 25)
+# Count "Try #N" lines: at least 2 attempts must have happened.
+n=$(printf '%s\n' "${out}" | grep -cE '^Try #[0-9]+$')
+if [ "${n}" -lt 2 ]; then
+  fail "max_retries=0 did not retry (only ${n} attempts in 25s); output was:\n${out}"
+fi
+# And the script must NOT have given up with the "ERROR: UPLOAD FAILED"
+# banner in that window — only the timeout can stop it.
+if printf '%s' "${out}" | grep -q "ERROR: UPLOAD FAILED"; then
+  fail "max_retries=0 gave up early with the ERROR banner; output was:\n${out}"
+fi
+pass "max_retries=0 retries past the first failure (saw ${n} attempts in 25s)"
+
 printf 'All smoke tests passed.\n'
 exit 0

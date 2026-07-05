@@ -404,8 +404,13 @@ while true; do
   echo "  lftp exited with code ${LFTP_RC}"
 
   COUNTER=$((COUNTER + 1))
+  # B-02: `max_retries=0` is the documented sentinel for "retry forever"
+  # (the only exit paths are then: lftp success, the global 5h timeout,
+  # or `fail_on_deprecated` in PR-B). Anything else just compares the
+  # counter as before.
   # B-06: quote to satisfy shellcheck SC2086 and `set -u` semantics.
-  if [ "${COUNTER}" -gt "${INPUT_MAX_RETRIES}" ]; then
+  if [ "${INPUT_MAX_RETRIES}" != "0" ] && \
+     [ "${COUNTER}" -gt "${INPUT_MAX_RETRIES}" ]; then
     break
   fi
 
