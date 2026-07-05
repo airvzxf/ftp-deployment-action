@@ -1,5 +1,9 @@
 # FTP Deployment: GitHub Action
 
+[![CI](https://github.com/airvzxf/ftp-deployment-action/actions/workflows/ci.yml/badge.svg)](https://github.com/airvzxf/ftp-deployment-action/actions/workflows/ci.yml)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/airvzxf/ftp-deployment-action)](https://github.com/airvzxf/ftp-deployment-action/releases)
+[![License: GPL-3.0](https://img.shields.io/github/license/airvzxf/ftp-deployment-action)](https://github.com/airvzxf/ftp-deployment-action/blob/main/LICENSE)
+
 This GitHub action copies the files via FTP from your Git project to your server in a specific path.
 
 ## Security and SSL
@@ -27,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
       # Here is the deployment action
       - name: Upload from public_html via FTP
-        uses: airvzxf/ftp-deployment-action@latest
+        uses: airvzxf/ftp-deployment-action@v2
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -35,8 +39,10 @@ jobs:
           local_dir: "./public_html"
 ```
 
-Optionally, you can get the live version which has the last commits using the `main` branch like this:
-`uses: airvzxf/ftp-deployment-action@main`.
+> **Pin to a major version (recommended)**: `@v2` always points to the
+> latest v2.x release. For stricter reproducibility pin to a specific
+> tag (`@v2.0.0`) or a full commit SHA. Avoid `@latest` and `@main` —
+> they move under you and can introduce regressions.
 
 ## Settings
 
@@ -49,7 +55,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | password               | FTP Password.                                                                         | Yes      | N/A     | ExampleOnlyAlphabets                                                                              |
 | local_dir              | Local directory.                                                                      | No       | "./"    | "./public_html"                                                                                   |
 | remote_dir             | Remote directory.                                                                     | No       | "./"    | "/www/user/home"                                                                                  |
-| max_retries            | Times that the `lftp` command will be executed if an error occurred.                  | No       | 10      | N/A                                                                                               |
+| max_retries            | Number of retries on error. `0` = retry forever; `1` = no retries.                  | No       | 10      | N/A                                                                                               |
 | delete                 | Delete all the files inside of the remote directory before the upload process.        | No       | false   | N/A                                                                                               |
 | no_symlinks            | Do not create symbolic links.                                                         | No       | true    | N/A                                                                                               |
 | mirror_verbose         | Mirror verbosity level.                                                               | No       | 1       | N/A                                                                                               |
@@ -89,7 +95,7 @@ jobs:
       - uses: actions/checkout@v4
       # Here is the deployment action
       - name: Upload from public_html via FTP
-        uses: airvzxf/ftp-deployment-action@latest
+        uses: airvzxf/ftp-deployment-action@v2
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -132,6 +138,22 @@ Main features:
 When the global 5-hour timeout is reached the lftp process is killed and the
 action exits with `1` (the most recent lftp exit code is also printed to the
 log for debugging).
+
+## Troubleshooting
+
+| Symptom in the log | Likely cause | Fix |
+|---|---|---|
+| `530 Login authentication failed` | Wrong `user` / `password`, or the account is locked. | Verify the credentials against the server with an FTP client (e.g. `lftp -u user,pass host`). Make sure the secret in the repo is the one you think it is. |
+| `550 Permission denied` on every file | The FTP user can read/write `remote_dir` but cannot enter the parent, or `delete: true` is trying to remove files it does not own. | Try a fresh `remote_dir` you have full control over (e.g. `/www/...`). If you only need upload without `delete`, leave `delete: false`. |
+| `Fatal error: certificate verify failed` (TLS) | The server uses a self-signed certificate, the cert is expired, or you are connecting to a bare IP. | `ssl_verify_certificate` is `true` by default since v2.0.0. If you trust the server, set `ssl_verify_certificate: "false"` explicitly. For a bare IP you cannot validate a hostname — use a hostname with a real cert or opt out. |
+| `Connection refused` / hangs on connect | Wrong host/port, firewall blocking outbound 21/990, or the FTP server is down. | Verify `server` (`ftp://host:21` or `ftps://host:990`). From the runner, `nc -vz host 21` should succeed. Some shared hosters block the runner's IP range — ask them to allow-list it. |
+| `mirror: Access failed: 550 ... No such file or directory` | The remote path does not exist or the FTP user has no permission to create it. | Create the `remote_dir` manually (or set `delete: false` and accept a partial mirror) and confirm the FTP user owns it. |
+
+> **The job is still running for hours**: `lftp` is probably waiting on a
+> half-open TCP connection. Since v1.5.0 the action wraps every
+> invocation in a hard 5-hour `timeout`; the job will be killed (exit
+> `1`) at that point. If you want to fail faster, set `net_timeout` /
+> `dns_fatal_timeout` lower than the defaults (`15s` / `10s`).
 
 ## Security
 
