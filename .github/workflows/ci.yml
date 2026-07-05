@@ -2,11 +2,7 @@ name: CI
 
 on:
   push:
-    # Both `main` (the new default) and `master` (the legacy default)
-    # are listed during the transition period. Once `master` is removed
-    # from the remote (a follow-up step in this change), narrow this
-    # back to [main] in a one-line follow-up commit.
-    branches: [main, master]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
