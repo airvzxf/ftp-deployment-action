@@ -113,6 +113,12 @@ Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 
 ## [Unreleased]
 
+### Changed
+- CI and release workflows now use `actions/checkout@v5` (was v4).
+  v5 targets Node 24, which silences the deprecation warning
+  every push produced since Node 20 was deprecated on the GH
+  Actions runners. No user-facing behaviour change.
+
 ### Added
 - `.github/workflows/release.yml`: on every pushed `v*.*.*` tag
   (and via manual `workflow_dispatch` with a tag input), the
