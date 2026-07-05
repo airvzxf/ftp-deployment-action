@@ -85,6 +85,12 @@ jobs:
           format: cyclonedx-json
           artifact-name: sbom.cyclonedx.json
 
+      - name: Download SBOM artifact for attestation
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom.cyclonedx.json
+          path: .
+
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
