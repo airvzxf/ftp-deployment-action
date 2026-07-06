@@ -1,15 +1,15 @@
 FROM alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
-# B-13: pin the base image by digest (resolved against the alpine:3.23.3
-# tag at the time of v2.0.1). Bump on a controlled cadence via the
+# B-13: pin the base image by digest (resolved against the alpine:3.24
+# tag at the time of v2.3.1). Bump on a controlled cadence via the
 # release pipeline; the digest is recorded in the corresponding tag
 # message.
 #
 # Pin the package versions too (resolves hadolint DL3018).
-# lftp=4.9.2-r9 and ca-certificates=20260611-r0 are the current
-# versions in alpine 3.23.3; bump them together with the base image.
+# lftp=4.9.3-r0 and ca-certificates=20260611-r0 are the current
+# versions in alpine 3.24; bump them together with the base image.
 RUN apk add --no-cache \
-      lftp=4.9.2-r9 \
+      lftp=4.9.3-r0 \
       ca-certificates=20260611-r0 \
  && addgroup -S lftp \
  && adduser -S lftp -G lftp -h /home/lftp \
