@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **bats unit tests for `lib.sh`** (5 files, 92 tests in
+  `tests/unit/`). Each pure function in the library now has at
+  least one happy-path and one reject-path test that runs in
+  under 2 minutes without spinning up docker, alpine, or lftp.
+  CI gets a new `unit` job that installs bats via `apt-get` and
+  runs `bats tests/unit`. A `make unit` target is added for
+  local iteration; it skips with a notice if bats is not
+  installed.
+
 ### Changed
 
 - **Architectural refactor (LP-1 / MP-5)**: split the previously
@@ -26,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inputs dump with an explicit list of variable names plus a
   single `_indirection` helper in `lib.sh`. Dynamic variable-name
   lookup now happens in exactly one place in the entire codebase.
+- `extract_netrc_host` now correctly handles the IPv6 form
+  `[::1]:990` (bracketed host with a port suffix) in addition to
+  `[::1]` (no port). The previous `\[*\])` glob required the
+  value to end with `]`, which silently failed on
+  `ftps://[::1]:990` and produced an empty string instead of
+  `::1`. Caught by the new `extract_netrc_host: ftps://[::1]:990
+  -> ::1` unit test.
 - The contract test (`tests/contract.sh`) now greps both
   `entrypoint.sh` and `lib.sh` for `INPUT_*` references; the
   static and dynamic sets must still match the declared inputs in
@@ -38,8 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Makefile`: `shellcheck -x entrypoint.sh lib.sh tests/contract.sh
   tests/smoke.sh`. The `-x` flag is required so shellcheck follows
   the `shellcheck source=lib.sh` directive in `entrypoint.sh`.
+- `Makefile`: `make unit` target for the bats tests.
 - `tests/smoke.sh`: `INIT_REL=./entrypoint.sh` (1-line path change
   in the harness; the test bodies are unchanged).
+- `.github/workflows/ci.yml`: new `unit` job that installs bats
+  and runs `bats tests/unit`; existing `shellcheck` job now
+  covers `entrypoint.sh + lib.sh` and the `contract` job's name
+  reflects the new contract test path.
 
 
 ## [2.4.1] - 2026-07-05

@@ -423,8 +423,12 @@ extract_netrc_host() {
   _enh_value=$(printf '%s' "${_enh_value}" \
     | sed -E 's|^[a-zA-Z]+://||' \
     | sed -E 's|^[^@/]*@||')
+  # IPv6 host literals arrive wrapped in [ ]. The host literal may
+  # be followed by :port and/or /path (e.g. "[::1]:990" or
+  # "[::1]/x"). Match the bracket form on the leading character so
+  # we correctly handle both "[::1]" and "[::1]:990".
   case "${_enh_value}" in
-    \[*\])
+    \[*)
       _enh_value=$(printf '%s' "${_enh_value}" | sed -nE 's|^\[([^]]*)\].*|\1|p')
       ;;
     *)
