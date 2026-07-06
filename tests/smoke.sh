@@ -1,9 +1,9 @@
 #!/bin/sh
-# tests/smoke.sh — smoke tests for init.sh.
+# tests/smoke.sh — smoke tests for entrypoint.sh.
 #
-# These run init.sh inside an Alpine container with lftp installed
-# against a fake server (TCP port 1, which refuses connection) and
-# assert the expected behaviour.
+# These run entrypoint.sh inside an Alpine container with lftp
+# installed against a fake server (TCP port 1, which refuses
+# connection) and assert the expected behaviour.
 #
 # Requirements:
 #   - docker or podman on PATH
@@ -15,7 +15,7 @@ set -u
 
 # shellcheck disable=SC1007
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-INIT_REL=./init.sh
+INIT_REL=./entrypoint.sh
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 pass() { printf '  ok: %s\n' "$*"; }
@@ -48,7 +48,7 @@ common_env() {
 }
 
 # run_init ENV_VARS TIMEOUT_SECONDS
-#   Runs init.sh in alpine, returns combined stdout+stderr.
+#   Runs entrypoint.sh in alpine, returns combined stdout+stderr.
 #   Reads /app/VERSION from the bind-mount of the repo root, which is
 #   the 'dev' string committed in VERSION. release.yml passes the
 #   resolved tag as --build-arg VERSION in production images.
@@ -104,7 +104,7 @@ pass "debug=true echoes the password value"
 # Test 4: default dump does NOT echo the password value
 # ----------------------------------------------------------------------------
 # Use a distinctive password so we can grep for it precisely. Since
-# PR-C, init.sh emits `::add-mask::<value>` for sensitive inputs as
+# PR-C, entrypoint.sh emits `::add-mask::<value>` for sensitive inputs as
 # defence-in-depth; the literal password value appears once in the
 # log in that mask line, but never inside the "Inputs received" dump.
 # The masked occurrence is what the user wants: GitHub auto-redacts
@@ -130,7 +130,7 @@ pass "default dump does not echo the password value (masked once, dump clean)"
 out=$(run_init "INPUT_MIRROR_VERBOSE=2" 30)
 echo "${out}" | grep -q "MIRROR_COMMAND.*--verbose=2" \
   || fail "mirror_verbose=2 was not reflected in MIRROR_COMMAND; output was:\n${out}"
-pass "mirror_verbose is honoured by init.sh"
+pass "mirror_verbose is honoured by entrypoint.sh"
 
 # ----------------------------------------------------------------------------
 # Test 6: backoff between attempts is visible in the log
@@ -233,7 +233,7 @@ pass "documented lftp_settings (3 ';' chained) passes validation"
 # ----------------------------------------------------------------------------
 # Run with debug=true so that resolved values are echoed. Then verify
 # the secret password does not appear inside the ::group::Upload block
-# (which is where lftp is actually invoked). The init.sh now writes the
+# (which is where lftp is actually invoked). The entrypoint.sh now writes the
 # password to a .netrc and omits the `-u` arg, so even with debug=true
 # the only places the password appears are:
 #   1. the ::add-mask:: line (defence-in-depth),

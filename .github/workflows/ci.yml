@@ -23,7 +23,8 @@ jobs:
       - name: Run shellcheck
         run: |
           set -e
-          shellcheck init.sh
+          # -x: follow `shellcheck source=` directives (entrypoint.sh sources lib.sh).
+          shellcheck -x entrypoint.sh lib.sh
           shellcheck tests/contract.sh
           shellcheck tests/smoke.sh
 
@@ -76,5 +77,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Run init.sh smoke tests in alpine
+      - name: Run entrypoint.sh smoke tests in alpine
         run: tests/smoke.sh
