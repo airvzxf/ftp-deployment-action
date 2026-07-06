@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-07-05
+
+Routine dependency bumps. No user-facing change.
+
+### Changed
+
+- **PR #54** — `actions/checkout` v5 → v7. The v7 release
+  blocks checking out fork PRs from `pull_request_target`
+  and `workflow_run` triggers (security improvement) and
+  moves to ESM. Used in both CI and release workflows.
+- **PR #55** — Alpine base image digest refreshed. The
+  `lftp=4.9.2-r9` and `ca-certificates=20260611-r0` package
+  pins are unchanged; the digest bump is a routine
+  re-pin against the current `alpine:3.23.3` content.
+- **PR #56** — `docker/setup-buildx-action` v3 → v4,
+  `docker/login-action` v3 → v4, `docker/build-push-action`
+  v6 → v7. All three move to Node 24 and require Actions
+  Runner v2.327.1+ (well past the runner version on the
+  default `ubuntu-latest` image at the time of writing).
+  Used in the release workflow.
+- **PR #57** — `hadolint/hadolint-action` 3.1.0 → 3.3.0
+  (minor) and `actions/download-artifact` v4 → v8 (major).
+  v8 of download-artifact makes hash mismatches an error
+  by default (was a warning) and only unzips artifacts
+  whose content-type indicates a zip; the release workflow's
+  `anchore/sbom-action` output is a zip, so this is
+  transparent for the SBOM attestation step.
+
+[2.3.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.2.0...v2.3.0
+[2.2.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.1.0...v2.2.0
+
 ## [2.2.0] - 2026-07-05
 
 Four PRs on top of v2.1.0. No breaking change.
