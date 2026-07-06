@@ -65,6 +65,14 @@ updates:
         patterns: ["docker/*"]
       actions-attest:
         patterns: ["actions/attest"]
+      # sigstore/cosign-installer is pinned to a specific version
+      # (v4.1.2) in release.yml because the upstream does not
+      # publish a floating `@v4` git ref; dependabot's default
+      # proposal of `@v4` would fail to resolve at job setup.
+      # Keep the group on a single track so the next bump is a
+      # conscious decision.
+      actions-cosign-installer:
+        patterns: ["sigstore/cosign-installer"]
       actions-others:
         patterns: ["*"]
-        exclude-patterns: ["actions/checkout", "docker/*", "actions/attest"]
+        exclude-patterns: ["actions/checkout", "docker/*", "actions/attest", "sigstore/cosign-installer"]
