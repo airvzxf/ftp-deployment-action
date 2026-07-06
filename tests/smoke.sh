@@ -47,18 +47,31 @@ common_env() {
     "INPUT_FTP_SSL_ALLOW=false"
 }
 
-# run_init ENV_VARS TIMEOUT_SECONDS
+# run_init ENV_VAR_1 [ENV_VAR_2 ...] TIMEOUT_SECONDS
 #   Runs entrypoint.sh in alpine, returns combined stdout+stderr.
-#   Reads /app/VERSION from the bind-mount of the repo root, which is
-#   the 'dev' string committed in VERSION. release.yml passes the
-#   resolved tag as --build-arg VERSION in production images.
+#   Each ENV_VAR_N is a "KEY=value" string written as a separate
+#   line in the env file. The last argument, if numeric, is the
+#   outer timeout for the lftp call inside the container.
+#   Reads /app/VERSION from the bind-mount of the repo root, which
+#   is the 'dev' string committed in VERSION. release.yml passes
+#   the resolved tag as --build-arg VERSION in production images.
 run_init() {
-  _env=$1
-  _t=${2:-15}
+  _t=15
+  # Pop the trailing numeric argument as the timeout, if any.
+  for _arg in "$@"; do
+    case "${_arg}" in
+      ''|*[!0-9]*) ;;
+      *) _t=${_arg} ;;
+    esac
+  done
   _env_file=$(mktemp) || return 1
   {
     common_env
-    printf '%s\n' "${_env}"
+    for _arg in "$@"; do
+      case "${_arg}" in
+        ''|*[!0-9]*) printf '%s\n' "${_arg}" ;;
+      esac
+    done
   } > "${_env_file}"
   ${RUNTIME} run --rm \
     -v "${ROOT}:/app:ro" \
@@ -384,6 +397,70 @@ if echo "${out}" | grep -q "FTP UPLOADED FINISHED!"; then
   fail "dry-run run should not show the regular success banner; output was:\n${out}"
 fi
 pass "dry_run=true adds --dry-run to the mirror command and the DRY RUN banner"
+
+# ----------------------------------------------------------------------------
+# Test 25: INPUT_EXCLUDE=*.map — 'set mirror:exclude *.map;' appears in
+# the resolved FTP_SETTINGS, but only when the input is non-empty.
+# Uses dry_run=true so the script completes without a real lftp
+# connection attempt (we only care about the resolved FTP_SETTINGS
+# string, not the actual mirror).
+# ----------------------------------------------------------------------------
+out=$(run_init "INPUT_DRY_RUN=true" "INPUT_EXCLUDE=*.map" 30)
+echo "${out}" | grep -q "set mirror:exclude \*\.map;" \
+  || fail "INPUT_EXCLUDE=*.map was not injected into FTP_SETTINGS; output was:\n${out}"
+# mirror:exclude-file must NOT appear when only INPUT_EXCLUDE is set.
+# The grep below is anchored on "mirror:exclude " (with trailing
+# space, not "-file") to avoid false matches.
+if echo "${out}" | grep -qE 'set mirror:exclude '; then
+  : # OK, this is the expected 'set mirror:exclude *.map;'
+else
+  fail 'INPUT_EXCLUDE did not produce the expected set mirror:exclude *.map; directive; output was:\n'"${out}"
+fi
+if echo "${out}" | grep -q "mirror:exclude-file"; then
+  fail "INPUT_EXCLUDE alone should not inject mirror:exclude-file; output was:\n${out}"
+fi
+pass 'INPUT_EXCLUDE=*.map injects "set mirror:exclude *.map;" into FTP_SETTINGS'
+
+# ----------------------------------------------------------------------------
+# Test 26: INPUT_EXCLUDE_DELETE=*.bak — 'set mirror:exclude-file *.bak;'
+# appears, mirror:exclude (no -file) does not.
+# ----------------------------------------------------------------------------
+out=$(run_init "INPUT_DRY_RUN=true" "INPUT_EXCLUDE_DELETE=*.bak" 30)
+echo "${out}" | grep -q "set mirror:exclude-file \*\.bak;" \
+  || fail "INPUT_EXCLUDE_DELETE=*.bak was not injected into FTP_SETTINGS; output was:\n${out}"
+# The bare 'set mirror:exclude ' (with trailing space, NOT
+# '-file') must NOT appear when only INPUT_EXCLUDE_DELETE is
+# set. The grep regex uses 'set mirror:exclude ' (with space) so
+# 'set mirror:exclude-file' (with dash) is not matched.
+if echo "${out}" | grep -qE 'set mirror:exclude '; then
+  fail "INPUT_EXCLUDE_DELETE alone should not inject mirror:exclude (without -file); output was:\n${out}"
+fi
+pass 'INPUT_EXCLUDE_DELETE=*.bak injects "set mirror:exclude-file *.bak;" into FTP_SETTINGS'
+
+# ----------------------------------------------------------------------------
+# Test 27: defaults — neither `mirror:exclude` nor `mirror:exclude-file`
+# appears in FTP_SETTINGS (zero behaviour change for existing users).
+# dry_run=true so the script completes immediately.
+# ----------------------------------------------------------------------------
+out=$(run_init "INPUT_DRY_RUN=true" 30)
+if echo "${out}" | grep -qE 'set mirror:exclude'; then
+  fail "default FTP_SETTINGS unexpectedly contains mirror:exclude; output was:\n${out}"
+fi
+pass "default FTP_SETTINGS contains no mirror:exclude directive (backward compatible)"
+
+# ----------------------------------------------------------------------------
+# Test 28: backtick in INPUT_EXCLUDE is rejected with exit 2
+# (sanitization applies to the new inputs too). Validation runs
+# before the lftp phase, so the script exits 2 quickly without
+# touching the network.
+# ----------------------------------------------------------------------------
+backtick_val=$(printf 'set foo:bar %cuname' '`')
+out=$(run_init "INPUT_EXCLUDE=${backtick_val}" 10)
+echo "${out}" | grep -q "lftp_settings contains backtick" \
+  || fail "INPUT_EXCLUDE with backtick was not rejected; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "INPUT_EXCLUDE with backtick did not exit 2; output was:\n${out}"
+pass "INPUT_EXCLUDE with backtick is rejected with exit 2"
 
 printf 'All smoke tests passed.\n'
 exit 0

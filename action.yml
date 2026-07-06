@@ -85,6 +85,14 @@ inputs:
     description: 'Additional raw lftp settings, e.g. "set cache:cache-empty-listings true; set cmd:status-interval 1s;". Use with care: this is appended to the lftp `-e` command and not validated.'
     required: false
     default: ''
+  exclude:
+    description: 'Comma-separated glob patterns to exclude from the upload. Translated to `set mirror:exclude <value>;` in lftp. Files matching any pattern are neither uploaded nor deleted. Example: "*.map,node_modules/**,.git/**". Globs are case-sensitive (lftp native syntax).'
+    required: false
+    default: ''
+  exclude_delete:
+    description: 'Comma-separated glob patterns to protect from deletion when `delete: true` is set. Translated to `set mirror:exclude-file <value>;` in lftp. Independent of `exclude`: files matching these patterns are still uploaded if present locally, but are not removed by `--delete`. Example: "*.log,uploads/**".'
+    required: false
+    default: ''
   debug:
     description: 'If "true", print resolved input values to the log. Default is "false" (only show which inputs were received, not their values).'
     required: false
