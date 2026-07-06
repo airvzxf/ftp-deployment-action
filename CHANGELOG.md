@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-07-06
+
+### Added
+
+- **Pattern exclusion inputs** (`exclude` and `exclude_delete`).
+  The `exclude` input takes a comma-separated list of glob
+  patterns and translates to lftp's `mirror:exclude` setting
+  (files matching the patterns are neither uploaded nor
+  deleted). The `exclude_delete` input is independent and
+  translates to lftp's `mirror:exclude-file` setting (files
+  matching the patterns are protected from `--delete` but are
+  still uploaded if present locally). Both inputs default to
+  empty (no behaviour change for existing users). The same
+  sanitization rules that apply to `lftp_settings` apply to
+  these inputs (control chars, backtick, `$`, `!`, more than
+  three `;`-chained directives are rejected; exit code `2` on
+  violation). Example:
+
+  ```yaml
+  with:
+    exclude: "*.map,node_modules/**,.git/**"
+    exclude_delete: "*.log"
+  ```
+
+  Closes the first TODO in `README.md` (the "exclude delete
+  files" entry). The second TODO (auto-upload the log as a
+  workflow artifact) remains open and is targeted for a
+  follow-up release.
+
+### Internal
+
+- `lib.sh`: `build_ftp_settings` now appends `set
+  mirror:exclude <value>;` and `set mirror:exclude-file
+  <value>;` after the 11 standard directives but before the
+  `lftp_settings` free-form extension, so the user can still
+  override via `lftp_settings` if needed.
+- `lib.sh`: `print_inputs_dump` lists `exclude` and
+  `exclude_delete` in both debug and non-debug modes.
+- `entrypoint.sh`: 2 new `validate_lftp_settings` calls (one
+  per input).
+- `tests/unit/parse.bats`: 5 new unit tests covering the new
+  injection paths (default empty, only `exclude`, only
+  `exclude_delete`, both, override by `lftp_settings`).
+- `tests/smoke.sh`: 4 new smoke tests (mirror:exclude
+  injection, mirror:exclude-file injection, default empty,
+  sanitization rejection). `run_init` is now variadic — it
+  accepts any number of `KEY=value` env strings and a
+  trailing numeric timeout, instead of a single concatenated
+  string. The previous single-arg form is preserved for the
+  existing 24 tests.
+- Contract test now sees 26 inputs (24 + 2 new) and passes
+  unchanged.
+
+[2.6.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.5.0...v2.6.0
+
+
 ## [2.5.0] - 2026-07-06
 
 ### Added

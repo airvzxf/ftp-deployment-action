@@ -71,6 +71,8 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | dns_max_retries        | DNS - 0 no limit trying to lookup an address otherwise try only this number of times. | No       | 8       | N/A                                                                                               |
 | dns_fatal_timeout      | DNS - Time for DNS queries.<br> Set to "never" to disable.                            | No       | 10s     | N/A                                                                                               |
 | lftp_settings          | Any other settings that you find in the MAN pages for the LFTP package.               | No       | ""      | "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';" |
+| exclude                | Comma-separated globs to exclude from the upload. Translated to `set mirror:exclude`.  | No       | ""      | "*.map,node_modules/**,.git/**"                                                                  |
+| exclude_delete         | Comma-separated globs to protect from `--delete`. Translated to `set mirror:exclude-file`. | No       | ""      | "*.log,uploads/**"                                                                               |
 | debug                  | If "true", print resolved input values to the log.                                    | No       | false   | N/A                                                                                               |
 | fail_on_deprecated     | If "true", exit 1 when the pinned ref is end-of-life (v1.x).                         | No       | false   | N/A                                                                                               |
 | dry_run                | If "true", compute the mirror plan but do not transfer or delete any file.           | No       | false   | N/A                                                                                               |
@@ -118,7 +120,36 @@ jobs:
           dns_max_retries: "17"
           dns_fatal_timeout: "never"
           lftp_settings: "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';"
+          exclude: "*.map,node_modules/**,.git/**"
+          exclude_delete: "*.log"
 ```
+
+### Pattern exclusions
+
+Two inputs control which files participate in the upload and which
+ones are protected from `--delete`. They map directly to lftp's
+`mirror:exclude` and `mirror:exclude-file` settings (see the
+[lftp manual](https://lftp.yar.ru/lftp-man.html) for the exact glob
+syntax — globs are case-sensitive and follow fnmatch, not shell).
+
+| Input | Effect |
+|---|---|
+| `exclude` | Files matching any pattern are **not uploaded** and **not deleted**. Use this for `node_modules/`, `.git/`, `*.map`, `*.bak`, etc. |
+| `exclude_delete` | Files matching any pattern are protected from `--delete` but are still uploaded if they exist locally. Use this for `*.log` (you want fresh logs uploaded, but old ones on the server preserved). |
+
+Both inputs default to empty (no exclusion). The two lists are
+independent — a file can be excluded from upload but still be
+protected from deletion, or vice versa. The order of precedence
+inside the action is:
+
+1. The 11 standard `set <key> <value>;` directives (FTP / NET / DNS).
+2. `set mirror:exclude <value>;` if `exclude` is non-empty.
+3. `set mirror:exclude-file <value>;` if `exclude_delete` is non-empty.
+4. The free-form `lftp_settings` extension (can override any of the above).
+
+Both inputs go through the same sanitization as `lftp_settings`
+(reject control chars, backtick, `$`, `!`, more than 3 `;`), so
+they're safe to pass user-supplied glob patterns.
 
 ## How it works
 
@@ -257,7 +288,8 @@ control characters, and shell metacharacters (`;`, `&`, `|`, backtick,
 dollar). `lftp_settings` is lightly sanitised: control characters,
 backtick, dollar, and more than three `;`-chained directives are
 rejected. The action exits with code `2` and a clear error on any
-of these.
+of these. The same sanitization applies to the `exclude` and
+`exclude_delete` inputs (v2.6.0+).
 
 ## Changelog
 
@@ -265,7 +297,6 @@ See [`CHANGELOG.md`](./CHANGELOG.md) for release notes.
 
 TODOs:
 
-- Add options for exclude delete files.
 - Take all the logs from the Linux container then attach all into the Workflow Artifacts, to review unknown errors.
 
 [1]: https://docs.github.com/en/actions/configuring-and-managing-workflows/creating-and-storing-encrypted-secrets

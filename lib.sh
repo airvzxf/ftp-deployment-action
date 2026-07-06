@@ -252,6 +252,8 @@ print_inputs_dump() {
     printf '  %-26s %s\n' "dns_max_retries:"         "$(_indirection INPUT_DNS_MAX_RETRIES)"
     printf '  %-26s %s\n' "dns_fatal_timeout:"       "$(_indirection INPUT_DNS_FATAL_TIMEOUT)"
     printf '  %-26s %s\n' "lftp_settings:"           "$(_indirection INPUT_LFTP_SETTINGS)"
+    printf '  %-26s %s\n' "exclude:"                 "$(_indirection INPUT_EXCLUDE)"
+    printf '  %-26s %s\n' "exclude_delete:"          "$(_indirection INPUT_EXCLUDE_DELETE)"
     printf '  %-26s %s\n' "debug:"                   "$(_indirection INPUT_DEBUG)"
   else
     for _pid_name in \
@@ -259,7 +261,8 @@ print_inputs_dump() {
       NO_SYMLINKS MIRROR_VERBOSE FTP_SSL_ALLOW SSL_VERIFY_CERTIFICATE \
       SSL_CHECK_HOSTNAME FTP_PASSIVE_MODE FTP_USE_FEAT FTP_NOP_INTERVAL \
       NET_MAX_RETRIES NET_PERSIST_RETRIES NET_TIMEOUT DNS_MAX_RETRIES \
-      DNS_FATAL_TIMEOUT LFTP_SETTINGS DEBUG FAIL_ON_DEPRECATED DRY_RUN; do
+      DNS_FATAL_TIMEOUT LFTP_SETTINGS EXCLUDE EXCLUDE_DELETE DEBUG \
+      FAIL_ON_DEPRECATED DRY_RUN; do
       _pid_label=$(printf '%s' "${_pid_name}" | tr '[:upper:]' '[:lower:]')
       _pid_cur=$(_indirection "INPUT_${_pid_name}")
       if [ -n "${_pid_cur}" ]; then
@@ -279,19 +282,26 @@ print_inputs_dump() {
 # ------------------------------------------------------------------------------
 # build_ftp_settings
 #   Echo the concatenated "set <key> <value>;" string, one directive
-#   per INPUT_*, in a fixed order. Each entry is a triple:
+#   per INPUT_*, in a fixed order. Each entry in the positional
+#   parameter list is a triple:
 #     <lftp-key>  <default-value>  <INPUT_var_name>
-#   The default applies when the INPUT is unset or empty. The
-#   free-form lftp_settings input (already validated upstream by
-#   `validate_lftp_settings`) is appended verbatim with a trailing
-#   semicolon.
+#   The default applies when the INPUT is unset or empty. After the
+#   11 standard settings, the function injects:
 #
-#   This replaces 12 near-identical if/else branches. The behaviour
-#   is bit-by-bit equivalent: same keys, same defaults, same order,
-#   same trailing-semicolon semantics. The "Remove first space in
-#   settings variable" trick is preserved so the output still has no
-#   leading space when the first entry is followed by the lftp_settings
-#   extension (B-16 free-form path).
+#     * `set mirror:exclude <value>;` if INPUT_EXCLUDE is non-empty
+#       (files matching these globs are not uploaded and not deleted).
+#     * `set mirror:exclude-file <value>;` if INPUT_EXCLUDE_DELETE is
+#       non-empty (files matching these globs are protected from
+#       `--delete` but are still uploaded).
+#     * the free-form lftp_settings input (already validated upstream
+#       by `validate_lftp_settings`) is appended verbatim with a
+#       trailing semicolon. lftp processes `set` directives in order,
+#       so the user can override the above via lftp_settings if
+#       needed.
+#
+#   The "Remove leading space" trick at the end of the function
+#   keeps the output clean when the first directive is preceded by
+#   one of the extension blocks.
 # ------------------------------------------------------------------------------
 build_ftp_settings() {
   _bfs_settings=""
@@ -318,6 +328,17 @@ build_ftp_settings() {
     fi
     _bfs_settings="${_bfs_settings}set ${_bfs_key} ${_bfs_val};"
   done
+  # Pattern-exclusion inputs (exclude / exclude_delete). Only
+  # emitted when non-empty so the bit-by-bit diff vs. v2.5.0 with
+  # both inputs at default is a no-op.
+  _bfs_exclude=$(_indirection "INPUT_EXCLUDE")
+  if [ -n "${_bfs_exclude}" ]; then
+    _bfs_settings="${_bfs_settings} set mirror:exclude ${_bfs_exclude};"
+  fi
+  _bfs_exclude_delete=$(_indirection "INPUT_EXCLUDE_DELETE")
+  if [ -n "${_bfs_exclude_delete}" ]; then
+    _bfs_settings="${_bfs_settings} set mirror:exclude-file ${_bfs_exclude_delete};"
+  fi
   # Any manual settings (B-16, already validated).
   _bfs_extra=$(_indirection "INPUT_LFTP_SETTINGS")
   if [ -n "${_bfs_extra}" ]; then

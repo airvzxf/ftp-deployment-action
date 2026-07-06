@@ -131,6 +131,101 @@ setup() {
 }
 
 # ----------------------------------------------------------------------------
+# build_ftp_settings: pattern-exclusion inputs (exclude / exclude_delete)
+# ----------------------------------------------------------------------------
+
+@test "build_ftp_settings: with empty INPUT_EXCLUDE and empty INPUT_EXCLUDE_DELETE produces 11 directives (no exclude injection)" {
+  unset INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME \
+        INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
+        INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
+        INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS \
+        INPUT_EXCLUDE INPUT_EXCLUDE_DELETE
+  run build_ftp_settings
+  [ "$status" -eq 0 ]
+  n=$(printf '%s' "$output" | grep -oE 'set ' | wc -l | tr -d ' ')
+  [ "$n" -eq 11 ]
+  # mirror:exclude and mirror:exclude-file must NOT appear.
+  [[ "$output" != *"mirror:exclude"* ]]
+}
+
+@test "build_ftp_settings: INPUT_EXCLUDE=*.map appends `set mirror:exclude *.map;`" {
+  unset INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME \
+        INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
+        INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
+        INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS \
+        INPUT_EXCLUDE_DELETE
+  INPUT_EXCLUDE="*.map"
+  run build_ftp_settings
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"set mirror:exclude *.map;"* ]]
+  # 11 standard + 1 exclude = 12.
+  n=$(printf '%s' "$output" | grep -oE 'set ' | wc -l | tr -d ' ')
+  [ "$n" -eq 12 ]
+  # mirror:exclude-file must NOT appear (different key).
+  [[ "$output" != *"mirror:exclude-file"* ]]
+}
+
+@test "build_ftp_settings: INPUT_EXCLUDE_DELETE=*.bak appends `set mirror:exclude-file *.bak;`" {
+  unset INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME \
+        INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
+        INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
+        INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS \
+        INPUT_EXCLUDE
+  INPUT_EXCLUDE_DELETE="*.bak"
+  run build_ftp_settings
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"set mirror:exclude-file *.bak;"* ]]
+  # 11 standard + 1 exclude-file = 12.
+  n=$(printf '%s' "$output" | grep -oE 'set ' | wc -l | tr -d ' ')
+  [ "$n" -eq 12 ]
+  # mirror:exclude (no -file) must NOT appear.
+  # The grep below is anchored on the whole token "set mirror:exclude "
+  # to avoid matching "set mirror:exclude-file".
+  [[ "$output" != *"set mirror:exclude "* ]]
+}
+
+@test "build_ftp_settings: with both INPUT_EXCLUDE and INPUT_EXCLUDE_DELETE, both directives appear in the right order" {
+  unset INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME \
+        INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
+        INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
+        INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS
+  INPUT_EXCLUDE="*.map"
+  INPUT_EXCLUDE_DELETE="*.bak"
+  run build_ftp_settings
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"set mirror:exclude *.map;"* ]]
+  [[ "$output" == *"set mirror:exclude-file *.bak;"* ]]
+  # 11 standard + 2 exclude = 13.
+  n=$(printf '%s' "$output" | grep -oE 'set ' | wc -l | tr -d ' ')
+  [ "$n" -eq 13 ]
+  # Order: mirror:exclude appears before mirror:exclude-file.
+  pos_exclude=$(printf '%s' "$output" | grep -boE 'set mirror:exclude \*\.map;' | head -1 | cut -d: -f1)
+  pos_exclude_file=$(printf '%s' "$output" | grep -boE 'set mirror:exclude-file \*\.bak;' | head -1 | cut -d: -f1)
+  [ "$pos_exclude" -lt "$pos_exclude_file" ]
+}
+
+@test "build_ftp_settings: lftp_settings extension overrides INPUT_EXCLUDE (last `set` wins in lftp)" {
+  unset INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME \
+        INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
+        INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
+        INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_EXCLUDE_DELETE
+  INPUT_EXCLUDE="*.map"
+  INPUT_LFTP_SETTINGS="set mirror:exclude *.bak"
+  run build_ftp_settings
+  [ "$status" -eq 0 ]
+  # Both directives appear; lftp will apply the second (lftp_settings)
+  # because it processes `set` directives in order. The function does
+  # not deduplicate; it just concatenates. This is the documented
+  # escape-hatch behaviour.
+  [[ "$output" == *"set mirror:exclude *.map;"* ]]
+  [[ "$output" == *"set mirror:exclude *.bak;"* ]]
+  # Order: INPUT_EXCLUDE first, lftp_settings second.
+  pos_exclude=$(printf '%s' "$output" | grep -boE 'set mirror:exclude \*\.map;' | head -1 | cut -d: -f1)
+  pos_lftp_settings=$(printf '%s' "$output" | grep -boE 'set mirror:exclude \*\.bak;' | head -1 | cut -d: -f1)
+  [ "$pos_exclude" -lt "$pos_lftp_settings" ]
+}
+
+# ----------------------------------------------------------------------------
 # build_mirror_command
 # ----------------------------------------------------------------------------
 

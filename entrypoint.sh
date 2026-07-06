@@ -72,6 +72,8 @@ set -o pipefail
 : "${INPUT_DNS_MAX_RETRIES:=8}"
 : "${INPUT_DNS_FATAL_TIMEOUT:=}"
 : "${INPUT_LFTP_SETTINGS:=}"
+: "${INPUT_EXCLUDE:=}"
+: "${INPUT_EXCLUDE_DELETE:=}"
 : "${INPUT_DEBUG:=}"
 : "${INPUT_FAIL_ON_DEPRECATED:=}"
 : "${INPUT_DRY_RUN:=}"
@@ -111,6 +113,10 @@ validate_int "net_persist_retries" "${INPUT_NET_PERSIST_RETRIES}"
 validate_int "dns_max_retries"     "${INPUT_DNS_MAX_RETRIES}"
 # B-16: light sanitization of the free-form lftp_settings input.
 validate_lftp_settings "${INPUT_LFTP_SETTINGS}"
+# Pattern-exclusion inputs go into the lftp `-e` script the same
+# way `lftp_settings` does, so they share the same sanitization.
+validate_lftp_settings "${INPUT_EXCLUDE}"
+validate_lftp_settings "${INPUT_EXCLUDE_DELETE}"
 
 # ------------------------------------------------------------------------------
 # Build the lftp command fragments.
