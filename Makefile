@@ -66,6 +66,20 @@ smoke:
 	$(SH) tests/smoke.sh
 
 # ----------------------------------------------------------------------------
+# Unit tests: bats tests for the pure functions in lib.sh. Faster
+# than the smoke tests (no docker, no lftp, no network) — run
+# these during local iteration. Skipped (exit 0) if bats is not
+# installed.
+# ----------------------------------------------------------------------------
+.PHONY: unit
+unit:
+	@command -v bats >/dev/null 2>&1 || { \
+		echo "bats not found; install with: apt-get install -y bats"; \
+		echo "(see tests/unit/README.md for alternatives)"; \
+		exit 0; }
+	bats tests/unit
+
+# ----------------------------------------------------------------------------
 # Build: a local Docker image tagged ftp-deployment-action:local. VERSION
 # is baked into /app/VERSION; the default 'dev' matches the value
 # committed in the repo.
