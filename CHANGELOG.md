@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-07-05
+
+### Added
+
+- **Release smoke test** (PR #63). The release pipeline now
+  runs `tests/release-smoke.sh <just-pushed-image>` between
+  *Build and push image* and *Generate SBOM (CycloneDX)*.
+  The script pulls the just-pushed image from ghcr.io and
+  runs three cheap checks (path-traversal validation,
+  deprecation warning, `/app/VERSION` bake). Any failure
+  aborts the release before SBOM / cosign run, so we never
+  publish or sign a broken image. Catches the v2.3.0 class
+  of failure (Dependabot alpine digest bump + unresolvable
+  lftp pin) at the build step instead of at the cosign step.
+  The same script is runnable locally via
+  `make release-smoke IMAGE=<image>`.
+- `Makefile` target `release-smoke` for local validation.
+
+### Fixed
+
+- **`init.sh` was not safe to invoke via direct `docker
+  run`** (PR #63, bug found while writing the release smoke
+  test). The *Inputs received* dump block accessed
+  `${INPUT_*}` without a default-empty fallback. With
+  `set -u` this is fine in production (the GitHub Actions
+  runner always exports every declared input, even as
+  empty string) but the moment the image is run outside
+  GitHub Actions — exactly what the new smoke test does —
+  the script dies on line 192 with *INPUT_DEBUG: parameter
+  not set*. Fixed by a uniform block of POSIX
+  parameter-expansion defaults at the top of the script.
+  No change in the production code path; the fix makes
+  the script safe in the new direct `docker run` case.
+- **OCI license label** in `release.yml` was still
+  `GPL-3.0` (from the original release pipeline) even
+  though `LICENSE` was re-licensed to AGPL-3.0 in commit
+  `f9bfc80`. Bumped to AGPL-3.0.
+
+### Changed
+
+- **Routine Dependabot bumps** (PRs #54, #55, #56, #57, #62):
+  - `actions/checkout` v5 → v7 (PR #54).
+  - `alpine` base image digest refresh, which moved
+    3.23.3 → 3.24 (PR #55) and required a follow-up lftp
+    pin bump to 4.9.3-r0 (PR #61, shipped as v2.3.1).
+  - `docker/setup-buildx-action` v3 → v4,
+    `docker/login-action` v3 → v4,
+    `docker/build-push-action` v6 → v7 (PR #56).
+  - `hadolint/hadolint-action` 3.1.0 → 3.3.0,
+    `actions/download-artifact` v4 → v8 (PR #57).
+  - `sigstore/cosign-installer` v3 → v4 (PR #62).
+
+[2.4.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.3.1...v2.4.0
+[2.3.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.3.0...v2.3.1
+
 ## [2.3.1] - 2026-07-05
 
 Hotfix. The v2.3.0 release was cut but its image build failed
