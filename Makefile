@@ -84,6 +84,21 @@ run: build
 		$(IMAGE)
 
 # ----------------------------------------------------------------------------
+# Release smoke tests: run the same checks the release pipeline
+# runs against a freshly-built image, locally. Catches Dockerfile
+# / lftp pin / build-arg regressions before a tag is pushed.
+# Usage: make release-smoke IMAGE=ftp-deployment-action:local
+# ----------------------------------------------------------------------------
+.PHONY: release-smoke
+release-smoke:
+	@test -n "$(IMAGE)" || { \
+		echo "usage: make release-smoke IMAGE=<image:tag>"; \
+		echo "  e.g. make build IMAGE=ftp-deployment-action:local"; \
+		echo "       make release-smoke IMAGE=ftp-deployment-action:local"; \
+		exit 2; }
+	$(SH) tests/release-smoke.sh "$(IMAGE)"
+
+# ----------------------------------------------------------------------------
 # Release: a thin reminder. The real release pipeline lives in
 # .github/workflows/release.yml and is triggered by a signed tag push.
 # ----------------------------------------------------------------------------

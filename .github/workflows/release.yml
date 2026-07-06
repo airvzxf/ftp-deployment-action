@@ -79,10 +79,34 @@ jobs:
             org.opencontainers.image.title=ftp-deployment-action
             org.opencontainers.image.description=GitHub Action that copies files via FTP/FTPS using lftp
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.licenses=GPL-3.0
+            org.opencontainers.image.licenses=AGPL-3.0
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # v2.4.0+: smoke-test the just-pushed image before signing
+      # and attaching the SBOM. The release pipeline previously
+      # only exercised the image via CI (which runs init.sh
+      # against a plain alpine:3.23.3 — not the published image
+      # with its pinned lftp and ca-certificates versions). The
+      # v2.3.0 release was cut and pushed with a build that
+      # could not resolve lftp=4.9.2-r9 against the new alpine
+      # 3.24 base image; the failure surfaced only at the
+      # cosign step, after a broken image was already in ghcr.io
+      # and after the SBOM was generated for the broken image.
+      # This step catches that class of failure earlier: it
+      # pulls the just-pushed image, runs three cheap checks
+      # (path-traversal validation, deprecation warning, the
+      # /app/VERSION bake), and aborts the pipeline on any
+      # failure. SBOM generation, cosign signing, and the
+      # SBOM attestation are skipped on failure, so we never
+      # publish or sign a broken image.
+      - name: Smoke test the just-pushed image
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+        run: |
+          set -e
+          tests/release-smoke.sh "${IMAGE}"
 
       - name: Generate SBOM (CycloneDX)
         uses: anchore/sbom-action@v0
