@@ -175,6 +175,34 @@ Main features:
 - Using Alpine container means small size and faster creation of the container.
 - Show messages in the console logs for every executed command.
 
+## Local development
+
+```sh
+# Lint (shellcheck + actionlint + hadolint) and run the smoke tests
+make lint
+make test
+
+# Build a local image with the deprecation warning reading 'dev' as
+# the image version (matches the default in the Dockerfile)
+make build IMAGE=ftp-deployment-action:local
+make release-smoke IMAGE=ftp-deployment-action:local
+```
+
+`make build` runs `docker build --build-arg VERSION=dev` and
+`make release-smoke` runs the same three checks the release
+workflow runs against the just-pushed image:
+
+1. The container starts and `validate_path` rejects a `..`
+   path-traversal in `local_dir` with exit 2.
+2. The deprecation warning fires for an EOL ref (`v1.3.3`).
+3. The `VERSION` build-arg was baked into `/app/VERSION`
+   (the warning would say `image version: unknown` otherwise).
+
+These checks catch the kind of regression that broke the v2.3.0
+release (Dependabot bumped the alpine base image, the lftp
+package pin became unresolvable, the v2.3.0 tag was cut with a
+non-buildable image) **before** a tag is pushed.
+
 ## Exit codes
 
 | Code | Meaning |

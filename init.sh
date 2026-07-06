@@ -163,6 +163,43 @@ _deprecated_check() {
 _deprecated_check
 
 # ------------------------------------------------------------------------------
+# B-07 / smoke-test: normalize all input vars to their effective
+# defaults. In a real GitHub Actions run these are always populated
+# by the action.yml default, but init.sh can also be run outside
+# that mechanism (tests, manual invocation, the release smoke test
+# against a freshly-built image), so we apply the same defaults
+# here. This block is FIRST in the user-input handling so that
+# every later reference is safe under `set -u`.
+#
+# Use POSIX parameter expansion (`:="${VAR:=default}"`) instead of
+# `if [ -z "${VAR}" ] then VAR=default; fi` so this block is
+# safe under `set -u` even when the var is unset.
+: "${INPUT_SERVER:=}"
+: "${INPUT_USER:=}"
+: "${INPUT_PASSWORD:=}"
+: "${INPUT_LOCAL_DIR:=}"
+: "${INPUT_REMOTE_DIR:=}"
+: "${INPUT_DELETE:=}"
+: "${INPUT_NO_SYMLINKS:=}"
+: "${INPUT_MAX_RETRIES:=10}"
+: "${INPUT_MIRROR_VERBOSE:=1}"
+: "${INPUT_FTP_SSL_ALLOW:=}"
+: "${INPUT_SSL_VERIFY_CERTIFICATE:=}"
+: "${INPUT_SSL_CHECK_HOSTNAME:=}"
+: "${INPUT_FTP_PASSIVE_MODE:=}"
+: "${INPUT_FTP_USE_FEAT:=}"
+: "${INPUT_FTP_NOP_INTERVAL:=2}"
+: "${INPUT_NET_MAX_RETRIES:=1}"
+: "${INPUT_NET_PERSIST_RETRIES:=5}"
+: "${INPUT_NET_TIMEOUT:=}"
+: "${INPUT_DNS_MAX_RETRIES:=8}"
+: "${INPUT_DNS_FATAL_TIMEOUT:=}"
+: "${INPUT_LFTP_SETTINGS:=}"
+: "${INPUT_DEBUG:=}"
+: "${INPUT_FAIL_ON_DEPRECATED:=}"
+: "${INPUT_DRY_RUN:=}"
+
+# ------------------------------------------------------------------------------
 # Defence-in-depth: ask the runner to mask sensitive values in the log
 # even if they ever leak outside the .netrc plumbing. GitHub already
 # auto-masks inputs named *password* / *token* / *secret*, but `user`
@@ -219,7 +256,15 @@ else
             NET_MAX_RETRIES NET_PERSIST_RETRIES NET_TIMEOUT DNS_MAX_RETRIES \
             DNS_FATAL_TIMEOUT LFTP_SETTINGS DEBUG FAIL_ON_DEPRECATED DRY_RUN; do
     _label=$(printf '%s' "${_v}" | tr '[:upper:]' '[:lower:]')
-    eval "_cur=\${INPUT_${_v}}"
+    # Defensive: the `${INPUT_*:-}` default-empty form is needed so
+    # `set -u` (active in this script) does not abort when a variable
+    # is unset. GitHub Actions always exports all declared inputs
+    # (even as empty strings), so this branch is never taken in
+    # production — but it makes the action robust to direct
+    # `docker run` invocations of the image (e.g. for local
+    # debugging, or for the release smoke test in
+    # .github/workflows/release.yml).
+    eval "_cur=\${INPUT_${_v}-}"
     if [ -n "${_cur}" ]; then
       printf '  %-26s (set)\n' "${_label}:"
     else
@@ -241,24 +286,21 @@ echo ""
 #   defaults here before validating. This avoids a false-positive
 #   exit 2 on an empty numeric input.
 # ------------------------------------------------------------------------------
-if [ -z "${INPUT_MAX_RETRIES}" ]; then
-  INPUT_MAX_RETRIES="10"
-fi
-if [ -z "${INPUT_MIRROR_VERBOSE}" ]; then
-  INPUT_MIRROR_VERBOSE="1"
-fi
-if [ -z "${INPUT_FTP_NOP_INTERVAL}" ]; then
-  INPUT_FTP_NOP_INTERVAL="2"
-fi
-if [ -z "${INPUT_NET_MAX_RETRIES}" ]; then
-  INPUT_NET_MAX_RETRIES="1"
-fi
-if [ -z "${INPUT_NET_PERSIST_RETRIES}" ]; then
-  INPUT_NET_PERSIST_RETRIES="5"
-fi
-if [ -z "${INPUT_DNS_MAX_RETRIES}" ]; then
-  INPUT_DNS_MAX_RETRIES="8"
-fi
+# B-07 / smoke-test: normalize all input vars to their effective
+# defaults, then validate. In a real GitHub Actions run these are
+# always populated by the action.yml default, but init.sh can also
+# be run outside that mechanism (tests, manual invocation, the
+# release smoke test against a freshly-built image), so we apply
+# the same defaults here before validating. This avoids a
+# false-positive exit 2 on an empty numeric input AND the
+# 'parameter not set' error that set -u emits when a string input
+# is unset in a direct `docker run` of the image.
+#
+# The defaulting itself is performed by the parameter-expansion
+# block at the top of the script (right after the deprecation
+# check). Here we only validate the integer inputs that have
+# non-empty defaults, since the dump loop and the INPUT_DEBUG
+# check above already need the variables to be defined.
 validate_int "max_retries"         "${INPUT_MAX_RETRIES}"
 validate_int "mirror_verbose"      "${INPUT_MIRROR_VERBOSE}"
 validate_int "ftp_nop_interval"    "${INPUT_FTP_NOP_INTERVAL}"
