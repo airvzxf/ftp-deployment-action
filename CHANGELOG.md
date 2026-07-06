@@ -5,7 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.1] - 2026-07-05
+
+Hotfix. The v2.4.0 release was cut but its job setup failed:
+
+  ##[error]Unable to resolve action
+  `sigstore/cosign-installer@v4`, unable to find version `v4`
+
+PR #62 (Dependabot) bumped from `@v3` to `@v4`, but the
+sigstore/cosign-installer repo does not publish a floating
+`v4` git ref.
+
+### Fixed
+
+- **release.yml** — pin `sigstore/cosign-installer` to
+  `v4.1.2` (a specific version that exists).
+- **dependabot.yml** — add a dedicated
+  `actions-cosign-installer` group, separate from the
+  catch-all `actions-others` group, so the next bump is a
+  conscious decision rather than a silent major-version
+  change that may or may not resolve.
+
+
 ## [2.4.0] - 2026-07-05
+
+> Note: v2.4.0 was cut but the release pipeline failed at
+> job setup (sigstore/cosign-installer@v4 is not a valid
+> ref). No image was published for this tag. The fix is
+> v2.4.1.
 
 ### Added
 
@@ -59,6 +86,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [2.4.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.3.0...v2.3.1
+
+Hotfix. The v2.4.0 release was cut but its job setup failed:
+
+  ##[error]Unable to resolve action
+  `sigstore/cosign-installer@v4`, unable to find version `v4`
+
+PR #62 (Dependabot) bumped from `@v3` to `@v4`, but the
+sigstore/cosign-installer repo does not publish a floating
+`v4` git ref.
+
+### Fixed
+
+- **release.yml** — pin `sigstore/cosign-installer` to
+  `v4.1.2` (a specific version that exists).
+- **dependabot.yml** — add a dedicated
+  `actions-cosign-installer` group, separate from the
+  catch-all `actions-others` group, so the next bump is a
+  conscious decision rather than a silent major-version
+  change that may or may not resolve.
+
+[2.4.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.4.0...v2.4.1
 
 ## [2.3.1] - 2026-07-05
 
@@ -376,4 +424,5 @@ Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 [2.1.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.0.1...v2.1.0
 [2.0.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v1.5.0...v2.0.0
 [1.5.0]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.5.0
+[2.4.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.4.0...v2.4.1
 [1.3.3]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.3.3
