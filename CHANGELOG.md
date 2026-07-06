@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-07-05
+
+Hotfix. The v2.3.0 release was cut but its image build failed
+because PR #55 (Dependabot alpine base image digest bump)
+moved the base image from alpine 3.23.3 to alpine 3.24, and
+the new alpine dropped `lftp=4.9.2-r9` (the only available
+version is now `lftp=4.9.3-r0`).
+
+### Fixed
+
+- **Dockerfile** — bump the lftp pin from `4.9.2-r9` to
+  `4.9.3-r0` to match the packages available in the new
+  alpine 3.24 base image. `ca-certificates=20260611-r0`
+  still resolves and is unchanged.
+
+[2.3.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.3.0...v2.3.1
+
 ## [2.3.0] - 2026-07-05
 
 Routine dependency bumps. No user-facing change.
