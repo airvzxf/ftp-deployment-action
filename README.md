@@ -130,15 +130,17 @@ jobs:
              |
              v
 +--------------------------+
-|  init.sh starts          |
+|  entrypoint.sh starts    |
+|  (sources /app/lib.sh)   |
 |                          |
 |  1. Deprecation check    |--- EOL / @latest / @master  -->  ::warning::
-|     (reads GITHUB_       |                                (::error:: + exit 1
-|      ACTION_REF +        |                                 if fail_on_deprecated)
+|     (emit_deprecation_   |                                (::error:: + exit 1
+|      warning, reads       |                                 if fail_on_deprecated)
+|      GITHUB_ACTION_REF +  |
 |      /app/VERSION)       |
 |                          |
 |  2. Mask sensitive       |--- ::add-mask:: password / user / server
-|     inputs               |
+|     inputs (add_masks)   |
 |                          |
 |  3. Validate inputs      |--- path traversal? shell metachars?     --> exit 2
 |     (validate_int,       |
@@ -147,15 +149,21 @@ jobs:
 |      settings)           |
 |                          |
 |  4. Build FTP_SETTINGS   |--- one 'set foo bar' per input
-|     + MIRROR_COMMAND     |
+|     + MIRROR_COMMAND     |   (build_ftp_settings / build_mirror_command)
+|     + normalize paths    |
 |                          |
 |  5. Write .netrc         |--- 0600, removed by EXIT trap
+|     (write_netrc)        |
 |                          |
 |  6. lftp -e "..."        |--- +global 5h timeout
-|     (retry loop with     |   + exponential backoff with jitter
-|      max_retries=0..N)   |   + per-attempt net/dns timeouts
+|     (run_lftp_once +     |   + exponential backoff with jitter
+|      retry loop,         |   + per-attempt net/dns timeouts
+|      max_retries=0..N)   |
 |                          |
 |  7. Result banner        |--- ERROR: UPLOAD FAILED + last lftp exit code
+|     (print_failure_      |    FTP UPLOADED FINISHED! on success
+|      banner / print_     |    FTP DRY RUN COMPLETED on dry run
+|      success_banner)     |
 +------------+-------------+
              |
              v

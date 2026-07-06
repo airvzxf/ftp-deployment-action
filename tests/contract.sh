@@ -1,15 +1,17 @@
 #!/bin/sh
 # tests/contract.sh — verify that the user-facing contract between
-# action.yml and init.sh is consistent. Would have caught B-01
-# (mirror_verbose declared in init.sh/README but not in action.yml).
+# action.yml and the implementation (entrypoint.sh + lib.sh) is
+# consistent. Would have caught B-01 (mirror_verbose declared in
+# init.sh/README but not in action.yml).
 #
 # Strategy:
 #   1. Parse action.yml and collect the list of input names declared
 #      under `inputs:`.
-#   2. Grep init.sh for every literal `INPUT_<NAME>` reference and
-#      collect the set of names referenced statically.
-#   3. Grep init.sh for the "for _v in <NAME1> <NAME2> ...; do" dump
-#      loop and collect the names referenced dynamically.
+#   2. Grep entrypoint.sh and lib.sh for every literal `INPUT_<NAME>`
+#      reference and collect the set of names referenced statically.
+#   3. Grep lib.sh for the "for _pid_name in <NAME1> <NAME2> ..."
+#      dump loop in `print_inputs_dump` and collect the names
+#      referenced dynamically.
 #   4. Assert: all three sets are equal.
 #
 # Exit 0 on success, non-zero on any mismatch.
@@ -22,10 +24,12 @@ set -u
 # shellcheck disable=SC1007
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ACTION="${ROOT}/action.yml"
-INIT="${ROOT}/init.sh"
+ENTRY="${ROOT}/entrypoint.sh"
+LIB="${ROOT}/lib.sh"
 
 [ -f "${ACTION}" ] || { echo "missing ${ACTION}" >&2; exit 1; }
-[ -f "${INIT}" ]   || { echo "missing ${INIT}" >&2;   exit 1; }
+[ -f "${ENTRY}" ]  || { echo "missing ${ENTRY}" >&2;  exit 1; }
+[ -f "${LIB}" ]    || { echo "missing ${LIB}" >&2;    exit 1; }
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 ok()   { printf '  ok: %s\n' "$*"; }
@@ -42,28 +46,34 @@ declared=$(awk '
 ' "${ACTION}" | sort -u)
 [ -n "${declared}" ] || fail "no inputs found in action.yml under 'inputs:'"
 
-# 2. INPUT_<X> static references in init.sh.
-static=$(grep -oE 'INPUT_[A-Z][A-Z0-9_]*' "${INIT}" \
+# 2. INPUT_<X> static references in entrypoint.sh and lib.sh. Both
+# files may legitimately reference any given input (the orchestrator
+# does the defaulting, the helpers do the reading), so the union is
+# the meaningful set. The `-h` flag suppresses the filename prefix
+# that `grep` adds when given multiple input files.
+static=$(grep -hoE 'INPUT_[A-Z][A-Z0-9_]*' "${ENTRY}" "${LIB}" \
   | sed 's/^INPUT_//' \
   | tr '[:upper:]' '[:lower:]' \
   | sort -u)
-[ -n "${static}" ] || fail "no INPUT_<X> references found in init.sh"
+[ -n "${static}" ] || fail "no INPUT_<X> references found in entrypoint.sh or lib.sh"
 
-# 3. Dump loop's name list in init.sh (collects across line continuations).
-#    Strip backslashes (line-continuation markers) before splitting.
+# 3. Dump loop's name list in lib.sh's `print_inputs_dump`
+# (collects across line continuations). The variable in the loop
+# was renamed from `_v` to `_pid_name` in v2.5.0 when the function
+# moved to lib.sh.
 dynamic=$(awk '
-  /for _v in/ { capture = 1; buf = "" }
+  /for _pid_name in/ { capture = 1; buf = "" }
   capture {
     buf = buf " " $0
     if (/; do/) {
-      sub(/^.*for _v in /, "", buf)
+      sub(/^.*for _pid_name in /, "", buf)
       sub(/; do.*$/, "", buf)
       print tolower(buf)
       capture = 0
     }
   }
-' "${INIT}" | sed 's/\\//g' | tr -s '[:space:]' '\n' | sed '/^$/d' | sort -u)
-[ -n "${dynamic}" ] || fail "could not extract dump loop name list from init.sh"
+' "${LIB}" | sed 's/\\//g' | tr -s '[:space:]' '\n' | sed '/^$/d' | sort -u)
+[ -n "${dynamic}" ] || fail "could not extract dump loop name list from lib.sh's print_inputs_dump"
 
 # 4. Compare the three sets. Use temp files so we don't depend on
 # process substitution (which shellcheck flags SC3001 in strict POSIX).
@@ -80,14 +90,14 @@ _diff_files() {
 }
 
 if [ "${declared}" != "${static}" ]; then
-  printf 'declared inputs (action.yml) vs static INPUT_* refs (init.sh) differ:\n' >&2
+  printf 'declared inputs (action.yml) vs static INPUT_* refs (entrypoint.sh + lib.sh) differ:\n' >&2
   _diff_files "${declared}" "${static}" >&2 || true
   fail "static INPUT_* references do not match declared inputs"
 fi
 ok "static INPUT_* references match declared inputs"
 
 if [ "${declared}" != "${dynamic}" ]; then
-  printf 'declared inputs (action.yml) vs dump loop list (init.sh) differ:\n' >&2
+  printf 'declared inputs (action.yml) vs dump loop list (lib.sh print_inputs_dump) differ:\n' >&2
   _diff_files "${declared}" "${dynamic}" >&2 || true
   fail "dump loop's name list does not match declared inputs"
 fi

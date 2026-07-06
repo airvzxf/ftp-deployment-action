@@ -18,17 +18,17 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 
-COPY init.sh /app/init.sh
+COPY entrypoint.sh lib.sh /app/
 COPY LICENSE README.md /app/
 
 # Bake the image version into /app/VERSION so the deprecation warning
-# in init.sh can print the actual version even on local builds.
+# in entrypoint.sh can print the actual version even on local builds.
 # `release.yml` passes --build-arg VERSION=<tag>; local `docker build`
 # gets the default "dev".
 ARG VERSION=dev
 RUN echo "$VERSION" > /app/VERSION
 
-RUN ["/bin/chmod", "+x", "/app/init.sh"]
+RUN ["/bin/chmod", "+x", "/app/entrypoint.sh"]
 
 # B-03 / B-14: the script writes the .netrc file at $HOME/.netrc, so
 # HOME must point at the lftp user's writable home. Without this ENV
@@ -39,7 +39,7 @@ ENV HOME=/home/lftp
 
 # B-14: drop root. From here on, every process in the container runs as
 # 'lftp'. /app remains root-owned but is world-readable, which is enough
-# for init.sh to be executed.
+# for entrypoint.sh to be executed.
 USER lftp
 
-ENTRYPOINT ["/app/init.sh"]
+ENTRYPOINT ["/app/entrypoint.sh"]

@@ -31,7 +31,8 @@ shellcheck:
 	@command -v shellcheck >/dev/null 2>&1 || { \
 		echo "shellcheck not found; install with: apt-get install shellcheck / apk add shellcheck"; \
 		exit 1; }
-	shellcheck init.sh tests/contract.sh tests/smoke.sh
+	# -x: follow `shellcheck source=` directives (entrypoint.sh sources lib.sh).
+	shellcheck -x entrypoint.sh lib.sh tests/contract.sh tests/smoke.sh
 
 .PHONY: actionlint
 actionlint:
@@ -48,10 +49,10 @@ hadolint:
 	hadolint --failure-threshold error Dockerfile
 
 # ----------------------------------------------------------------------------
-# Test: the contract test (action.yml <-> init.sh consistency) and the
-# smoke tests (init.sh run inside an Alpine container). The smoke tests
-# require docker or podman; if neither is available they skip with a
-# notice, mirroring the smoke.sh behaviour.
+# Test: the contract test (action.yml <-> entrypoint.sh/lib.sh consistency)
+# and the smoke tests (entrypoint.sh run inside an Alpine container). The
+# smoke tests require docker or podman; if neither is available they
+# skip with a notice, mirroring the smoke.sh behaviour.
 # ----------------------------------------------------------------------------
 .PHONY: test
 test: contract smoke

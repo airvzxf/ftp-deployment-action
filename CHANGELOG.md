@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Architectural refactor (LP-1 / MP-5)**: split the previously
+  monolithic `init.sh` (657 lines) into an orchestrator
+  (`entrypoint.sh`, ~190 lines) and a library of pure functions
+  (`lib.sh`, ~620 lines). The entrypoint sources the library and
+  drives the workflow; the library contains every validation,
+  parser, builder, retry helper, and reporting function. **Zero
+  behaviour change** vs. v2.4.1 — the action still accepts the
+  same inputs, produces the same exit codes, and the smoke tests
+  pass unmodified apart from the path to the entrypoint.
+- Deduplicate the 12 near-identical `if/else` branches that built
+  `FTP_SETTINGS` into a single positional-parameter-driven loop in
+  `build_ftp_settings` (lib.sh). Same keys, same defaults, same
+  order.
+- Replace the `eval "_cur=\${INPUT_${_v}-}"` indirection in the
+  inputs dump with an explicit list of variable names plus a
+  single `_indirection` helper in `lib.sh`. Dynamic variable-name
+  lookup now happens in exactly one place in the entire codebase.
+- The contract test (`tests/contract.sh`) now greps both
+  `entrypoint.sh` and `lib.sh` for `INPUT_*` references; the
+  static and dynamic sets must still match the declared inputs in
+  `action.yml`.
+
+### Internal
+
+- `Dockerfile`: `COPY entrypoint.sh lib.sh /app/`, `ENTRYPOINT
+  ["/app/entrypoint.sh"]`.
+- `Makefile`: `shellcheck -x entrypoint.sh lib.sh tests/contract.sh
+  tests/smoke.sh`. The `-x` flag is required so shellcheck follows
+  the `shellcheck source=lib.sh` directive in `entrypoint.sh`.
+- `tests/smoke.sh`: `INIT_REL=./entrypoint.sh` (1-line path change
+  in the harness; the test bodies are unchanged).
+
+
 ## [2.4.1] - 2026-07-05
 
 Hotfix. The v2.4.0 release was cut but its job setup failed:
