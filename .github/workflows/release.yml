@@ -98,7 +98,7 @@ jobs:
           path: .
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4
 
       - name: Sign image with cosign (keyless, OIDC)
         env:
