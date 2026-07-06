@@ -1,4 +1,4 @@
-FROM alpine@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
+FROM alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
 # B-13: pin the base image by digest (resolved against the alpine:3.23.3
 # tag at the time of v2.0.1). Bump on a controlled cadence via the
