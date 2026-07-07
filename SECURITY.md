@@ -12,6 +12,51 @@ best-effort basis and may not receive patches.
 | `<v1.4+>`  | Yes       |
 | `<v1.4`    | No        |
 
+## Tag signing policy
+
+Starting with `v1.5.0`, every release tag is **annotated and
+GPG-signed** by the maintainer (key
+`82DE44111B30F91F55BCEB1F414687A3CD7E65B9`). The signature is
+verified by the release pipeline before the image is published.
+Locally, a signed tag can be distinguished from a lightweight
+one and checked like this:
+
+```sh
+git verify-tag <tag>      # exit 0 + "Good signature" for signed tags
+git cat-file -t <tag>     # 'tag' for annotated, 'commit' for lightweight
+```
+
+The 8 legacy tags below are **lightweight pointers** (raw
+commits, not annotated tag objects), so they cannot be
+GPG-signed in their current form. They pre-date the signing
+policy that was introduced when the release pipeline landed
+alongside `v1.5.0`:
+
+| Tag            | Created | Reason kept unsigned          |
+|----------------|---------|-------------------------------|
+| `v1.0-alpha.1` | 2020    | Pre-dating the signing policy |
+| `v1.0-alpha.2` | 2020    | Pre-dating the signing policy |
+| `v1.1`         | 2020    | Pre-dating the signing policy |
+| `v1.2.0`       | 2020    | Pre-dating the signing policy |
+| `v1.3.0`       | 2023    | Pre-dating the signing policy |
+| `v1.3.1`       | 2023    | Pre-dating the signing policy |
+| `v1.3.2`       | 2026    | Pre-dating the signing policy |
+| `v1.3.3`       | 2026    | Pre-dating the signing policy |
+
+**Re-signing these tags is intentionally not done.** Re-creating
+them as annotated objects would change their commit SHA and
+break every workflow that pins to a legacy ref
+(e.g. `uses: airvzxf/ftp-deployment-action@v1.3.3`). The
+historical SHA is the contract with existing users; altering
+it would be a breaking change worse than the missing
+signature.
+
+Users on legacy refs are already covered by the EOL notice in
+the "Supported versions" table above and by the deprecation
+warning emitted by the action itself at runtime. Users who
+need to verify a legacy tag's integrity can pin to a specific
+commit SHA instead of the tag name.
+
 ## Reporting a vulnerability
 
 Please **do not** open a public GitHub issue for security problems.
