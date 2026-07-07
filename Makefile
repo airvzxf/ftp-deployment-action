@@ -32,7 +32,7 @@ shellcheck:
 		echo "shellcheck not found; install with: apt-get install shellcheck / apk add shellcheck"; \
 		exit 1; }
 	# -x: follow `shellcheck source=` directives (entrypoint.sh sources lib.sh).
-	shellcheck -x entrypoint.sh lib.sh tests/contract.sh tests/smoke.sh
+	shellcheck -x entrypoint.sh lib.sh tests/contract.sh tests/smoke.sh scripts/backfill-releases.sh
 
 .PHONY: actionlint
 actionlint:
