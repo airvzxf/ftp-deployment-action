@@ -17,7 +17,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
   packages: write
   id-token: write
   attestations: write
@@ -138,3 +138,55 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           sbom-path: sbom.cyclonedx.json
           push-to-registry: true
+
+      # Extract the CHANGELOG.md section for this version so the
+      # GitHub Release body mirrors the existing markdown. The
+      # awk pattern ignores any `## [Unreleased]` block (defensive
+      # against the duplicate that lived in the changelog once and
+      # against future [Unreleased] entries) and stops at the next
+      # `## [...]` heading or the compare-link footer for this
+      # version. `body-empty=true` is exported when no section was
+      # found, so the next step can fall back to
+      # `generate_release_notes: true`.
+      - name: Extract CHANGELOG notes for this version
+        id: notes
+        run: |
+          version="${{ steps.meta.outputs.version }}"
+          notes=$(awk -v v="${version}" '
+              BEGIN {
+                  in_section = 0
+                  v_escaped = v
+                  gsub(/\./, "\\.", v_escaped)
+                  heading_re = "^## \\[" v_escaped "\\]( -.*)?$"
+                  next_heading_re = "^## \\["
+                  compare_re = "^\\[[0-9]+\\.[0-9]+\\.[0-9]+\\]:"
+              }
+              $0 ~ heading_re { in_section = 1; next }
+              in_section && $0 ~ next_heading_re { exit }
+              in_section && $0 ~ compare_re { exit }
+              in_section { print }
+          ' CHANGELOG.md)
+          if [ -z "${notes}" ]; then
+            echo "::warning::no CHANGELOG section found for ${version}; falling back to generate_release_notes"
+            echo "body-empty=true" >> "$GITHUB_OUTPUT"
+          else
+            body_file=$(mktemp)
+            printf '%s\n' "${notes}" > "${body_file}"
+            echo "body-file=${body_file}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Create a draft GitHub Release so a human can review and
+      # publish it after the image is already on ghcr.io. Drafts
+      # are intentional (not auto-publish): the maintainer reads
+      # the rendered body and the asset list before going public.
+      # If the previous step did not find a CHANGELOG section,
+      # `generate_release_notes: true` lets GitHub build the body
+      # from the tag delta instead.
+      - name: Create draft GitHub Release
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          draft: true
+          generate_release_notes: ${{ steps.notes.outputs.body-empty == 'true' }}
+          body_path: ${{ steps.notes.outputs.body-file }}
