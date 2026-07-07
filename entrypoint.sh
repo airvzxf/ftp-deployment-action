@@ -77,6 +77,7 @@ set -o pipefail
 : "${INPUT_DEBUG:=}"
 : "${INPUT_FAIL_ON_DEPRECATED:=}"
 : "${INPUT_DRY_RUN:=}"
+: "${INPUT_UPLOAD_LOG_ON_FAILURE:=}"
 
 # ------------------------------------------------------------------------------
 # Emit deprecation / EOL warning based on the ref the user pinned
@@ -256,6 +257,12 @@ fi
 # Display the status of the LFTP actions.
 # ------------------------------------------------------------------------------
 if [ -z "${SUCCESS}" ]; then
+  # v2.7.0: try to upload the captured lftp log to the current
+  # workflow run as a workflow artifact. The function is fail-soft:
+  # if GITHUB_TOKEN is missing or the upload request fails, it logs
+  # a warning / notice and returns 0, so the failure banner below
+  # still runs.
+  upload_log_artifact "${LOG_FILE}"
   print_failure_banner "${LFTP_RC}" "${PERMANENT_ERROR}" \
     "${LOG_FILE}" "${LFTP_TIMEOUT}" "${LFTP_KILL_AFTER}"
 fi

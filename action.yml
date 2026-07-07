@@ -105,6 +105,10 @@ inputs:
     description: 'If "true", perform a dry run: lftp will compute the mirror plan but not transfer or delete any file. Useful to preview what the action would change before a destructive run. The action still exits 0 on success (i.e. on a clean dry-run plan) and 1 on a hard error.'
     required: false
     default: 'false'
+  upload_log_on_failure:
+    description: 'If "true" (default), when the action is about to exit 1, the captured lftp log file is uploaded to the current workflow run as a workflow artifact named "ftp-deployment-action-log-<run-attempt>". Requires the step to expose GITHUB_TOKEN via `env: GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}`. If the token (or any of the other GitHub-Actions env vars) is missing, the upload is silently skipped with a notice and the action still exits 1 normally. If the upload request itself fails (network, 4xx, 5xx), a warning is printed and the action still exits 1. Set to "false" to disable the upload entirely (the log file is still captured under ~/.lftp-logs/ for the runner to inspect).'
+    required: false
+    default: 'true'
 runs:
   using: 'docker'
   image: 'Dockerfile'

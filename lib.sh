@@ -255,6 +255,7 @@ print_inputs_dump() {
     printf '  %-26s %s\n' "exclude:"                 "$(_indirection INPUT_EXCLUDE)"
     printf '  %-26s %s\n' "exclude_delete:"          "$(_indirection INPUT_EXCLUDE_DELETE)"
     printf '  %-26s %s\n' "debug:"                   "$(_indirection INPUT_DEBUG)"
+    printf '  %-26s %s\n' "upload_log_on_failure:"   "$(_indirection INPUT_UPLOAD_LOG_ON_FAILURE)"
   else
     for _pid_name in \
       SERVER USER PASSWORD LOCAL_DIR REMOTE_DIR MAX_RETRIES DELETE \
@@ -262,7 +263,7 @@ print_inputs_dump() {
       SSL_CHECK_HOSTNAME FTP_PASSIVE_MODE FTP_USE_FEAT FTP_NOP_INTERVAL \
       NET_MAX_RETRIES NET_PERSIST_RETRIES NET_TIMEOUT DNS_MAX_RETRIES \
       DNS_FATAL_TIMEOUT LFTP_SETTINGS EXCLUDE EXCLUDE_DELETE DEBUG \
-      FAIL_ON_DEPRECATED DRY_RUN; do
+      FAIL_ON_DEPRECATED DRY_RUN UPLOAD_LOG_ON_FAILURE; do
       _pid_label=$(printf '%s' "${_pid_name}" | tr '[:upper:]' '[:lower:]')
       _pid_cur=$(_indirection "INPUT_${_pid_name}")
       if [ -n "${_pid_cur}" ]; then
@@ -654,4 +655,101 @@ print_success_banner() {
     echo "=   FTP UPLOADED FINISHED!   ="
   fi
   echo "=============================="
+}
+
+# ------------------------------------------------------------------------------
+# upload_log_artifact LOG_FILE
+#   If INPUT_UPLOAD_LOG_ON_FAILURE=true AND every GitHub-Actions env
+#   var required for the artifact upload API is set
+#   (GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID,
+#   GITHUB_RUN_ATTEMPT, GITHUB_TOKEN), POST LOG_FILE to the workflow
+#   run as an artifact named "ftp-deployment-action-log-<run-attempt>"
+#   with a 90-day retention. Otherwise, skip with a notice.
+#
+#   The function never aborts the parent: any failure (missing env,
+#   missing log file, curl error, HTTP 4xx/5xx) is logged as a warning
+#   and the function returns 0. The action's own exit code is
+#   unaffected.
+#
+#   The env-var lookup uses `_indirection` (no second `eval` site) so
+#   the project-wide "single point of dynamic variable-name lookup"
+#   rule is preserved.
+#
+#   API endpoint:
+#     POST ${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts
+#   Body: multipart/form-data with
+#     - name            "ftp-deployment-action-log-<attempt>"
+#     - retention_days  90 (max allowed by the public API)
+#     - artifact_file   <LOG_FILE>  (filename = basename of LOG_FILE,
+#                                   content-type text/plain)
+#
+#   curl's -F flag builds the multipart envelope automatically. The
+#   Authorization header carries the token; it is never interpolated
+#   into the URL, so the token does not leak into the runner log
+#   even if -v were used.
+# ------------------------------------------------------------------------------
+upload_log_artifact() {
+  _ula_log=$1
+
+  # 1. Opt-in switch.
+  if [ "$(_indirection INPUT_UPLOAD_LOG_ON_FAILURE)" != "true" ]; then
+    return 0
+  fi
+
+  # 2. Required GitHub-Actions env vars. Iterate over a known list
+  #    of literal names and use _indirection for the lookup; never
+  #    introduce a second `eval` site.
+  for _ula_var in GITHUB_API_URL GITHUB_REPOSITORY GITHUB_RUN_ID \
+                  GITHUB_RUN_ATTEMPT GITHUB_TOKEN; do
+    if [ -z "$(_indirection "${_ula_var}")" ]; then
+      printf '  skip: not uploading log; %s is not set in the step env.\n' "${_ula_var}" >&2
+      printf '  hint: add GITHUB_TOKEN to the step env: ' >&2
+      # shellcheck disable=SC2016  # intentional literal ${{ ... }} for the user to copy
+      printf 'env: GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n' >&2
+      return 0
+    fi
+  done
+
+  # 3. Log file must exist (the lftp loop always creates it, but a
+  #    failure before the loop would skip this).
+  if [ ! -f "${_ula_log}" ]; then
+    printf '  skip: not uploading log; %s does not exist.\n' "${_ula_log}" >&2
+    return 0
+  fi
+
+  _ula_api_url=$(_indirection GITHUB_API_URL)
+  _ula_repo=$(_indirection GITHUB_REPOSITORY)
+  _ula_run_id=$(_indirection GITHUB_RUN_ID)
+  _ula_attempt=$(_indirection GITHUB_RUN_ATTEMPT)
+  _ula_token=$(_indirection GITHUB_TOKEN)
+
+  _ula_name="ftp-deployment-action-log-${_ula_attempt}"
+  _ula_url="${_ula_api_url}/repos/${_ula_repo}/actions/runs/${_ula_run_id}/artifacts"
+  _ula_filename=$(basename "${_ula_log}")
+
+  printf '  uploading log %s to %s as "%s" (90-day retention) ...\n' \
+    "${_ula_log}" "${_ula_url}" "${_ula_name}" >&2
+
+  # 4. The actual upload. set +e / set -e bracketing, same pattern as
+  #    run_lftp_once, so a curl non-zero exit does not trip errexit
+  #    and abort the script before we can print a warning.
+  set +e
+  curl -fsSL \
+    -X POST \
+    -H "Authorization: Bearer ${_ula_token}" \
+    -H "Accept: application/vnd.github+json" \
+    -F "name=${_ula_name}" \
+    -F "retention_days=90" \
+    -F "artifact_file=@${_ula_log};filename=${_ula_filename};type=text/plain" \
+    "${_ula_url}" >/dev/null
+  _ula_rc=$?
+  set -e
+
+  if [ "${_ula_rc}" -ne 0 ]; then
+    printf '  WARNING: failed to upload log artifact (curl exit %s); ' \
+      "${_ula_rc}" >&2
+    printf 'continuing to the failure banner.\n' >&2
+    return 0
+  fi
+  printf '  ok: log uploaded as artifact "%s"\n' "${_ula_name}" >&2
 }
