@@ -256,6 +256,10 @@ print_inputs_dump() {
     printf '  %-26s %s\n' "exclude_delete:"          "$(_indirection INPUT_EXCLUDE_DELETE)"
     printf '  %-26s %s\n' "debug:"                   "$(_indirection INPUT_DEBUG)"
     printf '  %-26s %s\n' "upload_log_on_failure:"   "$(_indirection INPUT_UPLOAD_LOG_ON_FAILURE)"
+    printf '  %-26s %s\n' "concurrency_lock:"        "$(_indirection INPUT_CONCURRENCY_LOCK)"
+    printf '  %-26s %s\n' "concurrency_lock_path:"   "$(_indirection INPUT_CONCURRENCY_LOCK_PATH)"
+    printf '  %-26s %s\n' "concurrency_lock_timeout:"  "$(_indirection INPUT_CONCURRENCY_LOCK_TIMEOUT)"
+    printf '  %-26s %s\n' "concurrency_lock_poll_interval:"  "$(_indirection INPUT_CONCURRENCY_LOCK_POLL_INTERVAL)"
   else
     for _pid_name in \
       SERVER USER PASSWORD LOCAL_DIR REMOTE_DIR MAX_RETRIES DELETE \
@@ -263,7 +267,9 @@ print_inputs_dump() {
       SSL_CHECK_HOSTNAME FTP_PASSIVE_MODE FTP_USE_FEAT FTP_NOP_INTERVAL \
       NET_MAX_RETRIES NET_PERSIST_RETRIES NET_TIMEOUT DNS_MAX_RETRIES \
       DNS_FATAL_TIMEOUT LFTP_SETTINGS EXCLUDE EXCLUDE_DELETE DEBUG \
-      FAIL_ON_DEPRECATED DRY_RUN UPLOAD_LOG_ON_FAILURE; do
+      FAIL_ON_DEPRECATED DRY_RUN UPLOAD_LOG_ON_FAILURE \
+      CONCURRENCY_LOCK CONCURRENCY_LOCK_PATH CONCURRENCY_LOCK_TIMEOUT \
+      CONCURRENCY_LOCK_POLL_INTERVAL; do
       _pid_label=$(printf '%s' "${_pid_name}" | tr '[:upper:]' '[:lower:]')
       _pid_cur=$(_indirection "INPUT_${_pid_name}")
       if [ -n "${_pid_cur}" ]; then
@@ -395,6 +401,95 @@ build_mirror_command() {
   fi
 
   printf '%s' "${_bmc_command}"
+}
+
+# ------------------------------------------------------------------------------
+# build_lock_acquire_script
+#   Echo the lftp script fragment that acquires the server-side
+#   concurrency lock, or echo an empty string if locking is disabled.
+#
+#   The lock is implemented as a directory on the FTP server: lftp
+#   issues `quote MKD <path>` and the server returns 257 on success
+#   (we hold the lock) or 550 if the directory already exists
+#   (someone else holds it). On 550 we wait `poll_interval` seconds
+#   and retry, up to `timeout` seconds total, then lftp exits non-
+#   zero and the action fails.
+#
+#   Why a directory (MKD/RMD) and not a file (STOU/DELE):
+#     * MKD/RMD are RFC 959 basics, implemented by every FTP server.
+#     * STOU/UNIQUE are server-specific extensions and inconsistently
+#       supported. The lock would silently never engage on servers
+#       that lack them.
+#     * mkdir is atomic on virtually every UNIX-like filesystem; the
+#       race window is microseconds and the worst-case outcome is
+#       that the lock briefly stays held by a dead runner (handled
+#       below by the timeout).
+#
+#   Why `repeat --until-ok` (not `--while-ok`):
+#     * `--while-ok` means "stop when command exits non-zero", i.e.
+#       repeat while success. That is the wrong direction: we want
+#       to repeat *until* success, i.e. stop on zero. `--until-ok`
+#       does exactly that.
+#
+#   Why the acquire script is empty when locking is disabled: the
+#   caller (run_lftp_once) unconditionally concatenates the acquire
+#   fragment with the rest of the lftp `-e` script, so an empty
+#   fragment is a no-op.
+#
+#   Stale-lock risk: if the holder dies before RMD (runner OOM, GH
+#   Actions 6h job limit, SIGKILL), the next runner will wait the
+#   full timeout and then fail. A timestamp sentinel inside the lock
+#   directory could mitigate this, but adds a non-trivial amount of
+#   complexity. We accept the trade-off for v2.8.0; document the
+#   workaround (manual RMD via FTP) in the README.
+#
+#   Reads: INPUT_CONCURRENCY_LOCK, INPUT_CONCURRENCY_LOCK_PATH,
+#          INPUT_CONCURRENCY_LOCK_TIMEOUT,
+#          INPUT_CONCURRENCY_LOCK_POLL_INTERVAL.
+# ------------------------------------------------------------------------------
+build_lock_acquire_script() {
+  if [ "$(_indirection INPUT_CONCURRENCY_LOCK)" != "true" ]; then
+    return 0
+  fi
+  _blas_path=$(_indirection INPUT_CONCURRENCY_LOCK_PATH)
+  _blas_timeout=$(_indirection INPUT_CONCURRENCY_LOCK_TIMEOUT)
+  _blas_poll=$(_indirection INPUT_CONCURRENCY_LOCK_POLL_INTERVAL)
+
+  # Compute iteration count. timeout=0 means "no waiting, fail
+  # immediately if the lock is held" -> count=1, so repeat tries
+  # exactly once. Otherwise, count = ceil(timeout / poll).
+  if [ "${_blas_timeout}" = "0" ]; then
+    _blas_count=1
+  else
+    _blas_count=$(( (_blas_timeout + _blas_poll - 1) / _blas_poll ))
+  fi
+
+  # Use the SET-arg form of `repeat` so the count/delay values are
+  # not vulnerable to FTP-path expansion by the lftp tokenizer.
+  # The path is passed verbatim to `quote`; lftp's `quote` sends the
+  # rest of the line as a raw FTP command (see lftp-man.html).
+  printf 'set cmd:at-exit-bg ""; set cmd:at-exit ""; repeat --until-ok -c %d -d %d quote MKD %s && ' \
+    "${_blas_count}" "${_blas_poll}" "${_blas_path}"
+}
+
+# ------------------------------------------------------------------------------
+# build_lock_release_script
+#   Echo the lftp script fragment that releases the server-side
+#   concurrency lock (a `quote RMD <path>`), or echo an empty string
+#   if locking is disabled. The release is best-effort: RMD on a
+#   non-existent path returns 550, which we intentionally do not
+#   surface. The cleanup path in entrypoint.sh ALSO releases the
+#   lock from a separate lftp invocation, in case the main lftp
+#   process was killed before reaching the release command.
+#
+#   Reads: INPUT_CONCURRENCY_LOCK, INPUT_CONCURRENCY_LOCK_PATH.
+# ------------------------------------------------------------------------------
+build_lock_release_script() {
+  if [ "$(_indirection INPUT_CONCURRENCY_LOCK)" != "true" ]; then
+    return 0
+  fi
+  _blrs_path=$(_indirection INPUT_CONCURRENCY_LOCK_PATH)
+  printf 'quote RMD %s; ' "${_blrs_path}"
 }
 
 # ------------------------------------------------------------------------------
@@ -536,7 +631,7 @@ compute_backoff_seconds() {
 }
 
 # ------------------------------------------------------------------------------
-# run_lftp_once SERVER FTP_SETTINGS MIRROR LOCAL REMOTE LOG_FILE TIMEOUT KILL_AFTER
+# run_lftp_once SERVER FTP_SETTINGS MIRROR LOCAL REMOTE LOG_FILE TIMEOUT KILL_AFTER LOCK_ACQUIRE LOCK_RELEASE
 #   Run a single lftp invocation with the given parameters, capturing
 #   combined stdout+stderr to LOG_FILE. The function returns lftp's
 #   exit code via the function-return convention. The caller is
@@ -546,6 +641,11 @@ compute_backoff_seconds() {
 #   This is the B-09 + B-05 plumbing: a hard global timeout around
 #   lftp, and an explicit exit-code capture so the caller's
 #   `set -e` does not short-circuit the failure banner.
+#
+#   LOCK_ACQUIRE is prepended to the mirror command, LOCK_RELEASE is
+#   appended right before the final `; quit;`. Both are empty when
+#   INPUT_CONCURRENCY_LOCK is not "true", in which case the script
+#   is bit-for-bit identical to v2.7.0.
 #
 #   IMPORTANT: this function does NOT re-enable `set -e` before
 #   returning. If it did, a non-zero lftp exit would cause the
@@ -563,6 +663,8 @@ run_lftp_once() {
   _rlo_log=$6
   _rlo_timeout=$7
   _rlo_kill_after=$8
+  _rlo_lock_acquire=$9
+  _rlo_lock_release=${10}
 
   # B-03: no -u USER,PASS — lftp reads credentials from ${NETRC}.
   # B-04: redirect combined stdout+stderr to the timestamped log file
@@ -570,8 +672,45 @@ run_lftp_once() {
   # the user wishes, attached as a workflow artifact.
   timeout -k "${_rlo_kill_after}" "${_rlo_timeout}" lftp \
     "${_rlo_server}" \
-    -e "${_rlo_settings} ${_rlo_mirror} ${_rlo_local} ${_rlo_remote}; quit;" \
+    -e "${_rlo_settings} ${_rlo_lock_acquire}${_rlo_mirror} ${_rlo_local} ${_rlo_remote}; ${_rlo_lock_release}quit;" \
     > "${_rlo_log}" 2>&1
+}
+
+# ------------------------------------------------------------------------------
+# run_lftp_lock_release SERVER NETRC_PATH LOCK_PATH
+#   Best-effort standalone lftp invocation that just runs
+#   `quote RMD <lock_path>` and quits. Used by the EXIT trap in
+#   entrypoint.sh to release the server-side concurrency lock if
+#   the main run_lftp_once was killed before reaching its in-script
+#   release (signal, OOM, hard timeout). Failures are silently
+#   swallowed because at this point the script is already on the
+#   way out; we do not want the cleanup itself to print spurious
+#   noise. Logs to /dev/null.
+#
+#   When the lock is disabled or LOCK_PATH is empty, this function
+#   is a no-op (it returns 0 without invoking lftp at all).
+# ------------------------------------------------------------------------------
+run_lftp_lock_release() {
+  _rlr_server=$1
+  _rlr_netrc=$2
+  _rlr_lock_path=$3
+
+  if [ -z "${_rlr_lock_path}" ]; then
+    return 0
+  fi
+  if [ ! -f "${_rlr_netrc}" ]; then
+    return 0
+  fi
+
+  # `set +e` so a non-zero lftp exit does not abort the parent
+  # trap. The whole point of this function is to fail soft.
+  set +e
+  timeout 30s lftp \
+    "${_rlr_server}" \
+    -e "quote RMD ${_rlr_lock_path}; quit;" \
+    >/dev/null 2>&1
+  set -e
+  return 0
 }
 
 # ------------------------------------------------------------------------------

@@ -498,5 +498,43 @@ echo "${out}" | grep -q "^EXIT=1" \
   || fail "upload_log_on_failure=true with missing GITHUB_TOKEN did not exit 1; output was:\n${out}"
 pass "INPUT_UPLOAD_LOG_ON_FAILURE=true with missing GITHUB_TOKEN skips upload with notice, still exits 1"
 
+# ----------------------------------------------------------------------------
+# Test 31: INPUT_CONCURRENCY_LOCK=false (default) — the lftp -e
+# script is bit-for-bit identical to v2.7.0: no `quote MKD` or
+# `repeat --until-ok` substring appears. We assert by substring
+# absence (a passing test means the lock fragments are empty).
+# ----------------------------------------------------------------------------
+out=$(run_init "INPUT_DRY_RUN=true" 30)
+if echo "${out}" | grep -q "quote MKD"; then
+  fail "concurrency_lock=false (default) should not emit any quote MKD; output was:\n${out}"
+fi
+if echo "${out}" | grep -q "repeat --until-ok"; then
+  fail "concurrency_lock=false (default) should not emit a repeat loop; output was:\n${out}"
+fi
+pass "concurrency_lock=false produces no lock fragments in the lftp script"
+
+# ----------------------------------------------------------------------------
+# Test 32: INPUT_CONCURRENCY_LOCK=true with a ".." path → exit 2
+# (validate_path rejects traversal before any network attempt).
+# ----------------------------------------------------------------------------
+out=$(run_init "INPUT_CONCURRENCY_LOCK=true" "INPUT_CONCURRENCY_LOCK_PATH=../escape" 10)
+echo "${out}" | grep -q "concurrency_lock_path contains \"\\.\\.\"" \
+  || fail "concurrency_lock_path with traversal was not rejected; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "concurrency_lock_path with traversal did not exit 2; output was:\n${out}"
+pass "concurrency_lock_path with '..' is rejected with exit 2"
+
+# ----------------------------------------------------------------------------
+# Test 33: INPUT_CONCURRENCY_LOCK=true with poll_interval=0 → exit 2
+# (we explicitly reject 0 because it would cause a division-by-zero
+# in the iteration-count computation).
+# ----------------------------------------------------------------------------
+out=$(run_init "INPUT_CONCURRENCY_LOCK=true" "INPUT_CONCURRENCY_LOCK_POLL_INTERVAL=0" 10)
+echo "${out}" | grep -q "concurrency_lock_poll_interval must be > 0" \
+  || fail "concurrency_lock_poll_interval=0 was not rejected; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "concurrency_lock_poll_interval=0 did not exit 2; output was:\n${out}"
+pass "concurrency_lock_poll_interval=0 is rejected with exit 2"
+
 printf 'All smoke tests passed.\n'
 exit 0

@@ -5,6 +5,120 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] - 2026-07-07
+
+### Added
+
+- **Server-side concurrency lock to serialize concurrent
+  deployments** (closes the risk from `PROPOSAL.md` §5 #6: "two
+  simultaneous workflows to the same FTP can corrupt each
+  other"). The default is OFF to preserve the v2.7.0
+  behaviour bit-for-bit. Opt in with the new input
+  `concurrency_lock: "true"`.
+
+  ```yaml
+  - uses: airvzxf/ftp-deployment-action@v2
+    with:
+      server: ${{ secrets.FTP_SERVER }}
+      user: ${{ secrets.FTP_USERNAME }}
+      password: ${{ secrets.FTP_PASSWORD }}
+      concurrency_lock: "true"
+  ```
+
+  **Mechanism.** Before the mirror, lftp issues `quote MKD
+  <path>` to create a sentinel directory on the FTP server.
+  RFC 959 `MKD` and `RMD` are implemented by every FTP
+  server (vsftpd, proftpd, Pure-FTPd, sftp-via-FTP-gateways,
+  etc.) and `mkdir(2)` is atomic on virtually every UNIX-like
+  filesystem (returning `EEXIST` if the directory already
+  exists). The race window between two clients is
+  microseconds, and the worst-case outcome — the lock
+  briefly staying held by a dead runner — is caught by the
+  configurable `concurrency_lock_timeout`. We chose
+  `MKD`/`RMD` because lftp has no built-in server-side
+  `lock` command (it only has `file:use-lock` for local
+  files, which we verified against the lftp 4.9.3 source
+  and the `src/commands.cc` static command table).
+
+  **Inputs.**
+
+  - `concurrency_lock` (default `false`) — opt-in switch.
+  - `concurrency_lock_path` (default `.lftp-deployment.lock`)
+    — sentinel directory; validated with the same
+    `validate_path` rules as `local_dir` / `remote_dir`
+    (rejects `..`, leading dash, control chars, and shell
+    metacharacters).
+  - `concurrency_lock_timeout` (default `300`) — maximum
+    seconds to wait for the lock when another run is
+    currently holding it. `0` means "fail immediately when
+    held" (no polling).
+  - `concurrency_lock_poll_interval` (default `5`) — seconds
+    between `quote MKD` attempts. Rejected when `0` (would
+    cause a division-by-zero in the iteration count).
+
+  **Release.** The lock is released in three layered ways:
+  (1) an inline `quote RMD <path>` in the lftp `-e` script
+  right before `quit;`; (2) a fallback `run_lftp_lock_release`
+  call in the EXIT trap (so a signal-killed lftp still
+  releases the lock, using the .netrc that is also about to
+  be removed); (3) the documentation in the README explains
+  the manual `quote RMD` recovery path for the rare case of
+  a stale lock (holder died before any of the above could
+  run). When `concurrency_lock` is `false` (the default),
+  `run_lftp_lock_release` short-circuits on an empty lock
+  path and never invokes lftp, so the no-op path is bit-for-
+  bit identical to v2.7.0.
+
+  **When to use it.** For the common case of a single
+  workflow deploying to one FTP, the **GitHub Actions
+  `concurrency:` block** is the recommended approach
+  (documented as Option A in the new README section "Concurrency /
+  deployment lock") because it works across runners and
+  regions, requires no extra inputs, and is platform-managed.
+  The `concurrency_lock` input is the fallback for users who
+  cannot add a `concurrency:` block (e.g. multiple distinct
+  workflows pointing to the same FTP, or deploys driven by a
+  tool the user does not own).
+
+### Internal
+
+- `lib.sh`: new functions `build_lock_acquire_script`,
+  `build_lock_release_script`, and `run_lftp_lock_release`.
+  All three read the new inputs via `_indirection` (the
+  project's single point of dynamic variable-name lookup);
+  no second `eval` site is introduced.
+- `lib.sh`: `run_lftp_once` now takes two extra parameters
+  (lock acquire / release fragments). When the lock is
+  disabled, both are empty strings, so the composed
+  lftp `-e` script is bit-for-bit identical to v2.7.0.
+- `lib.sh`: `print_inputs_dump` now lists the four new
+  inputs in both debug and non-debug modes.
+- `entrypoint.sh`: the new inputs are defaulted to their
+  `action.yml` defaults; `validate_path` /
+  `validate_int` are run only when the lock is enabled,
+  to keep the validation surface tight for the common
+  case (`concurrency_lock=false`). The EXIT trap is
+  extended to call `run_lftp_lock_release` before
+  removing the .netrc (so lftp can still authenticate
+  the release call).
+- Tests: 11 new bats unit tests in `tests/unit/lock.bats`
+  cover the empty/non-empty branches, the `timeout=0`
+  short-circuit, the `ceil(timeout/poll)` iteration count
+  for both 300/5 and 300/7, the lock path verbatim pass-
+  through, and the no-op paths of `run_lftp_lock_release`.
+  3 new smoke tests in `tests/smoke.sh` verify the
+  default-off path emits no lock fragments in the lftp
+  script, and that `..` in `concurrency_lock_path` and
+  `0` in `concurrency_lock_poll_interval` are both
+  rejected with exit 2.
+- `tests/contract.sh` was unchanged: it auto-discovers the
+  four new inputs from the new `lib.sh::print_inputs_dump`
+  list and from the static `INPUT_*` references in
+  `entrypoint.sh` / `lib.sh`, and matches them against
+  `action.yml` (now 31 declared inputs).
+- Total test count: 118 unit + 33 smoke + 1 contract + 3
+  release-smoke = 155 tests, all green.
+
 ## [2.7.0] - 2026-07-06
 
 ### Added
