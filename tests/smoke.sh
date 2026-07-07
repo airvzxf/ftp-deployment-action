@@ -462,5 +462,41 @@ echo "${out}" | grep -q "^EXIT=2" \
   || fail "INPUT_EXCLUDE with backtick did not exit 2; output was:\n${out}"
 pass "INPUT_EXCLUDE with backtick is rejected with exit 2"
 
+# ----------------------------------------------------------------------------
+# Test 29: INPUT_UPLOAD_LOG_ON_FAILURE=false — the upload path is
+# skipped with a notice, the regular failure banner still fires
+# (server unreachable), and the action exits 1. This is the
+# "opt-out" path of the v2.7.0 artifact-upload feature.
+# ----------------------------------------------------------------------------
+out=$(run_init "INPUT_UPLOAD_LOG_ON_FAILURE=false" 30)
+echo "${out}" | grep -q "ERROR: UPLOAD FAILED" \
+  || fail "upload_log_on_failure=false should still show the failure banner on an unreachable server; output was:\n${out}"
+# The function is supposed to be a no-op (return 0 with no output)
+# when the opt-in is disabled, so the "uploading log" line must
+# NOT appear.
+if echo "${out}" | grep -q "uploading log"; then
+  fail "upload_log_on_failure=false should NOT attempt the upload; output was:\n${out}"
+fi
+echo "${out}" | grep -q "^EXIT=1" \
+  || fail "upload_log_on_failure=false with unreachable server did not exit 1; output was:\n${out}"
+pass "INPUT_UPLOAD_LOG_ON_FAILURE=false skips upload and shows regular failure banner"
+
+# ----------------------------------------------------------------------------
+# Test 30: INPUT_UPLOAD_LOG_ON_FAILURE=true (default) WITHOUT
+# GITHUB_TOKEN — the function detects a missing GitHub-Actions
+# env var, skips with a notice, and the action still exits 1
+# normally (fail-soft). The skip notice must mention SOME
+# required env var; we accept any of the five so the test is
+# robust to the iteration order in lib.sh.
+# ----------------------------------------------------------------------------
+out=$(run_init "INPUT_UPLOAD_LOG_ON_FAILURE=true" 30)
+echo "${out}" | grep -q "ERROR: UPLOAD FAILED" \
+  || fail "upload_log_on_failure=true with missing GITHUB_TOKEN should still show the failure banner; output was:\n${out}"
+echo "${out}" | grep -qE "(GITHUB_API_URL|GITHUB_REPOSITORY|GITHUB_RUN_ID|GITHUB_RUN_ATTEMPT|GITHUB_TOKEN) is not set" \
+  || fail "upload_log_on_failure=true with missing GITHUB_TOKEN should print the skip notice mentioning a required env var; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=1" \
+  || fail "upload_log_on_failure=true with missing GITHUB_TOKEN did not exit 1; output was:\n${out}"
+pass "INPUT_UPLOAD_LOG_ON_FAILURE=true with missing GITHUB_TOKEN skips upload with notice, still exits 1"
+
 printf 'All smoke tests passed.\n'
 exit 0

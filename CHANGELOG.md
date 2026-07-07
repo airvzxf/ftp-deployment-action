@@ -5,6 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] - 2026-07-06
+
+### Added
+
+- **Auto-upload lftp log to workflow artifact on failure**
+  (closes the second TODO in `README.md`, the "attach logs to
+  Workflow Artifacts" entry). A new input
+  `upload_log_on_failure` (default `true`) controls the
+  behaviour. When the action is about to exit 1, it POSTs the
+  captured lftp log file to the current workflow run as an
+  artifact named `ftp-deployment-action-log-<run-attempt>`, with
+  a 90-day retention (the maximum allowed by the public
+  GitHub REST API). To opt in, the user just needs to expose
+  the token to the step:
+
+  ```yaml
+  - uses: airvzxf/ftp-deployment-action@v2
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    with:
+      server: ${{ secrets.FTP_SERVER }}
+      user: ${{ secrets.FTP_USERNAME }}
+      password: ${{ secrets.FTP_PASSWORD }}
+      local_dir: "./public_html"
+  ```
+
+  The function is fail-soft. If `GITHUB_TOKEN` (or any of
+  `GITHUB_API_URL`, `GITHUB_REPOSITORY`, `GITHUB_RUN_ID`,
+  `GITHUB_RUN_ATTEMPT`) is missing, the upload is skipped
+  with a notice and the action still exits 1. If the upload
+  request itself fails (network, 4xx, 5xx), a warning is
+  printed and the action still exits 1. Set
+  `upload_log_on_failure: "false"` to disable the upload
+  entirely; the log file is always captured under
+  `~/.lftp-logs/` in the container for the runner to inspect.
+
+### Internal
+
+- `Dockerfile`: `apk add` now also installs `curl=8.21.0-r0`
+  (the current version in `alpine 3.24 main`). The image
+  grows by ~200 KB; the trade-off is that no extra tool has
+  to be downloaded at runtime.
+- `lib.sh`: new function `upload_log_artifact LOG_FILE` in
+  `lib.sh`. It uses `_indirection` (the project's single
+  dynamic-variable-name-lookup helper) to read the GitHub-
+  Actions env vars, so no second `eval` site is introduced.
+  The Authorization header carries the token; it is never
+  interpolated into the URL, so the token cannot leak into
+  the runner log even if `curl -v` were used.
+- `lib.sh`: `print_inputs_dump` now lists `upload_log_on_failure`
+  in both debug and non-debug modes.
+- `entrypoint.sh`: the new input is defaulted to empty
+  (the `true` default lives in `action.yml`); the function
+  is called only on the failure path (when `SUCCESS` is
+  empty), between the lftp loop and the failure banner.
+- `tests/unit/upload.bats`: 10 new unit tests covering the
+  skip branches (opt-in disabled, each missing env var,
+  missing log file) and the fail-soft behaviour (curl
+  against an unreachable host, plus a sentinel-token leak
+  check). The successful-upload path is not unit-tested
+  (it requires network and a real `GITHUB_TOKEN`); it is
+  covered manually by the README example.
+- `tests/smoke.sh`: 2 new smoke tests. Test 29 confirms
+  `upload_log_on_failure=false` skips the upload and
+  shows the regular failure banner. Test 30 confirms the
+  default (`true`) without `GITHUB_TOKEN` still fails
+  gracefully with a notice.
+- Contract test now sees 27 inputs (26 + 1 new) and passes
+  unchanged.
+
+[2.7.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.6.0...v2.7.0
+
+
 ## [2.6.0] - 2026-07-06
 
 ### Added

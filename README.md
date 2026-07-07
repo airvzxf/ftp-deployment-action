@@ -76,6 +76,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | debug                  | If "true", print resolved input values to the log.                                    | No       | false   | N/A                                                                                               |
 | fail_on_deprecated     | If "true", exit 1 when the pinned ref is end-of-life (v1.x).                         | No       | false   | N/A                                                                                               |
 | dry_run                | If "true", compute the mirror plan but do not transfer or delete any file.           | No       | false   | N/A                                                                                               |
+| upload_log_on_failure  | If "true" (default), on exit 1 upload the captured lftp log to the workflow run as an artifact (90-day retention). Requires `env: GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` on the step. | No       | true    | N/A                                                                                               |
 
 More information on the official site for [lftp - Manual pages][2].
 
@@ -98,30 +99,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Here is the deployment action
-      - name: Upload from public_html via FTP
-        uses: airvzxf/ftp-deployment-action@v2
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          user: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          local_dir: "./public_html"
-          remote_dir: "/www/sub-domain/games/myself"
-          delete: "true"
-          max_retries: "7"
-          no_symlinks: "false"
-          ftp_ssl_allow: "false"
-          ssl_verify_certificate: "true"
-          ssl_check_hostname: "false"
-          ftp_use_feat: "true"
-          ftp_nop_interval: "9"
-          net_max_retries: "0"
-          net_persist_retries: "11"
-          net_timeout: "13s"
-          dns_max_retries: "17"
-          dns_fatal_timeout: "never"
-          lftp_settings: "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';"
-          exclude: "*.map,node_modules/**,.git/**"
-          exclude_delete: "*.log"
+  - name: Upload from public_html via FTP
+    uses: airvzxf/ftp-deployment-action@v2
+    with:
+      server: ${{ secrets.FTP_SERVER }}
+      user: ${{ secrets.FTP_USERNAME }}
+      password: ${{ secrets.FTP_PASSWORD }}
+      local_dir: "./public_html"
+      remote_dir: "/www/sub-domain/games/myself"
+      delete: "true"
+      max_retries: "7"
+      no_symlinks: "false"
+      ftp_ssl_allow: "false"
+      ssl_verify_certificate: "true"
+      ssl_check_hostname: "false"
+      ftp_use_feat: "true"
+      ftp_nop_interval: "9"
+      net_max_retries: "0"
+      net_persist_retries: "11"
+      net_timeout: "13s"
+      dns_max_retries: "17"
+      dns_fatal_timeout: "never"
+      lftp_settings: "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';"
+      exclude: "*.map,node_modules/**,.git/**"
+      exclude_delete: "*.log"
+      dry_run: "false"
+      upload_log_on_failure: "true"
 ```
 
 ### Pattern exclusions
@@ -150,6 +153,47 @@ inside the action is:
 Both inputs go through the same sanitization as `lftp_settings`
 (reject control chars, backtick, `$`, `!`, more than 3 `;`), so
 they're safe to pass user-supplied glob patterns.
+
+## Workflow artifacts (auto-upload on failure)
+
+When the action exits with code `1` (e.g. the FTP server is
+unreachable, credentials are wrong, or the retry loop is
+exhausted), the captured lftp log file is **automatically uploaded
+to the current workflow run as a workflow artifact** named
+`ftp-deployment-action-log-<run-attempt>`, with a 90-day
+retention. The artifact is attached to the run alongside any
+other artifacts your workflow produces; download it from the
+GitHub UI to inspect the exact lftp output that triggered the
+failure.
+
+To enable the upload, expose `GITHUB_TOKEN` to the step:
+
+```yaml
+- uses: airvzxf/ftp-deployment-action@v2
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  with:
+    server: ${{ secrets.FTP_SERVER }}
+    user: ${{ secrets.FTP_USERNAME }}
+    password: ${{ secrets.FTP_PASSWORD }}
+    local_dir: "./public_html"
+```
+
+The upload is fail-soft. If the token (or any of the
+GitHub-Actions env vars) is missing, the action skips the
+upload with a notice and still exits `1`. If the upload
+request itself fails (network, 4xx, 5xx), a warning is
+printed and the action still exits `1`. Set
+`upload_log_on_failure: "false"` to disable the upload
+entirely. The log file is always captured under
+`~/.lftp-logs/` in the container regardless — the runner can
+inspect it from a follow-up step if it has access to the
+container filesystem.
+
+The artifact name uses `<run-attempt>` (the attempt number
+within the workflow run) so that re-running a failed job
+produces a separate artifact per attempt instead of
+overwriting the previous one.
 
 ## How it works
 
@@ -191,7 +235,10 @@ they're safe to pass user-supplied glob patterns.
 |      retry loop,         |   + per-attempt net/dns timeouts
 |      max_retries=0..N)   |
 |                          |
-|  7. Result banner        |--- ERROR: UPLOAD FAILED + last lftp exit code
+|  7. Upload log artifact  |--- only on FAIL; needs GITHUB_TOKEN; skip-on-missing
+|     (upload_log_artifact)|   90-day retention; fail-soft (warning on error)
+|                          |
+|  8. Result banner        |--- ERROR: UPLOAD FAILED + last lftp exit code
 |     (print_failure_      |    FTP UPLOADED FINISHED! on success
 |      banner / print_     |    FTP DRY RUN COMPLETED on dry run
 |      success_banner)     |
@@ -291,13 +338,17 @@ rejected. The action exits with code `2` and a clear error on any
 of these. The same sanitization applies to the `exclude` and
 `exclude_delete` inputs (v2.6.0+).
 
+When the auto-upload feature is enabled (`upload_log_on_failure`
+is `true` and the step exposes `GITHUB_TOKEN`), the token is
+sent only to `${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts`
+as an `Authorization: Bearer <token>` header. The token is
+never interpolated into the URL, so it cannot leak into the
+runner log even if `curl -v` were used. The upload response is
+discarded (`> /dev/null`).
+
 ## Changelog
 
 See [`CHANGELOG.md`](./CHANGELOG.md) for release notes.
-
-TODOs:
-
-- Take all the logs from the Linux container then attach all into the Workflow Artifacts, to review unknown errors.
 
 [1]: https://docs.github.com/en/actions/configuring-and-managing-workflows/creating-and-storing-encrypted-secrets
 

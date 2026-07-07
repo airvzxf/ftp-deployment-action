@@ -6,11 +6,14 @@ FROM alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943
 # message.
 #
 # Pin the package versions too (resolves hadolint DL3018).
-# lftp=4.9.3-r0 and ca-certificates=20260611-r0 are the current
-# versions in alpine 3.24; bump them together with the base image.
+# lftp=4.9.3-r0, ca-certificates=20260611-r0, and curl=8.21.0-r0 are
+# the current versions in alpine 3.24; bump them together with the
+# base image. curl is required by v2.7.0 to upload the captured lftp
+# log to the workflow run as a workflow artifact (B-04 follow-up).
 RUN apk add --no-cache \
       lftp=4.9.3-r0 \
       ca-certificates=20260611-r0 \
+      curl=8.21.0-r0 \
  && addgroup -S lftp \
  && adduser -S lftp -G lftp -h /home/lftp \
  && mkdir -p /home/lftp \
