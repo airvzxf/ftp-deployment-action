@@ -12,6 +12,51 @@ By default, `ftp_ssl_allow` is set to `true` to ensure your connection is encryp
 
 > **Note on direct-IP connections**: lftp cannot validate a hostname against an IP-address certificate, so `ssl_verify_certificate: true` requires both a valid certificate and a hostname (not a bare IP) in the `server` input.
 
+### Plain FTP vs FTPS, and the two FTPS modes
+
+The action supports both plain FTP and FTPS, and FTPS has two
+distinct flavours. The choice is driven by the URL scheme in the
+`server` input **and** the `ftp_ssl_allow` toggle. Picking the
+wrong combination is the most common cause of "the action worked
+yesterday on a different FTP" reports.
+
+| `server` scheme | `ftp_ssl_allow` | What you get | Default port |
+|---|---|---|---|
+| `ftp://host` | `true` (default) | **Explicit FTPS** ([RFC 4217](https://datatracker.ietf.org/doc/html/rfc4217)). Plain TCP connect, the server advertises `AUTH`, lftp upgrades the control channel with `AUTH TLS`, then `PROT P` for data. Password is sent inside TLS. This is the default and the most common deployment. | 21 |
+| `ftp://host` | `false` | **Plain FTP.** Password and file contents are sent in clear. Only use this on a trusted LAN. | 21 |
+| `ftps://host` | `true` (default) | **Implicit FTPS** ([RFC 1738](https://datatracker.ietf.org/doc/html/rfc1738)). TLS from the very first byte — the server's welcome banner is already inside TLS. Most legacy "FTPS" hosting providers (and many Windows-IIS setups) speak this. | 990 |
+| `ftps://host` | `false` | **Inconsistent** — lftp will still try to negotiate TLS because the URL scheme is `ftps://`. The action exits with a protocol error. The `ftp_ssl_allow` input is effectively ignored when the scheme is `ftps://`. | 990 |
+
+The two `ssl:verify-certificate` and `ssl:check-hostname` settings
+apply to every row above except the plain-FTP one (which has no
+TLS handshake to verify). For the `ftps://` rows, lftp also honours
+`ftps:initial-prot` (C, S, E, P, or empty) — leave it at the
+default `""` unless the server has a known PROT-bug workaround;
+the action does not set it.
+
+#### Picking the right `server` value
+
+- **Modern shared hoster with TLS** (most "free" or cheap web
+  hosts): `ftp://ftp.example.com` — the action's default gives
+  you explicit FTPS on port 21.
+- **Legacy FTPS host on port 990** (some cPanel / Plesk setups,
+  many IIS deployments, some European hosters): use
+  `ftps://ftp.example.com` or `ftps://ftp.example.com:990`.
+  Leave `ftp_ssl_allow` at its default.
+- **No TLS at all** (in-house FTP, an old NAS): use
+  `ftp://host` **and** set `ftp_ssl_allow: "false"`. You must
+  also set `ssl_verify_certificate: "false"` (it has no effect
+  on a plain FTP connection but the action's `validate_int` will
+  still require the value to be parseable).
+
+> **Troubleshooting hand-off**: if the runner reports
+> `getpeername: Connection refused` on `ftps://host:990`, the
+> server is most likely **not** an implicit-FTPS server (some
+> providers run explicit-only on 21, others run implicit on
+> 990). Switch the scheme to `ftp://` and the port to `21`,
+> keeping `ftp_ssl_allow: "true"`. See the
+> [Troubleshooting](#troubleshooting) table below.
+
 ## Usage Example
 
 Add this code in `./.github/workflows/your_action.yml`.
@@ -81,6 +126,15 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | concurrency_lock_path  | Path of the sentinel directory used by `concurrency_lock`. Must be a valid FTP path (no `..`, no shell metacharacters, no leading dash). | No       | .lftp-deployment.lock | N/A                                                                                |
 | concurrency_lock_timeout | Maximum seconds to wait for the lock when `concurrency_lock` is "true" and another run is currently holding it. `0` means fail immediately when held. | No | 300  | N/A                                                                                               |
 | concurrency_lock_poll_interval | Seconds between lock acquisition attempts.                                                  | No       | 5       | N/A                                                                                               |
+
+> **How `ftp_ssl_allow` interacts with the `server` URL scheme.**
+> The default `ftp_ssl_allow: "true"` only takes effect when the
+> `server` input uses the `ftp://` scheme (explicit FTPS, port 21).
+> If you point the action at an implicit-FTPS server with
+> `ftps://host:990`, lftp speaks TLS regardless of `ftp_ssl_allow`,
+> and setting it to `"false"` actually breaks the connection. See
+> the "Plain FTP vs FTPS" table in [Security and SSL](#security-and-ssl)
+> for the full matrix.
 
 More information on the official site for [lftp - Manual pages][2].
 
@@ -450,6 +504,8 @@ log for debugging).
 | `Fatal error: certificate verify failed` (TLS) | The server uses a self-signed certificate, the cert is expired, or you are connecting to a bare IP. | `ssl_verify_certificate` is `true` by default since v2.0.0. If you trust the server, set `ssl_verify_certificate: "false"` explicitly. For a bare IP you cannot validate a hostname — use a hostname with a real cert or opt out. |
 | `Connection refused` / hangs on connect | Wrong host/port, firewall blocking outbound 21/990, or the FTP server is down. | Verify `server` (`ftp://host:21` or `ftps://host:990`). From the runner, `nc -vz host 21` should succeed. Some shared hosters block the runner's IP range — ask them to allow-list it. |
 | `mirror: Access failed: 550 ... No such file or directory` | The remote path does not exist or the FTP user has no permission to create it. | Create the `remote_dir` manually (or set `delete: false` and accept a partial mirror) and confirm the FTP user owns it. |
+| `getpeername: Connection refused` on `ftps://host:990` | The server is **not** speaking implicit FTPS — it is almost certainly explicit FTPS on port 21. The `ftps://` URL forces TLS from byte 0, which the server rejects. | Switch `server` to `ftp://host:21` and keep `ftp_ssl_allow: "true"`. See the "Plain FTP vs FTPS" table in [Security and SSL](#security-and-ssl). |
+| lftp logs `PROT command not understood` then drops the data connection | Some legacy FTPS servers do not support `PROT P` even though they accept `AUTH TLS`. lftp falls back to `PROT C` (clear data channel) by default; if the server closes the data connection instead, the action exits 1. | Add `lftp_settings: "set ftps:initial-prot C;"` to the step, or ask the hoster to enable `PROT P` server-side. |
 
 > **The job is still running for hours**: `lftp` is probably waiting on a
 > half-open TCP connection. Since v1.5.0 the action wraps every

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documentation
+
+- **README: document the difference between plain FTP, implicit
+  FTPS (`ftps://`, port 990, TLS from byte 0), and explicit
+  FTPS (`ftp://` + `AUTH TLS`, port 21)**, and how they interact
+  with the `ftp_ssl_allow` input. Closes PROPOSAL §5 #3 ("FTPS
+  implícito vs. explícito sin documentar"). The new "Plain FTP
+  vs FTPS" subsection in `Security and SSL` covers the four
+  scheme × `ftp_ssl_allow` combinations, recommends the right
+  `server` value for each hosting type, and explains the
+  `ftps:initial-prot` escape hatch.
+- **README: add two troubleshooting rows** covering the "wrong
+  scheme" foot-gun (`getpeername: Connection refused` on
+  `ftps://host:990` from a server that only speaks explicit
+  FTPS on 21) and the legacy "PROT command not understood"
+  fall-back (lftp drops the data connection on a non-PROT-P
+  server). Both rows link back to the new subsection.
+
 ## [2.8.0] - 2026-07-07
 
 ### Added
