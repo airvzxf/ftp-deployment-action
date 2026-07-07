@@ -78,6 +78,10 @@ set -o pipefail
 : "${INPUT_FAIL_ON_DEPRECATED:=}"
 : "${INPUT_DRY_RUN:=}"
 : "${INPUT_UPLOAD_LOG_ON_FAILURE:=}"
+: "${INPUT_CONCURRENCY_LOCK:=false}"
+: "${INPUT_CONCURRENCY_LOCK_PATH:=.lftp-deployment.lock}"
+: "${INPUT_CONCURRENCY_LOCK_TIMEOUT:=300}"
+: "${INPUT_CONCURRENCY_LOCK_POLL_INTERVAL:=5}"
 
 # ------------------------------------------------------------------------------
 # Emit deprecation / EOL warning based on the ref the user pinned
@@ -118,6 +122,22 @@ validate_lftp_settings "${INPUT_LFTP_SETTINGS}"
 # way `lftp_settings` does, so they share the same sanitization.
 validate_lftp_settings "${INPUT_EXCLUDE}"
 validate_lftp_settings "${INPUT_EXCLUDE_DELETE}"
+# Concurrency lock: validate path and integers only when enabled,
+# to keep the validation surface tight for the common case
+# (concurrency_lock=false). validate_int already rejects negatives
+# and non-numeric values; the only extra check we need is
+# poll_interval > 0 (0 would be a division-by-zero in the count
+# computation).
+if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
+  validate_path "concurrency_lock_path" "${INPUT_CONCURRENCY_LOCK_PATH}"
+  validate_int "concurrency_lock_timeout" "${INPUT_CONCURRENCY_LOCK_TIMEOUT}"
+  validate_int "concurrency_lock_poll_interval" "${INPUT_CONCURRENCY_LOCK_POLL_INTERVAL}"
+  if [ "${INPUT_CONCURRENCY_LOCK_POLL_INTERVAL}" = "0" ]; then
+    printf 'ERROR: concurrency_lock_poll_interval must be > 0 (got: %s)\n' \
+      "${INPUT_CONCURRENCY_LOCK_POLL_INTERVAL}" >&2
+    exit 2
+  fi
+fi
 
 # ------------------------------------------------------------------------------
 # Build the lftp command fragments.
@@ -137,6 +157,11 @@ INPUT_REMOTE_DIR=$(normalize_dir "${INPUT_REMOTE_DIR}")
 validate_path "local_dir"  "${INPUT_LOCAL_DIR}"
 validate_path "remote_dir" "${INPUT_REMOTE_DIR}"
 MIRROR_COMMAND=$(build_mirror_command)
+# v2.8.0: server-side concurrency lock fragments. Both echo empty
+# when INPUT_CONCURRENCY_LOCK is not "true", so the no-op case
+# produces a bit-for-bit identical lftp -e script as v2.7.0.
+LOCK_ACQUIRE=$(build_lock_acquire_script)
+LOCK_RELEASE=$(build_lock_release_script)
 
 # ------------------------------------------------------------------------------
 # Display the resolved configuration.
@@ -156,6 +181,16 @@ print_resolved_config
 NETRC="${HOME}/.netrc"
 NETRC_HOST=$(extract_netrc_host "${INPUT_SERVER}")
 write_netrc "${NETRC}" "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
+
+# v2.8.0: extend the EXIT trap installed by write_netrc above to
+# also release the server-side concurrency lock (best-effort).
+# Order matters: the lock release must run BEFORE the .netrc is
+# removed, because the release invokes lftp which needs the .netrc
+# to authenticate. run_lftp_lock_release is a no-op when the lock
+# is disabled, so installing the extended trap unconditionally is
+# safe and keeps the no-lock code path bit-for-bit identical to
+# v2.7.0.
+trap 'run_lftp_lock_release "${INPUT_SERVER}" "${NETRC}" "${INPUT_CONCURRENCY_LOCK_PATH}"; rm -f "${NETRC}"' EXIT
 
 # ------------------------------------------------------------------------------
 # Execute the LFTP actions.
@@ -206,7 +241,9 @@ while true; do
     "${INPUT_REMOTE_DIR}" \
     "${LOG_FILE}" \
     "${LFTP_TIMEOUT}" \
-    "${LFTP_KILL_AFTER}"
+    "${LFTP_KILL_AFTER}" \
+    "${LOCK_ACQUIRE}" \
+    "${LOCK_RELEASE}"
   LFTP_RC=$?
   set -e
 

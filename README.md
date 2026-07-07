@@ -77,6 +77,10 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | fail_on_deprecated     | If "true", exit 1 when the pinned ref is end-of-life (v1.x).                         | No       | false   | N/A                                                                                               |
 | dry_run                | If "true", compute the mirror plan but do not transfer or delete any file.           | No       | false   | N/A                                                                                               |
 | upload_log_on_failure  | If "true" (default), on exit 1 upload the captured lftp log to the workflow run as an artifact (90-day retention). Requires `env: GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` on the step. | No       | true    | N/A                                                                                               |
+| concurrency_lock       | If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory. See "Concurrency / deployment lock" below. | No       | false   | N/A                                                                                               |
+| concurrency_lock_path  | Path of the sentinel directory used by `concurrency_lock`. Must be a valid FTP path (no `..`, no shell metacharacters, no leading dash). | No       | .lftp-deployment.lock | N/A                                                                                |
+| concurrency_lock_timeout | Maximum seconds to wait for the lock when `concurrency_lock` is "true" and another run is currently holding it. `0` means fail immediately when held. | No | 300  | N/A                                                                                               |
+| concurrency_lock_poll_interval | Seconds between lock acquisition attempts.                                                  | No       | 5       | N/A                                                                                               |
 
 More information on the official site for [lftp - Manual pages][2].
 
@@ -195,6 +199,136 @@ within the workflow run) so that re-running a failed job
 produces a separate artifact per attempt instead of
 overwriting the previous one.
 
+## Concurrency / deployment lock
+
+Two workflows (or two runs of the same workflow) deploying to
+the **same FTP server at the same time** can corrupt each
+other: `lftp mirror --reverse` lists both source and target
+directories, then races on writes. Concurrent uploads with
+`--delete` are especially dangerous — each run can see the
+other's freshly-uploaded files and delete them as "no longer
+in the source".
+
+### Option A — recommended: GitHub Actions `concurrency:` block
+
+If both deployments run in the **same workflow** (or in two
+workflows you control), the simplest fix is GitHub's built-in
+serialization. Add a `concurrency:` group to your job:
+
+```yaml
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ftp-deploy-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: airvzxf/ftp-deployment-action@v2
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          user: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+```
+
+- `group: ftp-deploy-${{ github.ref }}` — at most one deploy
+  per ref (branch / tag) at a time. Use
+  `ftp-deploy-${{ github.workflow }}-${{ github.ref }}` if
+  you also want to serialize across distinct workflows that
+  deploy to the same server.
+- `cancel-in-progress: false` — newer runs wait for the
+  in-flight one to finish instead of cancelling it (which
+  would leave a half-uploaded server).
+
+This works across runners, regions, and self-hosted hosts, and
+requires no code in the action. It is the recommended option
+for everyone who can set it.
+
+### Option B — server-side sentinel lock (this action)
+
+If you cannot add a `concurrency:` block (e.g. your deploy is
+driven by a tool you don't own, or you deploy from multiple
+distinct workflows pointing to the same FTP and don't want
+to share a group name), opt in to the server-side lock:
+
+```yaml
+- uses: airvzxf/ftp-deployment-action@v2
+  with:
+    server: ${{ secrets.FTP_SERVER }}
+    user: ${{ secrets.FTP_USERNAME }}
+    password: ${{ secrets.FTP_PASSWORD }}
+    concurrency_lock: "true"
+```
+
+**What it does.** Before the mirror, lftp issues
+`quote MKD <path>` to create a sentinel directory on the
+FTP server. If the server replies `257` (created), the
+deployment holds the lock and proceeds. If the server
+replies `550` (already exists), another run is in flight;
+the action polls up to `concurrency_lock_timeout` seconds
+(retrying every `concurrency_lock_poll_interval` seconds)
+and then fails with a clear error. After the mirror
+completes (or on any exit path — success, error, SIGINT,
+5h timeout, signal), the action issues `quote RMD <path>`
+to release the lock, both in the same lftp invocation
+and via the EXIT trap as a fallback.
+
+**Why MKD/RMD and not a "lock" command.** lftp does not
+ship a server-side `lock` primitive — it only has
+`file:use-lock` for *local* files. MKD and RMD are RFC 959
+basics and are implemented by every FTP server
+(vsftpd, proftpd, Pure-FTPd, SFTP-via-FTP-gateways, etc.).
+`mkdir` is atomic on virtually every UNIX-like filesystem
+(returning `EEXIST` if the dir already exists), so the
+race window between two clients is microseconds and the
+worst-case outcome is that the lock briefly stays held by
+a dead runner — which the `concurrency_lock_timeout`
+catches.
+
+**Stale lock risk.** If the holder dies before RMD (runner
+OOM, the 5h hard timeout, a `kill -9` from the runner host),
+subsequent runs will wait the full `concurrency_lock_timeout`
+and then fail. To recover without waiting, log in to the
+FTP and remove the sentinel directory manually:
+
+```sh
+lftp -u user,pw ftp://example.com -e "rm -rf .lftp-deployment.lock; quit;"
+```
+
+A timestamp-sentinel inside the lock directory (so the
+action can auto-detect staleness) is on the roadmap for a
+future release.
+
+**Customizing the lock path.** If you have several
+deployments against the same FTP server (e.g. one for
+production, one for staging, each writing to a different
+remote directory), give each its own lock path:
+
+```yaml
+- uses: airvzxf/ftp-deployment-action@v2
+  with:
+    concurrency_lock: "true"
+    concurrency_lock_path: ".lftp-deployment.lock.prod"
+```
+
+**Limitations.**
+
+- The lock is **advisory**: a hostile client that ignores
+  the sentinel can still upload concurrently. The lock
+  protects against accidental races from CI runs, not
+  against malicious actors.
+- The lock is **per-server, not per-path**: two deploys to
+  the same FTP but different `remote_dir` will serialize.
+  This is usually the right call (uploads to the same
+  server still share an FTP control connection and the
+  server's filesystem cache) but if you need finer
+  granularity, give each deploy a different
+  `concurrency_lock_path`.
+- The lock is **not replicated across FTP servers**: if you
+  mirror to two backends via different `server` inputs in
+  one step, this input does not coordinate between them.
+  For that, use Option A with a shared `concurrency:`
+  group.
+
 ## How it works
 
 ```
@@ -230,10 +364,16 @@ overwriting the previous one.
 |  5. Write .netrc         |--- 0600, removed by EXIT trap
 |     (write_netrc)        |
 |                          |
+|  5b. Acquire server lock  |--- only if concurrency_lock=true
+|      (build_lock_acquire, |   `quote MKD <path>` in a `repeat --until-ok`
+|       inline in -e)      |   loop; polls up to concurrency_lock_timeout s
+|                          |   then fails with exit 1
+|                          |
 |  6. lftp -e "..."        |--- +global 5h timeout
 |     (run_lftp_once +     |   + exponential backoff with jitter
 |      retry loop,         |   + per-attempt net/dns timeouts
-|      max_retries=0..N)   |
+|      max_retries=0..N)   |   + releases lock via `quote RMD` + EXIT trap
+|                          |     if it was acquired
 |                          |
 |  7. Upload log artifact  |--- only on FAIL; needs GITHUB_TOKEN; skip-on-missing
 |     (upload_log_artifact)|   90-day retention; fail-soft (warning on error)

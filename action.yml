@@ -109,6 +109,22 @@ inputs:
     description: 'If "true" (default), when the action is about to exit 1, the captured lftp log file is uploaded to the current workflow run as a workflow artifact named "ftp-deployment-action-log-<run-attempt>". Requires the step to expose GITHUB_TOKEN via `env: GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}`. If the token (or any of the other GitHub-Actions env vars) is missing, the upload is silently skipped with a notice and the action still exits 1 normally. If the upload request itself fails (network, 4xx, 5xx), a warning is printed and the action still exits 1. Set to "false" to disable the upload entirely (the log file is still captured under ~/.lftp-logs/ for the runner to inspect).'
     required: false
     default: 'true'
+  concurrency_lock:
+    description: 'If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory before the mirror. Implementation: lftp issues `quote MKD <path>` before the mirror and `quote RMD <path>` after; while MKD returns 550 (lock held), the action polls up to `concurrency_lock_timeout` seconds. Uses RFC 959 MKD/RMD which every FTP server supports. The lock is released on any exit path (success, error, SIGINT, 5h timeout) by the cleanup trap. Default is "false" (no cross-runner serialization). For zero-config serialization, prefer the GitHub Actions `concurrency:` block in your workflow. Stale-lock risk: if the holder dies before RMD, subsequent runs will wait until `concurrency_lock_timeout` and then fail with exit 1. See README "Concurrency / deployment lock" for details.'
+    required: false
+    default: 'false'
+  concurrency_lock_path:
+    description: 'Path of the sentinel directory used by `concurrency_lock`. Relative paths are resolved against the FTP user''s home; absolute paths are accepted. Must be a valid FTP path (no `..`, no shell metacharacters, no leading dash). Default: ".lftp-deployment.lock" (a hidden directory alongside the deployed files). The directory will be created and removed by the action; do not use a path that holds user data.'
+    required: false
+    default: '.lftp-deployment.lock'
+  concurrency_lock_timeout:
+    description: 'Maximum seconds to wait for the lock when `concurrency_lock` is "true" and another run is currently holding it. After this, the action exits 1 with a clear error. Set to "0" to fail immediately when the lock is held (no waiting). Default is 300 (5 minutes), which is long enough to ride out a transient concurrent run, short enough that a stale lock surfaces within a normal workflow run.'
+    required: false
+    default: '300'
+  concurrency_lock_poll_interval:
+    description: 'Seconds between lock acquisition attempts when `concurrency_lock` is "true". Default is 5, which gives 60 attempts over the default 300-second timeout. Lower values reduce the time-to-acquire after the holder releases; higher values reduce the number of MKD round-trips against the server.'
+    required: false
+    default: '5'
 runs:
   using: 'docker'
   image: 'Dockerfile'
