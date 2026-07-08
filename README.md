@@ -98,7 +98,7 @@ pick whichever is closest (or already trusted) in their supply chain:
 |---|---|---|
 | GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.10.0` | `uses: airvzxf/ftp-deployment-action@v2` (the example above) |
 | Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.10.0` | `uses: docker://docker.io/airvzxf/ftp-deployment-action@v2` |
-| AWS ECR Public | `public.ecr.aws/airvzxf/ftp-deployment-action:v2.10.0` | `uses: docker://public.ecr.aws/airvzxf/ftp-deployment-action@v2` |
+| AWS ECR Public | `public.ecr.aws/m2z1h0m9/ftp-deployment-action:v2.10.0` | `uses: docker://public.ecr.aws/m2z1h0m9/ftp-deployment-action@v2` |
 
 All three carry the same OCI image bytes (one `docker buildx build`,
 one digest), the same `cosign` keyless signature
@@ -132,13 +132,16 @@ maintainer pushing new releases.
    secrets and push to docker.io alongside ghcr.io.
 
 **ECR Public with OIDC** (publishes to
-`public.ecr.aws/airvzxf/ftp-deployment-action` — no static AWS
+`public.ecr.aws/m2z1h0m9/ftp-deployment-action` — no static AWS
 secrets):
 
 1. Create an ECR Public repository in the AWS account you want
-   to publish from. The repository's **alias** must be `airvzxf`
-   (so the URL is `public.ecr.aws/airvzxf/ftp-deployment-action`).
-   Aliases are globally unique within ECR Public; pick one you own.
+   to publish from. The repository name must be `ftp-deployment-action`
+   (the URL becomes `public.ecr.aws/<registry-id>/ftp-deployment-action`,
+   where `<registry-id>` is the account-specific registry ID AWS
+   assigns automatically — e.g. `m2z1h0m9` for this account). AWS
+   does **not** let you set a custom registry ID: it is derived from
+   your AWS Account ID and is permanent for the account.
 2. Create an IAM role with the following trust policy
    (replace `ACCOUNT_ID` with your 12-digit AWS account ID):
 
@@ -191,7 +194,7 @@ secrets):
            "ecr-public:UploadLayerPart",
            "ecr-public:CompleteLayerUpload"
          ],
-         "Resource": "arn:aws:ecr-public::ACCOUNT_ID:repository/airvzxf/ftp-deployment-action"
+         "Resource": "arn:aws:ecr-public::ACCOUNT_ID:repository/m2z1h0m9/ftp-deployment-action"
        }
      ]
    }

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [2.10.0] - 2026-07-08
+
 ### Added
 
 - **Multi-registry publishing for releases (LP-7)**. Every tag is
@@ -643,6 +646,7 @@ Four PRs on top of v2.1.0. No breaking change.
 [2.0.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v1.5.0...v2.0.0
 [1.5.0]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.5.0
 [2.9.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.8.0...v2.9.0
+[2.10.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.9.0...v2.10.0
 [1.3.3]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.3.3
 
 ## [2.1.0] - 2026-07-05
@@ -849,5 +853,6 @@ Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 [2.0.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v1.5.0...v2.0.0
 [1.5.0]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.5.0
 [2.9.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.8.0...v2.9.0
+[2.10.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.9.0...v2.10.0
 [2.4.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.4.0...v2.4.1
 [1.3.3]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.3.3

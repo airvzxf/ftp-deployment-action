@@ -87,7 +87,7 @@ jobs:
           fi
 
           if [ -n "${AWS_ROLE_TO_ASSUME}" ]; then
-            ecr_image="public.ecr.aws/airvzxf/ftp-deployment-action"
+            ecr_image="public.ecr.aws/m2z1h0m9/ftp-deployment-action"
             tags="${tags}"$'\n'"${ecr_image}:${version}"$'\n'"${ecr_image}:${tag}"$'\n'"${ecr_image}:latest"
             {
               echo "ecr_image=${ecr_image}"
