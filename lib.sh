@@ -405,91 +405,111 @@ build_mirror_command() {
 
 # ------------------------------------------------------------------------------
 # build_lock_acquire_script
-#   Echo the lftp script fragment that acquires the server-side
-#   concurrency lock, or echo an empty string if locking is disabled.
+#   DEPRECATED in v2.9.0. Returns empty string unconditionally.
 #
-#   The lock is implemented as a directory on the FTP server: lftp
-#   issues `quote MKD <path>` and the server returns 257 on success
-#   (we hold the lock) or 550 if the directory already exists
-#   (someone else holds it). On 550 we wait `poll_interval` seconds
-#   and retry, up to `timeout` seconds total, then lftp exits non-
-#   zero and the action fails.
+#   In v2.8.0 this function emitted the inline `repeat --until-ok
+#   quote MKD ...` lftp script fragment that was concatenated into
+#   the mirror's lftp `-e` command. In v2.9.0 the lock work moved
+#   out of the mirror lftp invocation and into the shell-driven
+#   `acquire_lock_with_recovery` helper, so the stale-lock auto-
+#   recovery can do its LIST / parse / DELE / RMD sequence without
+#   fighting lftp's flow-control primitives (the `repeat --until-ok`
+#   retry loop has no clean way to branch into a stale-recovery
+#   sub-flow on each MKD failure).
 #
-#   Why a directory (MKD/RMD) and not a file (STOU/DELE):
-#     * MKD/RMD are RFC 959 basics, implemented by every FTP server.
-#     * STOU/UNIQUE are server-specific extensions and inconsistently
-#       supported. The lock would silently never engage on servers
-#       that lack them.
-#     * mkdir is atomic on virtually every UNIX-like filesystem; the
-#       race window is microseconds and the worst-case outcome is
-#       that the lock briefly stays held by a dead runner (handled
-#       below by the timeout).
+#   The function is kept as a no-op so entrypoint.sh (which assigns
+#   its output to LOCK_ACQUIRE) does not need to change, and so the
+#   unit tests can verify the deprecation cleanly.
 #
-#   Why `repeat --until-ok` (not `--while-ok`):
-#     * `--while-ok` means "stop when command exits non-zero", i.e.
-#       repeat while success. That is the wrong direction: we want
-#       to repeat *until* success, i.e. stop on zero. `--until-ok`
-#       does exactly that.
-#
-#   Why the acquire script is empty when locking is disabled: the
-#   caller (run_lftp_once) unconditionally concatenates the acquire
-#   fragment with the rest of the lftp `-e` script, so an empty
-#   fragment is a no-op.
-#
-#   Stale-lock risk: if the holder dies before RMD (runner OOM, GH
-#   Actions 6h job limit, SIGKILL), the next runner will wait the
-#   full timeout and then fail. A timestamp sentinel inside the lock
-#   directory could mitigate this, but adds a non-trivial amount of
-#   complexity. We accept the trade-off for v2.8.0; document the
-#   workaround (manual RMD via FTP) in the README.
-#
-#   Reads: INPUT_CONCURRENCY_LOCK, INPUT_CONCURRENCY_LOCK_PATH,
-#          INPUT_CONCURRENCY_LOCK_TIMEOUT,
-#          INPUT_CONCURRENCY_LOCK_POLL_INTERVAL.
+#   Reads: INPUT_CONCURRENCY_LOCK (ignored; always empty).
 # ------------------------------------------------------------------------------
 build_lock_acquire_script() {
-  if [ "$(_indirection INPUT_CONCURRENCY_LOCK)" != "true" ]; then
-    return 0
-  fi
-  _blas_path=$(_indirection INPUT_CONCURRENCY_LOCK_PATH)
-  _blas_timeout=$(_indirection INPUT_CONCURRENCY_LOCK_TIMEOUT)
-  _blas_poll=$(_indirection INPUT_CONCURRENCY_LOCK_POLL_INTERVAL)
-
-  # Compute iteration count. timeout=0 means "no waiting, fail
-  # immediately if the lock is held" -> count=1, so repeat tries
-  # exactly once. Otherwise, count = ceil(timeout / poll).
-  if [ "${_blas_timeout}" = "0" ]; then
-    _blas_count=1
-  else
-    _blas_count=$(( (_blas_timeout + _blas_poll - 1) / _blas_poll ))
-  fi
-
-  # Use the SET-arg form of `repeat` so the count/delay values are
-  # not vulnerable to FTP-path expansion by the lftp tokenizer.
-  # The path is passed verbatim to `quote`; lftp's `quote` sends the
-  # rest of the line as a raw FTP command (see lftp-man.html).
-  printf 'set cmd:at-exit-bg ""; set cmd:at-exit ""; repeat --until-ok -c %d -d %d quote MKD %s && ' \
-    "${_blas_count}" "${_blas_poll}" "${_blas_path}"
+  return 0
 }
 
 # ------------------------------------------------------------------------------
 # build_lock_release_script
-#   Echo the lftp script fragment that releases the server-side
-#   concurrency lock (a `quote RMD <path>`), or echo an empty string
-#   if locking is disabled. The release is best-effort: RMD on a
-#   non-existent path returns 550, which we intentionally do not
-#   surface. The cleanup path in entrypoint.sh ALSO releases the
-#   lock from a separate lftp invocation, in case the main lftp
-#   process was killed before reaching the release command.
+#   DEPRECATED in v2.9.0. Returns empty string unconditionally.
 #
-#   Reads: INPUT_CONCURRENCY_LOCK, INPUT_CONCURRENCY_LOCK_PATH.
+#   In v2.8.0 this emitted `quote RMD <path>; ` to be appended to
+#   the mirror's lftp `-e` command. In v2.9.0 the release moved to
+#   `release_lock_safely` (best-effort standalone lftp invocation
+#   from the EXIT trap), which also DELEs the sentinel file (a
+#   sibling of the lock dir) — see acquire_lock_with_recovery.
+#
+#   Reads: INPUT_CONCURRENCY_LOCK (ignored; always empty).
 # ------------------------------------------------------------------------------
 build_lock_release_script() {
-  if [ "$(_indirection INPUT_CONCURRENCY_LOCK)" != "true" ]; then
-    return 0
-  fi
-  _blrs_path=$(_indirection INPUT_CONCURRENCY_LOCK_PATH)
-  printf 'quote RMD %s; ' "${_blrs_path}"
+  return 0
+}
+
+# ------------------------------------------------------------------------------
+# _lock_sentinel_name TIMESTAMP PID
+#   Build the canonical sentinel filename for the lock. Format:
+#
+#     .lftp-deployment.lock.<TIMESTAMP>.<PID>.info
+#
+#   where TIMESTAMP is YYYYMMDDTHHMMSSZ (UTC, the format produced
+#   by `date -u +%Y%m%dT%H%M%SZ`, sortable as a string) and PID is
+#   the runner shell PID. The sentinel lives at the FTP root, as
+#   a SIBLING of the lock dir, NOT inside it: that way the release
+#   path can do `quote RMD <lock_dir>` without first having to
+#   recursively clear its contents (FTP RMD on a non-empty dir
+#   returns 550, and there is no portable recursive RMD).
+#
+#   Pure: no IO, no side effects.
+# ------------------------------------------------------------------------------
+_lock_sentinel_name() {
+  printf '.lftp-deployment.lock.%s.%s.info' "$1" "$2"
+}
+
+# ------------------------------------------------------------------------------
+# _lock_age_seconds STAMP_NOW STAMP_THEN
+#   Return the age in seconds between STAMP_NOW and STAMP_THEN.
+#   Both stamps must be YYYYMMDDTHHMMSSZ (the format from
+#   `_lock_sentinel_name`). Uses POSIX awk `mktime`, which busybox
+#   awk supports.
+#
+#   Pure: no IO, no side effects. Echoes an integer (possibly
+#   negative if STAMP_THEN is in the future, which the caller
+#   must check for).
+# ------------------------------------------------------------------------------
+_lock_age_seconds() {
+  _las_now=$1
+  _las_then=$2
+  awk -v now="${_las_now}" -v then="${_las_then}" '
+    BEGIN {
+      n_y = substr(now,  1, 4); n_m  = substr(now,  5, 2); n_d  = substr(now,  7, 2)
+      n_h = substr(now, 10, 2); n_mn = substr(now, 12, 2); n_s  = substr(now, 14, 2)
+      t_y = substr(then,  1, 4); t_m  = substr(then,  5, 2); t_d  = substr(then,  7, 2)
+      t_h = substr(then, 10, 2); t_mn = substr(then, 12, 2); t_s  = substr(then, 14, 2)
+      n = mktime(n_y " " n_m " " n_d " " n_h " " n_mn " " n_s)
+      t = mktime(t_y " " t_m " " t_d " " t_h " " t_mn " " t_s)
+      print int(n - t)
+    }
+  '
+}
+
+# ------------------------------------------------------------------------------
+# _lock_parse_sentinel_listing LISTING_TEXT
+#   Given the captured stdout of `lftp ... -e 'quote LIST -la .; quit;'`,
+#   extract the FIRST filename matching the sentinel pattern
+#   `.lftp-deployment.lock.<digits>.info`. Echoes the matching
+#   filename (e.g. `.lftp-deployment.lock.20260707T080000Z.1234.info`)
+#   on stdout, or empty if no sentinel exists.
+#
+#   Uses grep -E anchored to the line end so unrelated files (the
+#   lock dir itself, user files) are ignored. The `head -1` keeps
+#   the parser deterministic in the (rare) case where multiple
+#   orphan sentinels exist on disk.
+#
+#   Pure: no IO, no FTP. Echoes the matched filename or "".
+# ------------------------------------------------------------------------------
+_lock_parse_sentinel_listing() {
+  _lpsl_listing=$1
+  printf '%s\n' "${_lpsl_listing}" \
+    | grep -oE '\.lftp-deployment\.lock\.[0-9]{8}T[0-9]{6}Z\.[0-9]+\.info' \
+    | head -1
 }
 
 # ------------------------------------------------------------------------------
@@ -677,23 +697,221 @@ run_lftp_once() {
 }
 
 # ------------------------------------------------------------------------------
-# run_lftp_lock_release SERVER NETRC_PATH LOCK_PATH
-#   Best-effort standalone lftp invocation that just runs
-#   `quote RMD <lock_path>` and quits. Used by the EXIT trap in
-#   entrypoint.sh to release the server-side concurrency lock if
-#   the main run_lftp_once was killed before reaching its in-script
-#   release (signal, OOM, hard timeout). Failures are silently
-#   swallowed because at this point the script is already on the
-#   way out; we do not want the cleanup itself to print spurious
-#   noise. Logs to /dev/null.
+# acquire_lock_with_recovery SERVER LOCK_PATH TIMEOUT_SECS POLL_SECS
+#   Acquire the server-side concurrency lock at LOCK_PATH on SERVER,
+#   polling up to TIMEOUT_SECS (with POLL_SECS between attempts).
+#   On a successful acquire, write a sentinel file at the FTP root
+#   named `.lftp-deployment.lock.<TIMESTAMP>.<PID>.info` and store
+#   the sentinel name in the global `ACQUIRED_LOCK_SENTINEL` so
+#   `release_lock_safely` (and the EXIT trap) can clean it up.
 #
-#   When the lock is disabled or LOCK_PATH is empty, this function
-#   is a no-op (it returns 0 without invoking lftp at all).
+#   Stale-lock recovery: on every MKD failure (550, lock held), the
+#   function does a `quote LIST -la .` to look for a sentinel file
+#   at the FTP root. If a sentinel exists and its embedded
+#   timestamp is older than TIMEOUT_SECS, the function assumes the
+#   previous holder died (OOM, SIGKILL, 6h job limit) and takes
+#   over: DELE the stale sentinel + RMD the lock dir, then
+#   immediately retry MKD (no sleep). If the sentinel is recent or
+#   missing, the function sleeps POLL_SECS and tries again.
+#
+#   Returns 0 on a successful acquire, 1 if the timeout is
+#   exhausted. The caller MUST have a writable ${NETRC} at $HOME
+#   and MUST have `set -e` disabled around the call to this
+#   function (or check the return value explicitly), because
+#   intermediate lftp calls may legitimately fail (timeout=0 fast
+#   path, transient network errors).
+#
+#   Reads: nothing. Reads $HOME for netrc discovery.
+#   Writes: ACQUIRED_LOCK_SENTINEL global (on success).
+# ------------------------------------------------------------------------------
+acquire_lock_with_recovery() {
+  _alwr_server=$1
+  _alwr_path=$2
+  _alwr_timeout=$3
+  _alwr_poll=$4
+
+  # Compute iteration count. timeout=0 means "no waiting, fail
+  # immediately if the lock is held" -> count=1.
+  if [ "${_alwr_timeout}" = "0" ]; then
+    _alwr_count=1
+  else
+    _alwr_count=$(( (_alwr_timeout + _alwr_poll - 1) / _alwr_poll ))
+  fi
+
+  # Sentinel identity for THIS acquisition. Timestamp is captured
+  # once per attempt-set; PID is the runner shell PID.
+  _alwr_stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  _alwr_pid=$$
+  _alwr_sentinel=$(_lock_sentinel_name "${_alwr_stamp}" "${_alwr_pid}")
+
+  # Inline lftp preamble: tighten reconnect intervals so a
+  # misconfigured server URL (refused connection, DNS failure) does
+  # not stall the action for lftp's default 15s-5min retry window.
+  # We use a sibling sentinel-style preamble that the main
+  # FTP_SETTINGS does not include (those are tuned for the mirror
+  # itself, which the user might WANT to ride out transient
+  # issues).
+  _alwr_preamble="set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5;"
+
+  _alwr_attempt=0
+  while [ "${_alwr_attempt}" -lt "${_alwr_count}" ]; do
+    _alwr_attempt=$((_alwr_attempt + 1))
+
+    # Step 1: try MKD. `set +e` because MKD on a held lock returns
+    # 550, which is the common case (not an error).
+    set +e
+    timeout 30s lftp "${_alwr_server}" \
+      -e "${_alwr_preamble} quote MKD ${_alwr_path}; quit;" \
+      >/dev/null 2>&1
+    _alwr_mkd_rc=$?
+    set -e
+
+    if [ "${_alwr_mkd_rc}" -eq 0 ]; then
+      # Got the lock. Write the sentinel so the next runner can
+      # tell whether we died mid-mirror. The sentinel content is
+      # not parsed (we use the FILENAME timestamp); we keep the
+      # body for human debugging via FTP `cat`.
+      _alwr_sentinel_body=$(mktemp 2>/dev/null) || _alwr_sentinel_body="/tmp/.lftp-lock-body.$$"
+      {
+        printf 'pid=%s\n' "${_alwr_pid}"
+        printf 'started_at=%s\n' "${_alwr_stamp}"
+        printf 'host=%s\n' "$(hostname 2>/dev/null || echo unknown)"
+      } > "${_alwr_sentinel_body}"
+      set +e
+      timeout 30s lftp "${_alwr_server}" \
+        -e "${_alwr_preamble} put ${_alwr_sentinel_body} -o ${_alwr_sentinel}; quit;" \
+        >/dev/null 2>&1
+      set -e
+      rm -f "${_alwr_sentinel_body}"
+
+      # Publish sentinel name for release_lock_safely.
+      ACQUIRED_LOCK_SENTINEL=${_alwr_sentinel}
+      return 0
+    fi
+
+    # Step 2: MKD failed (550 = held, or connection refused).
+    # Probe for a stale sentinel. We list the FTP root and grep
+    # for the sentinel pattern; if the timestamp in the filename
+    # is older than TIMEOUT_SECS, we take over.
+    set +e
+    _alwr_listing=$(timeout 10s lftp "${_alwr_server}" \
+      -e "${_alwr_preamble} quote LIST -la .; quit;" \
+      2>/dev/null)
+    set -e
+
+    _alwr_stale_file=$(_lock_parse_sentinel_listing "${_alwr_listing}")
+    _alwr_took_over=1
+    if [ -n "${_alwr_stale_file}" ]; then
+      _alwr_stale_stamp=$(printf '%s' "${_alwr_stale_file}" \
+        | sed -nE 's|^\.lftp-deployment\.lock\.([0-9TZ]+)\..*\.info$|\1|p')
+      if [ -n "${_alwr_stale_stamp}" ]; then
+        _alwr_now=$(date -u +%Y%m%dT%H%M%SZ)
+        _alwr_age=$(_lock_age_seconds "${_alwr_now}" "${_alwr_stale_stamp}")
+        if [ "${_alwr_age}" -lt "${_alwr_timeout}" ]; then
+          # Recent — legitimate holder, do not touch it.
+          _alwr_took_over=0
+        fi
+      fi
+    fi
+    # An empty or missing sentinel also counts as "stale" (the
+    # _alwr_took_over=1 default applies). This covers the race
+    # where the previous holder died between MKD and PUT.
+
+    if [ "${_alwr_took_over}" -eq 1 ]; then
+      # Stale (or empty). Take over: DELE the stale sentinel
+      # (best-effort, may not exist), RMD the lock dir, and
+      # IMMEDIATELY retry MKD without sleeping. We do not count
+      # this retry against the timeout because we've already
+      # waited; the next MKD attempt's MKD delay (if any) is the
+      # only thing on the critical path.
+      set +e
+      if [ -n "${_alwr_stale_file}" ]; then
+        timeout 10s lftp "${_alwr_server}" \
+          -e "${_alwr_preamble} quote DELE ${_alwr_stale_file}; quit;" \
+          >/dev/null 2>&1
+      fi
+      timeout 10s lftp "${_alwr_server}" \
+        -e "${_alwr_preamble} quote RMD ${_alwr_path}; quit;" \
+        >/dev/null 2>&1
+      set -e
+      continue
+    fi
+
+    # Lock is legitimately held. Wait and retry.
+    sleep "${_alwr_poll}"
+  done
+
+  return 1
+}
+
+# ------------------------------------------------------------------------------
+# release_lock_safely SERVER LOCK_PATH [SENTINEL]
+#   Best-effort release of the server-side concurrency lock:
+#   DELE the sentinel file (if SENTINEL is provided or
+#   $ACQUIRED_LOCK_SENTINEL is set), then RMD the lock dir. All
+#   failures are silently swallowed because the caller is
+#   typically on the way out (EXIT trap); the whole point of
+#   release is to fail soft.
+#
+#   SERVER: lftp server URL (e.g. ftp://host).
+#   LOCK_PATH: the lock dir on the FTP server (e.g. .lftp-deployment.lock).
+#   SENTINEL: (optional) the sentinel filename to DELE first. Falls
+#             back to $ACQUIRED_LOCK_SENTINEL. If neither is set,
+#             we skip the DELE (the lock dir alone is still RMDed
+#             — covers the case where the previous holder died
+#             before writing the sentinel).
+#
+#   Always returns 0.
+# ------------------------------------------------------------------------------
+release_lock_safely() {
+  _rls_server=$1
+  _rls_path=$2
+  _rls_sentinel=${3:-${ACQUIRED_LOCK_SENTINEL:-}}
+
+  if [ -z "${_rls_path}" ]; then
+    return 0
+  fi
+
+  # Same tightened reconnect preamble as acquire_lock_with_recovery:
+  # a misconfigured server should not stall the EXIT trap for
+  # 15s-5min of reconnect attempts.
+  _rls_preamble="set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5;"
+
+  set +e
+  if [ -n "${_rls_sentinel}" ]; then
+    timeout 30s lftp "${_rls_server}" \
+      -e "${_rls_preamble} quote DELE ${_rls_sentinel}; quote RMD ${_rls_path}; quit;" \
+      >/dev/null 2>&1
+  else
+    timeout 30s lftp "${_rls_server}" \
+      -e "${_rls_preamble} quote RMD ${_rls_path}; quit;" \
+      >/dev/null 2>&1
+  fi
+  set -e
+  return 0
+}
+
+# ------------------------------------------------------------------------------
+# run_lftp_lock_release SERVER NETRC_PATH LOCK_PATH [SENTINEL]
+#   Backward-compatibility shim. Used by the EXIT trap in
+#   entrypoint.sh to release the server-side concurrency lock if
+#   the main pipeline was killed before reaching the explicit
+#   release_lock_safely call (signal, OOM, hard timeout).
+#
+#   When the lock is disabled (LOCK_PATH empty) or the netrc file
+#   is missing (the EXIT trap may run after the netrc was already
+#   removed), this function is a no-op. Otherwise it delegates to
+#   release_lock_safely with the optional SENTINEL argument.
+#
+#   Failures are silently swallowed because at this point the
+#   script is already on the way out; we do not want the cleanup
+#   itself to print spurious noise. Logs to /dev/null.
 # ------------------------------------------------------------------------------
 run_lftp_lock_release() {
   _rlr_server=$1
   _rlr_netrc=$2
   _rlr_lock_path=$3
+  _rlr_sentinel=${4:-}
 
   if [ -z "${_rlr_lock_path}" ]; then
     return 0
@@ -702,15 +920,7 @@ run_lftp_lock_release() {
     return 0
   fi
 
-  # `set +e` so a non-zero lftp exit does not abort the parent
-  # trap. The whole point of this function is to fail soft.
-  set +e
-  timeout 30s lftp \
-    "${_rlr_server}" \
-    -e "quote RMD ${_rlr_lock_path}; quit;" \
-    >/dev/null 2>&1
-  set -e
-  return 0
+  release_lock_safely "${_rlr_server}" "${_rlr_lock_path}" "${_rlr_sentinel}"
 }
 
 # ------------------------------------------------------------------------------

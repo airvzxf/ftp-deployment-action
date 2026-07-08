@@ -338,19 +338,44 @@ worst-case outcome is that the lock briefly stays held by
 a dead runner — which the `concurrency_lock_timeout`
 catches.
 
-**Stale lock risk.** If the holder dies before RMD (runner
-OOM, the 5h hard timeout, a `kill -9` from the runner host),
-subsequent runs will wait the full `concurrency_lock_timeout`
-and then fail. To recover without waiting, log in to the
-FTP and remove the sentinel directory manually:
+**Stale lock risk and auto-recovery (v2.9.0).** If the holder
+dies before RMD (runner OOM, the 5h hard timeout, a
+`kill -9` from the runner host), v2.9.0+ writes a
+timestamp-encoded sentinel file at the FTP root before
+starting the mirror. The next runner sees the lock held,
+`LIST`s the FTP root, parses the sentinel's timestamp, and:
+
+- If the sentinel is **older** than `concurrency_lock_timeout`
+  seconds: treats the lock as stale, `DELE`s the sentinel,
+  `RMD`s the lock dir, and retries MKD immediately.
+- If the sentinel is **recent** (legitimate holder): polls
+  normally up to `concurrency_lock_timeout` and then fails.
+- If the lock dir exists but **no sentinel** is present
+  (the previous holder died between MKD and the sentinel
+  PUT, a microsecond race): also treats as stale and
+  takes over.
+
+The sentinel filename encodes the timestamp and the runner
+PID, e.g.
+`.lftp-deployment.lock.20260707T080000Z.1234.info`. The
+file lives at the FTP root as a sibling of the lock dir so
+the release path can do `quote RMD` without recursive
+delete (FTP RMD on a non-empty dir returns 550).
+
+If you need to force-recover a stuck lock *without* waiting
+for the auto-detection (e.g. you want to push a hotfix and
+`concurrency_lock_timeout` is set to a high value), log in
+to the FTP and remove the sentinel + the lock dir manually:
 
 ```sh
-lftp -u user,pw ftp://example.com -e "rm -rf .lftp-deployment.lock; quit;"
+lftp -u user,pw ftp://example.com \
+  -e "quote DELE .lftp-deployment.lock.<stamp>.<pid>.info; \
+      quote RMD .lftp-deployment.lock; quit;"
 ```
 
-A timestamp-sentinel inside the lock directory (so the
-action can auto-detect staleness) is on the roadmap for a
-future release.
+The manual recovery is rarely needed with the default
+`concurrency_lock_timeout: 300` (5 minutes): a stale lock
+surfaces within a normal workflow run.
 
 **Customizing the lock path.** If you have several
 deployments against the same FTP server (e.g. one for
