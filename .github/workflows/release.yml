@@ -71,6 +71,9 @@ jobs:
           # ghcr.io is always published (GITHUB_TOKEN is automatic).
           tags="${image}:${version}"$'\n'"${image}:${tag}"$'\n'"${image}:latest"
 
+          dockerhub_image=""
+          ecr_image=""
+
           if [ -n "${DOCKERHUB_USERNAME}" ] && [ -n "${DOCKERHUB_TOKEN}" ]; then
             dockerhub_image="docker.io/airvzxf/ftp-deployment-action"
             tags="${tags}"$'\n'"${dockerhub_image}:${version}"$'\n'"${dockerhub_image}:${tag}"$'\n'"${dockerhub_image}:latest"
@@ -95,12 +98,29 @@ jobs:
             echo "::notice::AWS_ROLE_TO_ASSUME secret not set; skipping public.ecr.aws publish"
           fi
 
-          # Heredoc-style multi-line output for `all_tags`. The
-          # build-push step consumes it as a YAML block scalar;
-          # the trailing newline is stripped by the consumer.
+          # Heredoc-style multi-line output for `all_tags`. Each tag
+          # is written on its own line with `echo` so the EOF
+          # delimiter lands on its own line — `printf '%s'` would
+          # glue the last tag to the EOF marker and trip GitHub's
+          # output parser with "Matching delimiter not found 'EOF'".
+          # This per-line shape also guarantees no trailing newline
+          # on the last tag, which would otherwise produce a spurious
+          # empty tag in docker/build-push-action.
           {
             echo "all_tags<<EOF"
-            printf '%s' "${tags}"
+            echo "${image}:${version}"
+            echo "${image}:${tag}"
+            echo "${image}:latest"
+            if [ -n "${dockerhub_image}" ]; then
+              echo "${dockerhub_image}:${version}"
+              echo "${dockerhub_image}:${tag}"
+              echo "${dockerhub_image}:latest"
+            fi
+            if [ -n "${ecr_image}" ]; then
+              echo "${ecr_image}:${version}"
+              echo "${ecr_image}:${tag}"
+              echo "${ecr_image}:latest"
+            fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
