@@ -175,18 +175,23 @@ jobs:
             echo "body-file=${body_file}" >> "$GITHUB_OUTPUT"
           fi
 
-      # Create a draft GitHub Release so a human can review and
-      # publish it after the image is already on ghcr.io. Drafts
-      # are intentional (not auto-publish): the maintainer reads
-      # the rendered body and the asset list before going public.
+      # Create a GitHub Release for the tag. Auto-publish: a tag
+      # in this repo is the maintainer's already-made decision to
+      # ship, so the release goes live the moment the image is
+      # signed and attached (no manual click). If a release turns
+      # out to be wrong, the recovery path is a hotfix tag +
+      # `gh release edit <bad-tag> --prerelease` (or delete via
+      # the API), not a draft kept in reserve. `make_latest: 'true'`
+      # marks this release as Latest so notification feeds and
+      # tooling that hits `/releases/latest` see the new tag.
       # If the previous step did not find a CHANGELOG section,
-      # `generate_release_notes: true` lets GitHub build the body
-      # from the tag delta instead.
-      - name: Create draft GitHub Release
+      # `generate_release_notes` builds the body from the tag
+      # delta as a fallback.
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.tag }}
-          draft: true
+          make_latest: 'true'
           generate_release_notes: ${{ steps.notes.outputs.body-empty == 'true' }}
           body_path: ${{ steps.notes.outputs.body-file }}
