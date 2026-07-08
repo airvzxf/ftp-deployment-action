@@ -16,6 +16,9 @@ on:
         required: true
         type: string
 
+# `id-token: write` is required for two OIDC flows: cosign keyless
+# signing (Sigstore Fulcio) and AWS role assumption
+# (aws-actions/configure-aws-credentials@v4 with role-to-assume).
 permissions:
   contents: write
   packages: write
@@ -26,10 +29,31 @@ jobs:
   release:
     name: Build, sign and publish
     runs-on: ubuntu-latest
+    # The pipeline tolerates the absence of DOCKERHUB_* and
+    # AWS_ROLE_TO_ASSUME secrets: in that case the corresponding
+    # registry is skipped (a ::notice:: is emitted). ghcr.io is
+    # always published because GITHUB_TOKEN is automatic. Set
+    # both Docker Hub PAT secrets and AWS_ROLE_TO_ASSUME on the
+    # repo to publish to all three registries on every release.
+    # See README section "Publishing targets" for the one-time
+    # setup.
     steps:
-      - name: Resolve tag and version
+      # v2.10.0+: this step resolves the tag/version (unchanged
+      # from v2.9.0) AND decides which secondary registries are
+      # enabled, based on the presence of
+      # DOCKERHUB_USERNAME+DOCKERHUB_TOKEN and AWS_ROLE_TO_ASSUME
+      # secrets. The `all_tags` output is a heredoc YAML literal
+      # the build-push step consumes verbatim; conditional
+      # registries contribute zero lines because we only append
+      # when their flag is on.
+      - name: Resolve tag, version and enabled registries
         id: meta
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
         run: |
+          set -eu
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             tag="${{ inputs.version }}"
           else
@@ -37,12 +61,52 @@ jobs:
           fi
           version="${tag#v}"
           image="ghcr.io/${{ github.repository_owner }}/ftp-deployment-action"
+
           {
             echo "tag=${tag}"
             echo "version=${version}"
             echo "image=${image}"
           } >> "$GITHUB_OUTPUT"
-          echo "Resolved tag=${tag}, version=${version}, image=${image}"
+
+          # ghcr.io is always published (GITHUB_TOKEN is automatic).
+          tags="${image}:${version}"$'\n'"${image}:${tag}"$'\n'"${image}:latest"
+
+          if [ -n "${DOCKERHUB_USERNAME}" ] && [ -n "${DOCKERHUB_TOKEN}" ]; then
+            dockerhub_image="docker.io/airvzxf/ftp-deployment-action"
+            tags="${tags}"$'\n'"${dockerhub_image}:${version}"$'\n'"${dockerhub_image}:${tag}"$'\n'"${dockerhub_image}:latest"
+            {
+              echo "dockerhub_image=${dockerhub_image}"
+              echo "dockerhub_enabled=true"
+            } >> "$GITHUB_OUTPUT"
+            echo "Docker Hub publishing ENABLED (${dockerhub_image})"
+          else
+            echo "::notice::Docker Hub secrets (DOCKERHUB_USERNAME, DOCKERHUB_TOKEN) not set; skipping docker.io publish"
+          fi
+
+          if [ -n "${AWS_ROLE_TO_ASSUME}" ]; then
+            ecr_image="public.ecr.aws/airvzxf/ftp-deployment-action"
+            tags="${tags}"$'\n'"${ecr_image}:${version}"$'\n'"${ecr_image}:${tag}"$'\n'"${ecr_image}:latest"
+            {
+              echo "ecr_image=${ecr_image}"
+              echo "ecr_enabled=true"
+            } >> "$GITHUB_OUTPUT"
+            echo "ECR Public publishing ENABLED (${ecr_image})"
+          else
+            echo "::notice::AWS_ROLE_TO_ASSUME secret not set; skipping public.ecr.aws publish"
+          fi
+
+          # Heredoc-style multi-line output for `all_tags`. The
+          # build-push step consumes it as a YAML block scalar;
+          # the trailing newline is stripped by the consumer.
+          {
+            echo "all_tags<<EOF"
+            printf '%s' "${tags}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Resolved tag=${tag}, version=${version}"
+          echo "Tags to push:"
+          printf '%s\n' "${tags}"
 
       - name: Checkout source at the release tag
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -60,6 +124,47 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # v2.10.0+: Docker Hub is a SECONDARY publish target. The
+      # conditional is gated on both DOCKERHUB_USERNAME and
+      # DOCKERHUB_TOKEN being present; missing either is a no-op
+      # (with a ::notice:: from the meta step) so forks and the
+      # upstream maintainer can iterate without touching secrets
+      # globally.
+      - name: Log in to Docker Hub
+        if: ${{ steps.meta.outputs.dockerhub_enabled == 'true' }}
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # v2.10.0+: ECR Public is a SECONDARY publish target. OIDC
+      # role assumption (no static AWS secrets) is configured in
+      # two steps: configure-aws-credentials assumes the role and
+      # exports AWS_ACCESS_KEY_ID/secret/session to subsequent
+      # steps; amazon-ecr-login then uses those credentials to
+      # call ecr-public:GetAuthorizationToken and to docker login
+      # to public.ecr.aws. The IAM role trust policy must list
+      # `token.actions.githubusercontent.com` as a federated
+      # principal with a `sub` condition matching this repo (see
+      # README section "Publishing targets" for the JSON).
+      - name: Configure AWS credentials (OIDC) for ECR Public
+        if: ${{ steps.meta.outputs.ecr_enabled == 'true' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          # ECR Public control plane lives in us-east-1 regardless
+          # of where the ECR Public registry "lives" (ECR Public
+          # has no region concept; the public.ecr.aws endpoint is
+          # global).
+          aws-region: us-east-1
+
+      - name: Log in to ECR Public
+        if: ${{ steps.meta.outputs.ecr_enabled == 'true' }}
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
       - name: Build and push image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -71,10 +176,12 @@ jobs:
           # deprecation warning can print the actual image version
           # (default in the Dockerfile is "dev" for local builds).
           build-args: VERSION=${{ steps.meta.outputs.tag }}
-          tags: |
-            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
-            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
-            ${{ steps.meta.outputs.image }}:latest
+          # `all_tags` is a multi-line string emitted by the meta
+          # step. The buildx builder receives every tag exactly
+          # once and pushes each to the corresponding registry
+          # (docker/build-push-action routes per-tag based on the
+          # registry hostname).
+          tags: ${{ steps.meta.outputs.all_tags }}
           labels: |
             org.opencontainers.image.title=ftp-deployment-action
             org.opencontainers.image.description=GitHub Action that copies files via FTP/FTPS using lftp
@@ -87,7 +194,7 @@ jobs:
       # v2.4.0+: smoke-test the just-pushed image before signing
       # and attaching the SBOM. The release pipeline previously
       # only exercised the image via CI (which runs init.sh
-      # against a plain alpine:3.23.3 — not the published image
+      # against a plain alpine:3.23.3, not the published image
       # with its pinned lftp and ca-certificates versions). The
       # v2.3.0 release was cut and pushed with a build that
       # could not resolve lftp=4.9.2-r9 against the new alpine
@@ -98,9 +205,16 @@ jobs:
       # pulls the just-pushed image, runs three cheap checks
       # (path-traversal validation, deprecation warning, the
       # /app/VERSION bake), and aborts the pipeline on any
-      # failure. SBOM generation, cosign signing, and the
-      # SBOM attestation are skipped on failure, so we never
-      # publish or sign a broken image.
+      # failure. SBOM generation, cosign signing, and the SBOM
+      # attestation are skipped on failure, so we never publish
+      # or sign a broken image.
+      #
+      # v2.10.0+: smoke-test only the ghcr.io image. The three
+      # registries receive the exact same image bytes from a
+      # single `docker buildx build`, so a ghcr.io failure
+      # implies the same failure on docker.io and public.ecr.aws.
+      # Pulling the image three times would triple the pipeline
+      # latency for zero added coverage.
       - name: Smoke test the just-pushed image
         env:
           IMAGE: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
@@ -124,17 +238,53 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
+      # v2.10.0+: sign every published image. The digest is the
+      # same across registries (single build produces one OCI
+      # manifest, identical digests), so we sign
+      # `<registry>/<ns>/image@digest` per enabled registry. The
+      # digest is captured into an env var so secret masking
+      # doesn't apply.
       - name: Sign image with cosign (keyless, OIDC)
         env:
           COSIGN_EXPERIMENTAL: '1'
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          cosign sign --yes \
-            ${{ steps.meta.outputs.image }}@${{ steps.build.outputs.digest }}
+          set -eu
+          cosign sign --yes "${{ steps.meta.outputs.image }}@${DIGEST}"
+          if [ "${{ steps.meta.outputs.dockerhub_enabled }}" = "true" ]; then
+            cosign sign --yes "${{ steps.meta.outputs.dockerhub_image }}@${DIGEST}"
+          fi
+          if [ "${{ steps.meta.outputs.ecr_enabled }}" = "true" ]; then
+            cosign sign --yes "${{ steps.meta.outputs.ecr_image }}@${DIGEST}"
+          fi
 
-      - name: Attach SBOM attestation to the image
+      # v2.10.0+: attach the SBOM attestation to every published
+      # image. `actions/attest` takes a single (subject-name,
+      # subject-digest) pair per call, so we invoke it once per
+      # enabled registry. The signature, attestation, and image
+      # manifest together constitute the supply-chain bundle.
+      - name: Attach SBOM attestation to ghcr.io image
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
         with:
           subject-name: ${{ steps.meta.outputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: sbom.cyclonedx.json
+          push-to-registry: true
+
+      - name: Attach SBOM attestation to Docker Hub image
+        if: ${{ steps.meta.outputs.dockerhub_enabled == 'true' }}
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-name: ${{ steps.meta.outputs.dockerhub_image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: sbom.cyclonedx.json
+          push-to-registry: true
+
+      - name: Attach SBOM attestation to ECR Public image
+        if: ${{ steps.meta.outputs.ecr_enabled == 'true' }}
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-name: ${{ steps.meta.outputs.ecr_image }}
           subject-digest: ${{ steps.build.outputs.digest }}
           sbom-path: sbom.cyclonedx.json
           push-to-registry: true

@@ -89,6 +89,126 @@ jobs:
 > tag (`@v2.0.0`) or a full commit SHA. Avoid `@latest` and `@main` —
 > they move under you and can introduce regressions.
 
+## Publishing targets (v2.10.0+)
+
+Every tag is published to **three registries** so consumers can
+pick whichever is closest (or already trusted) in their supply chain:
+
+| Registry | Image | How to consume |
+|---|---|---|
+| GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.10.0` | `uses: airvzxf/ftp-deployment-action@v2` (the example above) |
+| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.10.0` | `uses: docker://docker.io/airvzxf/ftp-deployment-action@v2` |
+| AWS ECR Public | `public.ecr.aws/airvzxf/ftp-deployment-action:v2.10.0` | `uses: docker://public.ecr.aws/airvzxf/ftp-deployment-action@v2` |
+
+All three carry the same OCI image bytes (one `docker buildx build`,
+one digest), the same `cosign` keyless signature
+(`cosign verify --certificate-identity-regexp ... --certificate-oidc-issuer ...`
+against any of the three image refs), and the same CycloneDX SBOM
+attestation (attached via `actions/attest`). ghcr.io is always
+published; Docker Hub and ECR Public are **conditional on the
+repo having the right secrets configured** (see the
+[Maintainer setup](#maintainer-setup-publishing-to-docker-hub-and-ecr-public)
+section below). If a secret is missing, the release pipeline
+emits a `::notice::` and skips that registry — the v2.9.0
+behaviour (ghcr.io only) is preserved bit-for-bit.
+
+### Maintainer setup: publishing to Docker Hub and ECR Public
+
+These are **one-time** per-registry setups. They are not required
+to use the action; they are only required if you are the
+maintainer pushing new releases.
+
+**Docker Hub** (publishes to `docker.io/airvzxf/ftp-deployment-action`):
+
+1. Create a Docker Hub Personal Access Token (PAT) at
+   <https://hub.docker.com/settings/security> (read + write +
+   delete is fine; we only push).
+2. Add two repository secrets on
+   <https://github.com/airvzxf/ftp-deployment-action/settings/secrets/actions>:
+   * `DOCKERHUB_USERNAME` — your Docker Hub username (the namespace
+     owner; for this repo, that is `airvzxf`).
+   * `DOCKERHUB_TOKEN` — the PAT from step 1.
+3. Tag and push the next release. The pipeline will detect both
+   secrets and push to docker.io alongside ghcr.io.
+
+**ECR Public with OIDC** (publishes to
+`public.ecr.aws/airvzxf/ftp-deployment-action` — no static AWS
+secrets):
+
+1. Create an ECR Public repository in the AWS account you want
+   to publish from. The repository's **alias** must be `airvzxf`
+   (so the URL is `public.ecr.aws/airvzxf/ftp-deployment-action`).
+   Aliases are globally unique within ECR Public; pick one you own.
+2. Create an IAM role with the following trust policy
+   (replace `ACCOUNT_ID` with your 12-digit AWS account ID):
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Principal": {
+           "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
+         },
+         "Action": "sts:AssumeRoleWithWebIdentity",
+         "Condition": {
+           "StringEquals": {
+             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+           },
+           "StringLike": {
+             "token.actions.githubusercontent.com:sub": "repo:airvzxf/ftp-deployment-action:ref:refs/tags/v*"
+           }
+         }
+       }
+     ]
+   }
+   ```
+
+   The `sub` condition pins the role to *tag pushes only* of this
+   repo — pull requests and `workflow_dispatch` runs from forks
+   cannot assume it.
+
+3. Attach an inline policy granting the minimum ECR Public perms:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": [
+           "ecr-public:GetAuthorizationToken"
+         ],
+         "Resource": "*"
+       },
+       {
+         "Effect": "Allow",
+         "Action": [
+           "ecr-public:BatchCheckLayerAvailability",
+           "ecr-public:PutImage",
+           "ecr-public:InitiateLayerUpload",
+           "ecr-public:UploadLayerPart",
+           "ecr-public:CompleteLayerUpload"
+         ],
+         "Resource": "arn:aws:ecr-public::ACCOUNT_ID:repository/airvzxf/ftp-deployment-action"
+       }
+     ]
+   }
+   ```
+
+4. Add one repository secret:
+   `AWS_ROLE_TO_ASSUME` — the role ARN from step 2
+   (e.g. `arn:aws:iam::ACCOUNT_ID:role/ftp-deployment-action-publisher`).
+5. Tag and push the next release. The pipeline will assume the
+   role via OIDC (`aws-actions/configure-aws-credentials@v4`)
+   and login with `aws-actions/amazon-ecr-login@v2`. No static
+   AWS access keys are stored in the repo.
+
+**Skipping a registry**: leave its secrets unset. The pipeline
+emits a `::notice::` and falls back to the registries that *do*
+have secrets configured. The ghcr.io path is unaffected.
+
 ## Settings
 
 Usually the zero values mean unlimited or infinite. This table is based on the default values on `lftp-4.9.2`.
