@@ -807,7 +807,16 @@ acquire_lock_with_recovery() {
       if [ -n "${_alwr_stale_stamp}" ]; then
         _alwr_now=$(date -u +%Y%m%dT%H%M%SZ)
         _alwr_age=$(_lock_age_seconds "${_alwr_now}" "${_alwr_stale_stamp}")
-        if [ "${_alwr_age}" -lt "${_alwr_timeout}" ]; then
+        # `<= timeout` (not `<`) — the timeout represents the maximum
+        # age at which we still consider the sentinel recent, so a
+        # sentinel whose age is exactly `timeout` is at the boundary
+        # and must still be respected. Using `<` here would make
+        # the comparison racy when `_alwr_now` and the sentinel's
+        # timestamp straddle a second boundary (test #19 catches
+        # this: a sentinel stamped at "now" but observed one
+        # second later would have age=1 vs timeout=1 and be
+        # mis-classified as stale, triggering an unwanted DELE/RMD).
+        if [ "${_alwr_age}" -le "${_alwr_timeout}" ]; then
           # Recent — legitimate holder, do not touch it.
           _alwr_took_over=0
         fi
