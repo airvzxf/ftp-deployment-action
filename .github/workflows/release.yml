@@ -181,7 +181,7 @@ jobs:
 
       - name: Log in to ECR Public
         if: ${{ steps.meta.outputs.ecr_enabled == 'true' }}
-        uses: aws-actions/amazon-ecr-login@b040164c4934333d597f3f9c67502ff28f814e9c # v2.1.6
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2.1.6
         with:
           registry-type: public
 
@@ -358,7 +358,7 @@ jobs:
       # `generate_release_notes` builds the body from the tag
       # delta as a fallback.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@2bb465e97f322d3cb2a965294d483e0d26a67aa9 # v3.0.1
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.tag }}
