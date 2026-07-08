@@ -9,6 +9,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Multi-registry publishing for releases (LP-7)**. Every tag is
+  now pushed to **three** OCI registries (when the corresponding
+  secrets are present on the repo):
+
+  | Registry | Image | How to consume |
+  |---|---|---|
+  | ghcr.io (always) | `ghcr.io/airvzxf/ftp-deployment-action:<tag>` | `uses: airvzxf/ftp-deployment-action@v2` |
+  | Docker Hub (opt-in) | `docker.io/airvzxf/ftp-deployment-action:<tag>` | `uses: docker://docker.io/airvzxf/ftp-deployment-action@v2` |
+  | AWS ECR Public (opt-in, OIDC) | `public.ecr.aws/airvzxf/ftp-deployment-action:<tag>` | `uses: docker://public.ecr.aws/airvzxf/ftp-deployment-action@v2` |
+
+  The three registries receive the **same image bytes** from a
+  single `docker buildx build` (identical OCI manifest digest),
+  the **same** `cosign` keyless signature, and the **same**
+  CycloneDX SBOM attestation attached via `actions/attest`.
+  Docker Hub and ECR Public are **conditional on secrets
+  presence** — if `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` or
+  `AWS_ROLE_TO_ASSUME` are unset on the repo, the pipeline emits
+  a `::notice::` and skips that registry, preserving the v2.9.0
+  behaviour (ghcr.io only) bit-for-bit. The one-time setup for
+  Docker Hub (PAT) and ECR Public (OIDC IAM role + trust
+  policy) is documented in README §"Publishing targets".
+
+  *AWS auth uses OIDC role assumption* (no static AWS access
+  keys are stored in the repo): `aws-actions/configure-aws-credentials@v4`
+  assumes the role from `AWS_ROLE_TO_ASSUME`, and
+  `aws-actions/amazon-ecr-login@v2` performs the docker login
+  to `public.ecr.aws` using the resulting session credentials.
+  The IAM trust policy is pinned to `sub: repo:airvzxf/ftp-deployment-action:ref:refs/tags/v*`
+  so only signed-tag pushes from this repo can assume it.
+
+  The release pipeline (`release.yml`) changes are concentrated
+  in two steps: the `meta` step now resolves `all_tags`,
+  `dockerhub_enabled`, and `ecr_enabled` outputs based on secret
+  presence, and `cosign sign` + `actions/attest` are now invoked
+  once per enabled registry (ghcr.io is unconditional). The
+  smoke test deliberately pulls from ghcr.io only — the three
+  registries share one OCI manifest, so a ghcr.io failure
+  implies the same failure on docker.io and public.ecr.aws.
+
+### Documentation
+
+- **README §"Publishing targets"** — new section listing the
+  three registries, example `uses:` lines for each, and the
+  one-time maintainer setup for Docker Hub (PAT + 2 secrets)
+  and ECR Public (OIDC IAM role with a copy-pasteable trust
+  policy JSON and the minimum ECR Public permission set).
+- **README troubleshooting note** — a single new sentence
+  pointing users who explicitly want to consume from Docker Hub
+  or ECR Public at the `docker://` prefix pattern.
+
+
+## [2.9.0] - 2026-07-08
+
+### Added
+
 - **Stale-lock auto-recovery for `concurrency_lock`** (closes the
   residual risk from v2.8.0 documented in the CHANGELOG entry for
   v2.8.0 and the `concurrency_lock` input description: "if the
@@ -587,6 +642,7 @@ Four PRs on top of v2.1.0. No breaking change.
 [2.1.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.0.1...v2.1.0
 [2.0.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v1.5.0...v2.0.0
 [1.5.0]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.5.0
+[2.9.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.8.0...v2.9.0
 [1.3.3]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.3.3
 
 ## [2.1.0] - 2026-07-05
@@ -792,5 +848,6 @@ Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 [2.1.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.0.1...v2.1.0
 [2.0.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v1.5.0...v2.0.0
 [1.5.0]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.5.0
+[2.9.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.8.0...v2.9.0
 [2.4.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.4.0...v2.4.1
 [1.3.3]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.3.3
