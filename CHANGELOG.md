@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Stale-lock auto-recovery for `concurrency_lock`** (closes the
+  residual risk from v2.8.0 documented in the CHANGELOG entry for
+  v2.8.0 and the `concurrency_lock` input description: "if the
+  holder dies before RMD, subsequent runs will wait until
+  `concurrency_lock_timeout` and then fail with exit 1"). When
+  `concurrency_lock: "true"` is set, every successful acquire
+  now writes a timestamp-encoded sentinel file at the FTP root
+  (sibling of the lock dir, NOT inside it, so the release path
+  can `quote RMD` without recursive delete). On a subsequent
+  acquire, if MKD returns 550 (held), the action does
+  `quote LIST -la .` to look for a sentinel; if the sentinel's
+  timestamp is older than `concurrency_lock_timeout` seconds,
+  the action takes over by `quote DELE`-ing the stale sentinel
+  and `quote RMD`-ing the lock dir, then retrying MKD
+  immediately. If the sentinel is recent, the action polls
+  normally. If the lock dir exists but no sentinel is present
+  (the previous holder died between MKD and the sentinel PUT),
+  the action also takes over.
+
+  ```yaml
+  - uses: airvzxf/ftp-deployment-action@v2
+    with:
+      server: ${{ secrets.FTP_SERVER }}
+      user: ${{ secrets.FTP_USERNAME }}
+      password: ${{ secrets.FTP_PASSWORD }}
+      concurrency_lock: "true"
+      # Optional: tune the stale threshold (default 300s = 5 min).
+      concurrency_lock_timeout: "300"
+  ```
+
+  The lock work moved out of the inline lftp `-e` script
+  (v2.8.0) into shell-driven helpers in `lib.sh`
+  (`acquire_lock_with_recovery`, `release_lock_safely`,
+  `_lock_sentinel_name`, `_lock_age_seconds`,
+  `_lock_parse_sentinel_listing`) so the LIST/parse/DELE/RMD
+  sequence can branch on the stale detection result. The old
+  `build_lock_acquire_script` and `build_lock_release_script`
+  functions are kept as no-op shims for source-level backward
+  compat. Default behaviour (lock disabled) is bit-for-bit
+  identical to v2.8.0.
+
 ### Documentation
 
 - **README: document the difference between plain FTP, implicit

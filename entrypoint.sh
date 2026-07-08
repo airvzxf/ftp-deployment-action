@@ -157,9 +157,13 @@ INPUT_REMOTE_DIR=$(normalize_dir "${INPUT_REMOTE_DIR}")
 validate_path "local_dir"  "${INPUT_LOCAL_DIR}"
 validate_path "remote_dir" "${INPUT_REMOTE_DIR}"
 MIRROR_COMMAND=$(build_mirror_command)
-# v2.8.0: server-side concurrency lock fragments. Both echo empty
-# when INPUT_CONCURRENCY_LOCK is not "true", so the no-op case
-# produces a bit-for-bit identical lftp -e script as v2.7.0.
+# v2.8.0: server-side concurrency lock fragments. Both functions
+# are no-ops as of v2.9.0 — the lock work moved out of the lftp
+# -e fragment to shell-driven helpers (acquire_lock_with_recovery
+# and release_lock_safely) so the stale-lock auto-recovery can
+# LIST/parse/DELE/RMD without fighting lftp's flow-control. The
+# assignments are kept for backward compat with anyone sourcing
+# lib.sh; their values are always empty.
 LOCK_ACQUIRE=$(build_lock_acquire_script)
 LOCK_RELEASE=$(build_lock_release_script)
 
@@ -190,7 +194,47 @@ write_netrc "${NETRC}" "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
 # is disabled, so installing the extended trap unconditionally is
 # safe and keeps the no-lock code path bit-for-bit identical to
 # v2.7.0.
-trap 'run_lftp_lock_release "${INPUT_SERVER}" "${NETRC}" "${INPUT_CONCURRENCY_LOCK_PATH}"; rm -f "${NETRC}"' EXIT
+#
+# v2.9.0: pass the sentinel name (if any was acquired during this
+# run) so the trap can also DELE the sentinel file. We use the
+# empty string as the default — run_lftp_lock_release falls back
+# to $ACQUIRED_LOCK_SENTINEL, which is set by acquire_lock_with_recovery.
+trap 'run_lftp_lock_release "${INPUT_SERVER}" "${NETRC}" "${INPUT_CONCURRENCY_LOCK_PATH}" "${ACQUIRED_LOCK_SENTINEL:-}"; rm -f "${NETRC}"' EXIT
+
+# ------------------------------------------------------------------------------
+# v2.9.0: acquire the server-side concurrency lock BEFORE the
+# mirror loop. The lock is held for the entire deployment
+# (including the retry sequence) and released by the EXIT trap
+# installed above. If the lock cannot be acquired within
+# INPUT_CONCURRENCY_LOCK_TIMEOUT seconds (and the existing holder
+# is not detected as stale), print a clear error and exit 1 so
+# the workflow fails fast.
+#
+# Stale-lock auto-recovery (v2.9.0): if the existing holder's
+# sentinel is older than INPUT_CONCURRENCY_LOCK_TIMEOUT seconds,
+# acquire_lock_with_recovery takes over by DELEing the stale
+# sentinel and RMDing the lock dir, then retrying MKD. This
+# closes the residual risk from v2.8.0 documented in the README
+# ("if the holder dies before RMD, subsequent runs will wait
+# until `concurrency_lock_timeout` and then fail with exit 1").
+# ------------------------------------------------------------------------------
+if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
+  printf '::group::Concurrency lock acquire\n'
+  if ! acquire_lock_with_recovery \
+       "${INPUT_SERVER}" \
+       "${INPUT_CONCURRENCY_LOCK_PATH}" \
+       "${INPUT_CONCURRENCY_LOCK_TIMEOUT}" \
+       "${INPUT_CONCURRENCY_LOCK_POLL_INTERVAL}"; then
+    printf '::endgroup::\n'
+    printf 'ERROR: could not acquire concurrency lock at %s within %s seconds\n' \
+      "${INPUT_CONCURRENCY_LOCK_PATH}" "${INPUT_CONCURRENCY_LOCK_TIMEOUT}" >&2
+    printf 'ERROR: another deployment is currently in progress, or the previous holder crashed mid-mirror.\n' >&2
+    printf 'ERROR: see README "Concurrency / deployment lock" for manual recovery instructions.\n' >&2
+    exit 1
+  fi
+  printf 'Acquired concurrency lock (sentinel=%s).\n' "${ACQUIRED_LOCK_SENTINEL}"
+  printf '::endgroup::\n'
+fi
 
 # ------------------------------------------------------------------------------
 # Execute the LFTP actions.

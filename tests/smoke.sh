@@ -536,5 +536,46 @@ echo "${out}" | grep -q "^EXIT=2" \
   || fail "concurrency_lock_poll_interval=0 did not exit 2; output was:\n${out}"
 pass "concurrency_lock_poll_interval=0 is rejected with exit 2"
 
+# ----------------------------------------------------------------------------
+# Test 34 (v2.9.0): INPUT_CONCURRENCY_LOCK=true against an
+# unreachable server with a short timeout — entrypoint.sh must
+# print the "could not acquire concurrency lock" error and exit 1,
+# WITHOUT attempting the mirror. Validates the integration of the
+# new acquire_lock_with_recovery helper with the entrypoint flow
+# (the lock failure must surface as a clear, top-level error, not
+# as a generic mirror failure).
+# ----------------------------------------------------------------------------
+out=$(run_init "INPUT_CONCURRENCY_LOCK=true" "INPUT_CONCURRENCY_LOCK_TIMEOUT=1" "INPUT_CONCURRENCY_LOCK_POLL_INTERVAL=1" "INPUT_MAX_RETRIES=1" 30)
+echo "${out}" | grep -q "could not acquire concurrency lock" \
+  || fail "INPUT_CONCURRENCY_LOCK=true + unreachable server did not print lock-acquire error; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=1" \
+  || fail "INPUT_CONCURRENCY_LOCK=true + unreachable server did not exit 1; output was:\n${out}"
+# The mirror itself must NOT have been attempted (lock acquire
+# happens before the mirror; if it fails, we go straight to the
+# error path, not through run_lftp_once).
+if echo "${out}" | grep -q "FTP UPLOADED FINISHED"; then
+  fail "lock acquire failure should not reach the mirror; output was:\n${out}"
+fi
+pass "INPUT_CONCURRENCY_LOCK=true + unreachable server fails fast with lock-acquire error"
+
+# ----------------------------------------------------------------------------
+# Test 35 (v2.9.0): INPUT_CONCURRENCY_LOCK=false (default) on an
+# unreachable server must reach the mirror phase and exit with
+# the regular "UPLOAD FAILED" banner. Regression: ensures the
+# refactor of build_lock_acquire_script/build_lock_release_script
+# to no-ops in v2.9.0 did not change the disabled-lock code
+# path.
+# ----------------------------------------------------------------------------
+out=$(run_init "INPUT_CONCURRENCY_LOCK=false" "INPUT_MAX_RETRIES=1" 30)
+echo "${out}" | grep -q "ERROR: UPLOAD FAILED" \
+  || fail "INPUT_CONCURRENCY_LOCK=false + unreachable server did not show regular failure banner; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=1" \
+  || fail "INPUT_CONCURRENCY_LOCK=false + unreachable server did not exit 1; output was:\n${out}"
+# The lock acquire group must NOT have been entered.
+if echo "${out}" | grep -q "Concurrency lock acquire"; then
+  fail "lock disabled should not enter the Concurrency lock acquire group; output was:\n${out}"
+fi
+pass "INPUT_CONCURRENCY_LOCK=false (disabled) reaches the mirror and exits 1"
+
 printf 'All smoke tests passed.\n'
 exit 0
