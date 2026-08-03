@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Pin to a specific tag because the upstream has no floating "v3" ref
       # (only v3.0.0, v3.1.0, ...). Using `@v3` makes the resolver fail.
-      - uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5 # v3.3.0
+      - uses: hadolint/hadolint-action@2a66e89f53d0771bb131a7fa31f3136336094aa6 # v3.4.0
         with:
           dockerfile: Dockerfile
           # DL3018 (pin apk versions) is a real concern but fixing it is
