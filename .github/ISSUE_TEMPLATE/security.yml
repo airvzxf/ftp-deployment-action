@@ -1,0 +1,77 @@
+name: Security Report
+description: Privately report a security vulnerability in ftp-deployment-action. Do NOT paste exploit details here — use the email channel below.
+title: "[Security] "
+labels:
+  - security
+body:
+  - type: markdown
+    attributes:
+      content: |
+        **Public disclosure of a security vulnerability puts users at risk.** Before you continue, email `israel.alberto.rv@gmail.com` with the details (description, impact, affected version, reproducer) per [SECURITY.md](https://github.com/airvzxf/ftp-deployment-action/blob/main/SECURITY.md); you should receive an acknowledgement within 72 hours. Do NOT paste exploit PoC, credentials, or lftp commands that disclose the flaw in this public form — that detail belongs in the email only.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      description: Where the flaw lives. Pick the closest match.
+      options:
+        - entrypoint.sh
+        - lib.sh
+        - Dockerfile (alpine base)
+        - lftp (upstream)
+        - action.yml schema
+        - GitHub Actions step env (GITHUB_TOKEN handling)
+        - other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity-self
+    attributes:
+      label: Self-assessed severity
+      description: Your best estimate; the maintainer may revise it after triage (CVSS is assigned within 7 days per SECURITY.md).
+      options:
+        - critical
+        - high
+        - medium
+        - low
+        - not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Issue summary
+      description: Short, non-sensitive description of the issue and its impact. Do NOT paste exploit PoC, credentials, server hostnames, or lftp commands that disclose the flaw here — leave that for the email. One paragraph is enough.
+      placeholder: e.g. "TLS downgrade is possible when ftp_ssl_allow is forced via lftp_settings but the env-vars path skips validate_int; impact is..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: affected-version
+    attributes:
+      label: Affected version
+      description: 'Tag, commit SHA, or ref you reproduced against. Anchored to the "Supported versions" table in SECURITY.md.'
+      options:
+        - "@v2 (latest, current line)"
+        - "specific v2.x tag (e.g. @v2.10.0)"
+        - "v1.x (1.4 — 1.9, supported legacy)"
+        - "v1.x (1.3 or older, EOL)"
+        - "@main / @master (development branch)"
+        - local dev build
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: will-email
+    attributes:
+      label: Disclosure commitment
+      description: All three boxes must be checked before the report is reviewed.
+      options:
+        - label: I will NOT paste exploit details, credentials, server hostnames, or disclosure-triggering lftp commands in this public issue — those go to `israel.alberto.rv@gmail.com` only.
+          required: true
+        - label: I will email `israel.alberto.rv@gmail.com` per [SECURITY.md](https://github.com/airvzxf/ftp-deployment-action/blob/main/SECURITY.md) within 72 hours of filing this issue.
+          required: true
+        - label: I understand this public issue will be closed once the maintainer acknowledges the email report.
+          required: true

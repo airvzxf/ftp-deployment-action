@@ -1,0 +1,71 @@
+---
+# Idea issue template for ftp-deployment-action.
+#
+# Use this template to suggest a small enhancement, an option you wish
+# the action exposed, or an integration that would make the action fit
+# better into your deployment workflow. Ideas are lighter than full
+# feature requests: no implementation plan, no PR yet.
+#
+# Conventions:
+# * Plain YAML, no anchors/aliases.
+# * Two-space indentation.
+# * English only.
+# * Never paste secrets (the `password` input, FTP credentials, etc.).
+
+name: Idea
+description: Suggest a small enhancement or an option you wish the action exposed.
+title: "[Idea] "
+labels:
+  - "idea"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before opening an idea:
+
+        * Skim the [ROADMAP](https://github.com/airvzxf/ftp-deployment-action/blob/main/ROADMAP.md) — items already tracked there are not accepted as duplicates.
+        * Search [open and closed issues](https://github.com/airvzxf/ftp-deployment-action/issues?q=is%3Aissue) for prior discussions of the same idea; link them in the description below.
+        * Test against the latest tag (`@v2`, or the newest `v2.x.y` release) — ideas that hinge on behaviour already fixed in a newer release will be closed as wontfix.
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea
+      description: One or two sentences describing the proposed behaviour. What should the action do, and what input or output would change?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the action does the idea touch?
+      options:
+        - "security / TLS"
+        - "observability (logs, exit codes, artifacts)"
+        - "CI or release pipeline"
+        - "packaging (Docker, registries, signing, SBOM)"
+        - "docs and examples"
+        - "concurrency and deployment lock"
+        - "other"
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: What concrete workflow would benefit from this idea? Mention the inputs you would set, the server scheme (`ftp://` vs `ftps://`), and how it fits into your deployment today. Do not paste the `password` input or any real FTP credentials — redact them.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: action-version
+    attributes:
+      label: Action version
+      description: 'Which version of the action did you test the idea against? Latest tag is `@v2`; if you tried a specific version, list it. Anchored to the "Supported versions" table in SECURITY.md.'
+      options:
+        - "@v2 (latest, current line)"
+        - "specific v2.x tag (e.g. @v2.10.0)"
+        - "v1.x (1.4 — 1.9, supported legacy)"
+        - "v1.x (1.3 or older, EOL)"
+        - "@main / @master (development branch)"
+        - local dev build
