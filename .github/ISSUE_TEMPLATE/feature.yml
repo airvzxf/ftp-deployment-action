@@ -1,0 +1,107 @@
+# Issue form: feature requests for ftp-deployment-action.
+#
+# Conventions:
+# * Two-space indentation, no anchors/aliases, no exotic tags.
+# * Mirrors the plain style of .github/dependabot.yml.
+# * First body item is a markdown preamble; remaining items collect
+#     the triage data. Total body items: 7 (within the 5-10 cap).
+# * No secrets are requested. If the user pastes example workflow
+#     YAML, the preamble explicitly forbids pasting the password
+#     or the server hostname.
+
+name: "Feature request"
+description: "Propose a new input, a behaviour change, or a workflow improvement for ftp-deployment-action."
+title: "[Feature] "
+labels:
+  - "enhancement"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing a feature.
+
+        Before you file, please make sure the work is not already planned or shipped:
+
+        - Skim the [ROADMAP](https://github.com/airvzxf/ftp-deployment-action/blob/main/ROADMAP.md) for items in flight and the LP/MP backlog.
+        - Read the `## [Unreleased]` and current `v2.x` sections of the [CHANGELOG](https://github.com/airvzxf/ftp-deployment-action/blob/main/CHANGELOG.md) for recently shipped or in-flight work.
+        - Search [open and closed issues](https://github.com/airvzxf/ftp-deployment-action/issues?q=is%3Aissue) for prior discussion of the same idea.
+
+        If the feature is already on the roadmap or has been discussed, link to the existing issue below and add only the new context. Do **not** paste credentials, your real `server` hostname, or any `password:` value into any field on this form, even inside example workflow YAML. Redact the password as `<REDACTED>` and the server as `<your.ftp.host>` if you need to show a snippet.
+
+  - type: dropdown
+    id: action-version-affected
+    attributes:
+      label: "Action version this request targets"
+      description: 'Pin the version you are using today so we can scope docs, CHANGELOG wording, and any backport decision. Anchored to the "Supported versions" table in SECURITY.md.'
+      options:
+        - "@v2 (latest, current line)"
+        - "specific v2.x tag (e.g. @v2.10.0)"
+        - "v1.x (1.4 — 1.9, supported legacy)"
+        - "v1.x (1.3 or older, EOL)"
+        - "@main / @master (development branch)"
+        - local dev build
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: "What are you trying to accomplish?"
+      description: "One paragraph. State the goal, the deploy pipeline it slots into, and why the current 31 inputs cannot express it. Reference specific inputs by name (server, lftp_settings, exclude, exclude_delete, dry_run, concurrency_lock, the FTP/SSL inputs, the retry/timeout inputs, upload_log_on_failure, ...) when they are close but missing the behaviour you need."
+      placeholder: |
+        I want to ...
+        Today I work around this with ... but ...
+        The closest existing input is `...` and it falls short because ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives-tried
+    attributes:
+      label: "Workarounds you already tried"
+      description: "List the combinations of existing inputs you tried before filing the request. `lftp_settings` is the most common escape hatch — if you tried it, show what it missed. Other inputs worth mentioning if relevant: exclude, exclude_delete, dry_run, delete, the FTP/SSL inputs (ftp_ssl_allow, ssl_verify_certificate, ssl_check_hostname), the retry/timeout inputs (max_retries, net_*, dns_*, net_timeout), concurrency_lock, and upload_log_on_failure."
+      placeholder: |
+        - `lftp_settings: "set ... ;"` -> result / why it did not work
+        - `exclude: "..."` / `exclude_delete: "..."` -> result
+        - `dry_run: "true"` -> result
+        - `concurrency_lock: "true"` -> result
+        - I also tried ... -> result
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: "Scope of the change"
+      description: "Used to triage how big the proposal is. `small` lands as one PR. `medium` adds a new input plus README and tests. `large` usually needs a design comment before code."
+      options:
+        - "small - one new input, one behaviour tweak, or docs-only"
+        - "medium - new input + README/docs + tests in tests/unit/ and tests/smoke.sh"
+        - "large - new behaviour, changes to entrypoint.sh / lib.sh, may need design discussion before code"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: breaks-compat
+    attributes:
+      label: "Backward compatibility impact"
+      description: "Honest answers here save a CHANGELOG callout and a BREAKING: heading later. The v2.0.0 cut (ssl_verify_certificate default flip from false to true) is the reference example of a 'yes'."
+      options:
+        - "no - purely additive, no default flips, no input removed"
+        - "yes - would change the default of an existing input or remove one"
+        - "not sure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: open-a-pr
+    attributes:
+      label: "Are you willing to open a pull request?"
+      description: "PRs that ship their own bats unit test (tests/unit/*.bats) and at least one smoke test (tests/smoke.sh), and follow the existing validation gauntlet (shellcheck + bats + smoke + contract), get reviewed fastest. Maintainer capacity for unsolicited features is limited."
+      options:
+        - "yes - I can open a PR with code and tests"
+        - "yes - I can open a PR but would value guidance on the design first"
+        - "no - I would need a maintainer to pick it up"
+        - "not sure yet"
+    validations:
+      required: true

@@ -1,0 +1,73 @@
+name: Documentation
+description: Report missing, outdated, unclear, or incorrect documentation and examples.
+title: "[Docs] "
+labels:
+  - documentation
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a documentation issue.
+
+        Before submitting:
+        - Read the [README troubleshooting table](https://github.com/airvzxf/ftp-deployment-action#troubleshooting).
+        - Search [closed issues](https://github.com/airvzxf/ftp-deployment-action/issues?q=is%3Aissue+is%3Aclosed) for an existing report.
+        - Try the latest tag (`@v2`, or a specific tag) when the report concerns action behavior.
+        - Check the [README](https://github.com/airvzxf/ftp-deployment-action/blob/main/README.md), [CHANGELOG](https://github.com/airvzxf/ftp-deployment-action/blob/main/CHANGELOG.md), [SECURITY](https://github.com/airvzxf/ftp-deployment-action/blob/main/SECURITY.md), [ROADMAP](https://github.com/airvzxf/ftp-deployment-action/blob/main/ROADMAP.md), and [`action.yml`](https://github.com/airvzxf/ftp-deployment-action/blob/main/action.yml) as needed.
+        - Do not paste FTP credentials. Redact the resolved `server`, `user`, and `password` values; use `ftp://` or `ftps://` placeholders when needed.
+
+  - type: input
+    id: page-or-section
+    attributes:
+      label: Page or section
+      description: Enter the exact URL or section name of the documentation being reported. A repository URL is preferred when available.
+      placeholder: "https://github.com/airvzxf/ftp-deployment-action/blob/main/README.md#troubleshooting"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Documentation issue kind
+      description: Select the closest description of the problem.
+      options:
+        - "missing info"
+        - "outdated"
+        - "unclear"
+        - "typo"
+        - "broken example or code snippet"
+        - "other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed
+    attributes:
+      label: What should the documentation say?
+      description: Provide the replacement wording or exact correction. Include a complete replacement when an example or code snippet is broken.
+      placeholder: |
+        The documentation should say:
+        ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: action-version
+    attributes:
+      label: Action version
+      description: 'Which action ref or build are you reporting against? Anchored to the "Supported versions" table in SECURITY.md.'
+      options:
+        - "@v2 (latest, current line)"
+        - "specific v2.x tag (e.g. @v2.10.0)"
+        - "v1.x (1.4 — 1.9, supported legacy)"
+        - "v1.x (1.3 or older, EOL)"
+        - "@main / @master (development branch)"
+        - local dev build
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why does this matter? For a behavior example, include the relevant `server` scheme, inputs, and whether the action exited with `0`, `1`, or `2`. You may link the `ftp-deployment-action-log-<run-attempt>` artifact produced by `upload_log_on_failure`, but redact credentials and real host details.

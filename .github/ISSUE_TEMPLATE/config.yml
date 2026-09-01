@@ -1,0 +1,28 @@
+# Issue chooser configuration for ftp-deployment-action.
+#
+# This is the META file that drives the "New issue" picker on GitHub.
+# It is NOT a fillable issue form — those live next to it as separate
+# `<name>.yml` files (Bug report, Question, Feature request, ...).
+# The picker offers:
+#
+#   * The fillable templates defined in this directory.
+#   * The "Blank issue" option (enabled explicitly below — kept on
+#     purpose for one-liners that do not fit any template, e.g. a
+#     trivial typo in the README).
+#   * The `contact_links` below, which deep-link out to Discussions,
+#     the security reporting path, and the README troubleshooting
+#     table.
+#
+# Reference: https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/syntax-for-issue-forms
+
+blank_issues_enabled: true
+contact_links:
+  - name: Discussions
+    url: https://github.com/airvzxf/ftp-deployment-action/discussions
+    about: Open-ended questions and idea-stage discussion — please use the Question issue template for concrete troubleshooting.
+  - name: Security reports
+    url: https://github.com/airvzxf/ftp-deployment-action/blob/main/SECURITY.md
+    about: Report vulnerabilities privately per SECURITY.md — DO NOT open a public issue.
+  - name: README troubleshooting
+    url: https://github.com/airvzxf/ftp-deployment-action#troubleshooting
+    about: Quick checks for connection, mirror, and SSL/TLS errors before opening an issue.

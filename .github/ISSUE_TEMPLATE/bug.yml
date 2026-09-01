@@ -1,0 +1,142 @@
+# Bug report template for ftp-deployment-action.
+#
+# Captures the minimum data needed to reproduce an FTP-deploy failure:
+# the pinned ref, the server URL scheme (which drives the FTPS handshake),
+# the symptom (mirroring the README troubleshooting table), the workflow
+# inputs, the lftp log or failure banner, the action exit code, and a
+# self-attestation that secrets have been redacted. Generic "it doesn't
+# work" reports get closed with a link back here.
+
+name: Bug Report
+description: File a bug for ftp-deployment-action. Include the action version, the FTP server scheme, the failing log excerpt, and your workflow inputs (with secrets redacted).
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before opening this issue, please:
+
+        1. Read the [troubleshooting table](https://github.com/airvzxf/ftp-deployment-action#troubleshooting) in the README — most "it doesn't work" reports map directly to one of its rows and the fix is already there.
+        2. Search the [closed issues](https://github.com/airvzxf/ftp-deployment-action/issues?q=is%3Aissue+is%3Aclosed) for the same symptom before opening a new one.
+        3. Try the latest tag (`@v2`, or a specific tag like `@v2.10.0`) before filing against `@main` or a local dev build — your bug may already be fixed in a later release.
+
+  - type: dropdown
+    id: action-version
+    attributes:
+      label: Action version
+      description: 'Which ref of `airvzxf/ftp-deployment-action` did you pin in `uses:`? Anchored to the "Supported versions" table in SECURITY.md.'
+      options:
+        - "@v2 (latest, current line)"
+        - "specific v2.x tag (e.g. @v2.10.0)"
+        - "v1.x (1.4 — 1.9, supported legacy)"
+        - "v1.x (1.3 or older, EOL)"
+        - "@main / @master (development branch)"
+        - local dev build
+    validations:
+      required: true
+
+  - type: dropdown
+    id: server-scheme
+    attributes:
+      label: Server scheme
+      description: What is the scheme of the `server` input? This drives the FTPS handshake — see the "Plain FTP vs FTPS" table in the README.
+      options:
+        - "ftp:// (explicit FTPS, port 21)"
+        - "ftps:// (implicit FTPS, port 990)"
+        - plain FTP, no TLS
+    validations:
+      required: true
+
+  - type: dropdown
+    id: symptom
+    attributes:
+      label: Symptom
+      description: Which row of the README troubleshooting table matches the symptom you saw?
+      options:
+        - "530 Login authentication failed"
+        - "550 Permission denied"
+        - "Fatal error: certificate verify failed"
+        - "Connection refused / hangs on connect"
+        - "mirror: Access failed: 550 ... No such file or directory"
+        - "getpeername: Connection refused on ftps://"
+        - "PROT command not understood"
+        - "concurrency lock acquire failed"
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow inputs
+      description: Paste the relevant `with:` block. Never paste the resolved `server`, `user`, or `password` values — even if you think the host is public, redact any path that contains user data (usernames in `local_dir`/`remote_dir`, secrets inside `lftp_settings`, etc.).
+      placeholder: |
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          user: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local_dir: "./public_html"
+          remote_dir: "/www/example.com"
+          delete: "false"
+          ftp_ssl_allow: "true"
+          ssl_verify_certificate: "true"
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Log excerpt
+      description: Paste the lftp log excerpt or the failure banner from the runner output. If `upload_log_on_failure` is left at its default (`true`) and the step exposes `GITHUB_TOKEN`, the full log is also auto-uploaded as the artifact `ftp-deployment-action-log-<run-attempt>` (90-day retention) — download it from the run page for the complete trace.
+      placeholder: |
+        ---- FTP UPLOAD START ----
+        ...
+        ---- FTP UPLOAD FAILED ----
+        last lftp exit code: 1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: exit-code
+    attributes:
+      label: Action exit code
+      description: What exit code did the step produce? See the "Exit codes" table in the README.
+      options:
+        - "0"
+        - "1 (upload failed)"
+        - "2 (invalid input)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: first-time
+    attributes:
+      label: First time on this server?
+      description: Is this the first deployment against this FTP server, or did it work before? If "was working before", fill in the last working ref in the field below.
+      options:
+        - first time on this server
+        - was working before
+    validations:
+      required: true
+
+  - type: input
+    id: last-working-ref
+    attributes:
+      label: Last working ref
+      description: If you picked "was working before" above, paste the tag / commit SHA / date of the last successful run. Otherwise leave blank.
+      placeholder: "v2.9.2 (2025-xx-xx) or 0123456789abcdef..."
+
+  - type: checkboxes
+    id: self-redaction
+    attributes:
+      label: "Self-attestation: redaction"
+      description: Confirm before submitting. Issues with pasted secrets or real hostnames will be closed without response.
+      options:
+        - label: I removed the resolved `server`, `user`, and `password` values from the pasted log and YAML — only `${{ secrets.* }}` references remain.
+          required: true
+        - label: I did not paste actual server hostnames or IP addresses. Placeholders like `ftp.example.com` or `203.0.113.1` are fine; your real host is not.
+          required: true
+        - label: 'The lftp log excerpt does not contain the FTP password. (lftp masks the `password` input via `::add-mask::`, but a `debug: "true"` run can echo the URL with credentials embedded — strip those lines.)'
+          required: true

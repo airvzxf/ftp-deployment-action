@@ -1,0 +1,101 @@
+# Issue template: Question.
+#
+# A read-only form that nudges users toward self-service answers
+# (README troubleshooting table, closed issues, Stack Overflow)
+# before opening a Question issue. Mirrors the deprecation / safety
+# checks from SECURITY.md: explicit no-secrets preflight and a
+# pointer to private security reporting instead of opening a
+# public issue for vulns.
+
+name: Question
+description: Ask a question about inputs, FTPS modes, the concurrency_lock, v1.x → v2.x migration, or publishing targets.
+title: "[Question] "
+labels:
+  - "question"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for opening a Question.
+
+        Before you submit, please:
+
+        - **Read the [Troubleshooting table](https://github.com/airvzxf/ftp-deployment-action#troubleshooting)** in the README — it covers `530 Login authentication failed`, the `PROT command not understood` failure on legacy FTPS servers, exit code `1` vs `2`, `concurrency_lock` sentinel staleness, and more.
+        - **Search [closed issues](https://github.com/airvzxf/ftp-deployment-action/issues?q=is%3Aissue+is%3Aclosed)** for your symptom. The archive is the first place to look for input combinations that already had a fix.
+        - **Reproduce against `@v2` (or the latest specific tag)**: many input / lftp bugs are fixed in the most recent release. Compare with the pinned tag you are using.
+        - **Not sure Question vs Discussion vs Stack Overflow?** Use Discussions for open-ended design questions and "what do others use" threads; use Stack Overflow for general lftp / FTPS questions unrelated to this action. Use **this** Question form only when you have a concrete, reproducible question about inputs, exit codes, the `concurrency_lock` sentinel, or the v1 → v2 migration.
+        - **Security issues are not filed here.** If you found a vulnerability, follow [SECURITY.md](https://github.com/airvzxf/ftp-deployment-action/blob/main/SECURITY.md) and email `israel.alberto.rv@gmail.com` privately. Public issues for security problems will be closed without triage.
+
+  - type: dropdown
+    id: topic
+    attributes:
+      label: Topic
+      description: Pick the closest category so the right maintainer can answer.
+      options:
+        - label: Setup (first run, runner, action reference syntax)
+          value: setup
+        - label: Inputs and configuration (`server`, `delete`, `exclude`, `lftp_settings`, ...)
+          value: inputs-and-configuration
+        - label: FTPS explicit vs implicit vs plain FTP (`ftp_ssl_allow`, `ssl_verify_certificate`, `ssl_check_hostname`, server scheme)
+          value: ftps-modes
+        - label: "`concurrency_lock` (sentinel path, timeout, stale lock recovery)"
+          value: concurrency-lock
+        - label: v1.x → v2.x migration (deprecated inputs, default behavior changes)
+          value: v1-to-v2-migration
+        - label: Publishing (ghcr.io, Docker Hub, ECR Public; cosign / SBOM / attestation)
+          value: publishing
+        - label: Other
+          value: other
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you tried
+      description: Inputs you set, command or workflow you ran, and the observed output. Include the action tag (e.g. `@v2` or `@v2.10.0`) and the full exit code (`0`, `1`, or `2`).
+      placeholder: |
+        Action tag used: @v2.10.0
+        Relevant inputs:
+          server: ftps://ftp.example.com
+          user: ${{ secrets.FTP_USER }}
+          password: <redacted>
+          local_dir: ./public
+          remote_dir: /public_html
+          delete: "false"
+          ftp_ssl_allow: "true"
+          ssl_verify_certificate: "true"
+          ssl_check_hostname: "true"
+
+        What I ran: my workflow (link or pasted YAML, redacted).
+        Observed: the action exited with code 1 and printed "ERROR: UPLOAD FAILED". The artifact ftp-deployment-action-log-<run-attempt> shows: <paste the relevant lines>.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: lftp-direct
+    attributes:
+      label: Reproduced outside the action?
+      description: Per the README troubleshooting section, auth / TLS / mirror failures should be reproduced directly with `lftp -u user,pass host` from the runner (or any host that can reach the FTP server) before opening an issue.
+      options:
+        - label: Yes — I reproduced the same failure with `lftp -u user,pass host` outside the action
+          value: yes-reproduced-with-lftp
+        - label: No — the failure only happens inside the action, not with `lftp -u user,pass host`
+          value: no-only-inside-action
+        - label: Not applicable — my question is not about an FTP / lftp failure (e.g. publishing, migration)
+          value: not-applicable
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      description: All three are required. Issues that skip these are typically closed as duplicate or redirected to Discussions.
+      options:
+        - label: I read the [Troubleshooting table](https://github.com/airvzxf/ftp-deployment-action#troubleshooting) in the README.
+          required: true
+        - label: I searched [closed issues](https://github.com/airvzxf/ftp-deployment-action/issues?q=is%3Aissue+is%3Aclosed) for the symptom.
+          required: true
+        - label: This question is **not** about credentials, secrets, or a security vulnerability. I will not paste my FTP password here; the server host and username are safe to share.
+          required: true

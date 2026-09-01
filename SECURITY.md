@@ -2,15 +2,17 @@
 
 ## Supported versions
 
-Only the latest tagged release receives security fixes. Older tags
-(`v1.0-alpha.*`, `v1.1`, `v1.2.0`, `v1.3.x`, `latest`) are kept on a
-best-effort basis and may not receive patches.
+| Track                  | Tag range                                  | Support                                                              |
+|------------------------|--------------------------------------------|-----------------------------------------------------------------------|
+| Currently maintained   | `v2.x` (latest = `v2.10.0`)                | Active — security and bug fixes published in the next v2.x.y release. |
+| Legacy support window  | `v1.4` — `v1.9`                            | Security-only backports on a best-effort basis.                       |
+| End-of-life            | `v1.0-alpha.*`, `v1.1`, `v1.2.0`, `v1.3.x`  | No support.                                                           |
 
-| Tag        | Supported |
-|------------|-----------|
-| `latest`   | Yes       |
-| `<v1.4+>`  | Yes       |
-| `<v1.4`    | No        |
+Floating refs like `@latest`, `@master`, or `@main` are **not** in
+the support matrix — pin to a specific tag (e.g. `@v2.10.0`) or a
+full commit SHA so the maintainer can reproduce the exact image
+you are running. See the "Pin to a major version" note in the
+README for the recommended pattern.
 
 ## Tag signing policy
 
@@ -25,6 +27,13 @@ one and checked like this:
 git verify-tag <tag>      # exit 0 + "Good signature" for signed tags
 git cat-file -t <tag>     # 'tag' for annotated, 'commit' for lightweight
 ```
+
+The maintainer's public key can be fetched from
+<https://keys.openpgp.net/search?q=82DE44111B30F91F55BCEB1F414687A3CD7E65B9>
+or with
+`gpg --keyserver keys.openpgp.net --recv-keys 82DE44111B30F91F55BCEB1F414687A3CD7E65B9`
+to verify tag signatures locally without trusting the GitHub web
+UI.
 
 The 8 legacy tags below are **lightweight pointers** (raw
 commits, not annotated tag objects), so they cannot be
@@ -70,6 +79,13 @@ Report privately by emailing **israel.alberto.rv@gmail.com** with:
 You should receive an acknowledgement within 72 hours. If you do not,
 please follow up with a second email.
 
+If private vulnerability reporting has been enabled under
+*Settings → Code security and analysis → Private vulnerability
+reporting*, you can also file a report through the GitHub
+Security Advisories tab on this repository. Either channel
+reaches the same maintainer inbox; the email above remains
+authoritative even if the tab is currently disabled.
+
 ## What to expect
 
 - **Acknowledgement** within 72 hours.
@@ -77,9 +93,15 @@ please follow up with a second email.
   and decide whether to fix in-tree or in a fork.
 - **Fix** for critical/high issues as soon as possible, ideally within
   30 days. Lower-severity issues are bundled with the next regular
-  release.
+  release. Confirmed vulnerabilities are published as a GitHub
+  Security Advisory, which can carry CVE and CWE IDs assigned by
+  GitHub on request; the advisory references the in-the-clear fix
+  commit so the public record is complete.
 - **Disclosure**: once a fix is published, the original report will be
   credited in the release notes (unless the reporter prefers otherwise).
+  *Public* issues that report a vulnerability directly will be closed
+  without triage, with a link back to this policy, to avoid disclosing
+  the flaw to anyone watching the repo before a fix is available.
 
 ## Out of scope
 
