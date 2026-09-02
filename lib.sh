@@ -492,7 +492,7 @@ _lock_age_seconds() {
 
 # ------------------------------------------------------------------------------
 # _lock_parse_sentinel_listing LISTING_TEXT
-#   Given the captured stdout of `lftp ... -e 'quote LIST -la .; quit;'`,
+#   Given the captured stdout of `lftp ... -e 'cls -la .; quit;'`,
 #   extract the FIRST filename matching the sentinel pattern
 #   `.lftp-deployment.lock.<digits>.info`. Echoes the matching
 #   filename (e.g. `.lftp-deployment.lock.20260707T080000Z.1234.info`)
@@ -780,11 +780,18 @@ acquire_lock_with_recovery() {
   while [ "${_alwr_attempt}" -lt "${_alwr_count}" ]; do
     _alwr_attempt=$((_alwr_attempt + 1))
 
-    # Step 1: try MKD. `set +e` because MKD on a held lock returns
-    # 550, which is the common case (not an error).
+    # Step 1: try MKD. We use lftp's high-level `mkdir` command
+    # rather than the raw `quote MKD` because lftp 4.9.x does not
+    # propagate a 5xx reply from a `quote` meta-command into lftp's
+    # exit code (the controller just reads the line and moves on),
+    # so the script would never see a held lock as a failure and
+    # would happily spin forever. `mkdir` is the documented lftp
+    # command for the MKD FTP verb and does propagate 5xx replies.
+    # `set +e` because MKD on a held lock returns 550, which is
+    # the common case (not an error).
     set +e
     timeout 30s lftp "${_alwr_server}" \
-      -e "${_alwr_preamble} quote MKD ${_alwr_path}; quit;" \
+      -e "${_alwr_preamble} mkdir ${_alwr_path}; quit;" \
       >/dev/null 2>&1
     _alwr_mkd_rc=$?
     set -e
@@ -816,9 +823,15 @@ acquire_lock_with_recovery() {
     # Probe for a stale sentinel. We list the FTP root and grep
     # for the sentinel pattern; if the timestamp in the filename
     # is older than TIMEOUT_SECS, we take over.
+    # Use lftp's high-level `cls` (alias for `ls`) rather than the
+    # raw `quote LIST` because vsftpd requires the data connection
+    # (PASV/PORT) to be negotiated before answering LIST, and the
+    # raw quote does not negotiate PASV — vsftpd replies `425 Use
+    # PORT or PASV first` and we get an empty listing. `cls` opens
+    # PASV automatically and returns a usable directory listing.
     set +e
     _alwr_listing=$(timeout 10s lftp "${_alwr_server}" \
-      -e "${_alwr_preamble} quote LIST -la .; quit;" \
+      -e "${_alwr_preamble} cls -la .; quit;" \
       2>/dev/null)
     set -e
 
