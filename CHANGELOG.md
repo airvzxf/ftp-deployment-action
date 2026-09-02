@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * The disclosure section adds a clause that public issues reporting vulnerabilities will be closed without triage and linked back to `SECURITY.md`.
   * The fix-flow bullet adds a CVE / CWE note for vulnerabilities published as a GitHub Security Advisory.
 
+### Fixed
+
+- **#111** — `entrypoint.sh` trusted the inherited `HOME` from self-hosted runners, causing `can't create /github/home/.netrc: Permission denied` when the runner forwarded `HOME=/github/home` (or any other host path) into the container. v2.11.0 pins `NETRC=/home/lftp/.netrc` and `export HOME=/home/lftp` unconditionally, closing the bug. The `env: HOME: /home/lftp` workaround is no longer required (it remains valid).
+
 
 ## [2.10.0] - 2026-07-08
 
