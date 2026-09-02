@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Issue templates for typed bug / feature / idea / documentation / question / security reports** (PR #113, closes #112). Seven GitHub Issue Forms now live under `.github/ISSUE_TEMPLATE/`:
+  * `bug.yml`, `feature.yml`, `idea.yml`, `documentation.yml`, `question.yml`, `security.yml` — typed forms with version / symptom / symmetry dropdowns anchored to the "Supported versions" table in `SECURITY.md`.
+  * `config.yml` — keeps the "Blank issue" option in the chooser and adds `contact_links` to Discussions, `SECURITY.md`, and the README troubleshooting table.
+
+### Changed
+
+- **`SECURITY.md`** (PR #113):
+  * The "Supported versions" table is split into three tracks (currently maintained / legacy support window / end-of-life) so floating refs (`@latest`, `@master`, `@main`) cannot be confused with supported tags.
+  * The tag-signing policy now names the `keys.openpgp.net` URL to fetch the maintainer's public key for offline verification.
+  * The reporting section mentions the GitHub Security Advisories tab as an alternative channel, conditional on it being enabled.
+  * The disclosure section adds a clause that public issues reporting vulnerabilities will be closed without triage and linked back to `SECURITY.md`.
+  * The fix-flow bullet adds a CVE / CWE note for vulnerabilities published as a GitHub Security Advisory.
+
 
 ## [2.10.0] - 2026-07-08
 
@@ -740,6 +755,26 @@ under `[Unreleased]`), and two follow-up PRs:
   additionally enforced from inside the action via the
   deprecation warning above.
 
+## [2.0.1] - 2026-07-05
+
+Patch release on top of v2.0.0 — turns the "release pipeline"
+PR (#46) on for real and lands the `latest` docker tag. **No
+behaviour change for end users** (the action's input contract
+is unchanged from v2.0.0).
+
+### Added
+
+- **Release pipeline to `ghcr.io` with cosign signing and CycloneDX SBOM** (PR #46). Every pushed `v*.*.*` tag is built into a Docker image at `ghcr.io/airvzxf/ftp-deployment-action`, signed with `cosign` (keyless OIDC), and ships a CycloneDX SBOM attached as an in-toto attestation via `actions/attest@v4`.
+- **`latest` docker tag on every release** — the release workflow pushes `v<version>`, `<version>`, and `latest`, so `docker pull ghcr.io/airvzxf/ftp-deployment-action:latest` resolves to the newest v2.x (matching the semantics users expect).
+
+### Fixed
+
+- **Dockerfile** — pin the base image to the `alpine` digest `sha256:25109184…` and pin the apk package versions (`lftp=4.9.2-r9`, `ca-certificates=20260611-r0`); resolves the hadolint `DL3018` warning that was open since the first PR.
+- **Release workflow** — download the SBOM artifact before attaching it via `actions/attest@v4`; install `cosign` via the upstream release tarball before the `sign` step.
+
+The git-level `latest` tag that pointed at v1.3.3 was deleted
+as part of this release.
+
 ## [2.0.0] - 2026-07-05
 
 ### Breaking
@@ -856,3 +891,5 @@ Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 [2.10.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.9.0...v2.10.0
 [2.4.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.4.0...v2.4.1
 [1.3.3]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.3.3
+[2.0.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.0.0...v2.0.1
+[2.8.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.7.0...v2.8.0
