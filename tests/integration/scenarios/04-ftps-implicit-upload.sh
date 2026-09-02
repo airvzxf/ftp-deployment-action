@@ -1,21 +1,125 @@
 #!/bin/sh
 # tests/integration/scenarios/04-ftps-implicit-upload.sh
 #
-# Scenario 04 (variant C): FTPS implicit upload — STUB.
+# Scenario 04 (variant C, closes #120 half 2): implicit FTPS upload.
 #
-# FTPS implicit (TLS from byte 0 on a dedicated port, typically 990)
-# is the other half of the SSL/TLS support. Wiring it through this
-# harness requires:
+#   * Boots docker.io/fauria/vsftpd with implicit_ssl=YES. vsftpd
+#     binds 2122 inside the container and expects TLS from the
+#     very first byte (no FTP-greeting-then-AUTH-TLS upgrade —
+#     the connection is encrypted at the transport layer from the
+#     start). The host-side port is also 2122 (unprivileged, no
+#     `ip_unprivileged_port_start` workaround needed).
+#   * Generates an ephemeral self-signed cert (same helper as
+#     scenario 03, see tests/integration/lib/self-signed-cert.sh).
+#   * Invokes the ftp-deployment-action image end-to-end with
+#     INPUT_SERVER=ftps://ftptest@127.0.0.1:2122. The `ftps://`
+#     scheme is what tells lftp to start TLS from byte 0 (no AUTH
+#     upgrade). The user is embedded in the URL for the same
+#     .netrc-lookup reason scenario 03 documents (acquire_lock_
+#     with_recovery does not apply run_lftp_once's URL rewrite).
+#   * INPUT_FTP_SSL_ALLOW=true / INPUT_SSL_VERIFY_CERTIFICATE=
+#     false / INPUT_SSL_CHECK_HOSTNAME=false: same rationale as
+#     scenario 03 — the cert is self-signed /CN=localhost.
+#   * Asserts the action exits 0 AND emits `FTP UPLOADED FINISHED`
+#     AND the fixture entries are present on the server.
 #
-#   * vsftpd with a self-signed certificate AND listen on 990.
-#   * Pointing the action at ftps://host:990 with
-#     INPUT_FTP_SSL_ALLOW=true.
-#   * Asserting that lftp negotiates TLS without an AUTH upgrade.
+# Why "implicit" is a separate scenario (and not just a flag on
+# scenario 03): implicit FTPS changes the protocol shape
+# fundamentally — the server's first byte is TLS, not a 220
+# greeting. lftp's behaviour, the `ftps://` scheme, the port
+# conventionally used (990; we use 2122 to stay unprivileged on
+# the host), and `implicit_ssl=YES` on the server side are all
+# distinct from explicit FTPS. A test that covers both surfaces
+# them as separate scenarios so a regression in either branch is
+# pinpointed by the scenario that failed, not by a flag inside
+# scenario 03.
 #
-# Like scenario 03, this is real work and lives behind #120. For
-# #117 we leave this as a documented skip.
+# Why we do NOT fall back to alpine+vsftpd: fauria/vsftpd's
+# vsftpd is compiled against libssl/libcrypto (verified via
+# `ldd`), and `implicit_ssl` is a standard vsftpd directive —
+# the fauria image just does not expose it via env vars. We
+# bind-mount a custom vsftpd.conf that sets `implicit_ssl=YES`
+# and the entrypoint's append-env-vars step preserves it. No
+# reason to drag in a second image and ~30 LoC of db_load
+# boilerplate when this works.
 
 set -eu
 
-printf '%s\n' "  skip: scenario 04 (FTPS implicit upload) deferred to #120 (FTPS integration)"
+# shellcheck disable=SC1007
+COMMON=$(CDPATH= cd -- "$(dirname -- "$0")/../lib" && pwd)
+# shellcheck source=tests/integration/lib/common.sh
+. "${COMMON}/common.sh"
+# shellcheck source=tests/integration/lib/self-signed-cert.sh
+. "${COMMON}/self-signed-cert.sh"
+
+scenario_setup "04-ftps-implicit-upload"
+
+# --- Step 1: cert + server ---------------------------------------------------
+_cert=$(generate_self_signed_cert)
+log_info "using cert ${_cert}"
+
+# MODE="implicit" maps host port 2122 -> container port 2122,
+# with implicit_ssl=YES (TLS from byte 0). The shared PASV range
+# is the same — both modes negotiate data connections on the
+# same data ports.
+_implicit_host_port=2122
+start_ftps_server "${FTP_USER}" "${FTP_PASSWORD}" "${FTP_DATA_DIR}" "${_cert}" "implicit"
+
+# --- Step 2: env-file --------------------------------------------------------
+#
+# ftps:// (NOT ftp://): lftp treats ftps:// as "TLS from byte 0",
+# which is what implicit FTPS expects on the wire.
+#
+# Same user-in-URL / SSL-flag reasoning as scenario 03.
+_env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env failed"
+trap 'rm -f "${_env}"; stop_ftp_server' EXIT
+
+{
+  printf 'INPUT_SERVER=ftps://%s@127.0.0.1:%s\n' "${FTP_USER}" "${_implicit_host_port}"
+  printf 'INPUT_USER=%s\n' "${FTP_USER}"
+  printf 'INPUT_PASSWORD=%s\n' "${FTP_PASSWORD}"
+  printf 'INPUT_LOCAL_DIR=/data\n'
+  printf 'INPUT_REMOTE_DIR=/\n'
+  printf 'INPUT_MAX_RETRIES=1\n'
+  printf 'INPUT_NET_TIMEOUT=10s\n'
+  printf 'INPUT_DNS_FATAL_TIMEOUT=10s\n'
+  printf 'INPUT_FTP_SSL_ALLOW=true\n'
+  printf 'INPUT_SSL_VERIFY_CERTIFICATE=false\n'
+  printf 'INPUT_SSL_CHECK_HOSTNAME=false\n'
+  # Implicit FTPS uses the ftps:// scheme, which causes lftp to
+  # start TLS from byte 0 without an AUTH upgrade. The same
+  # ssl-force flag is therefore a no-op here (TLS is already
+  # mandatory on the wire), but we keep it set for symmetry with
+  # scenario 03 — if a future lftp release decides to skip the
+  # TLS handshake on ftps:// for any reason, ssl-force prevents
+  # a silent plaintext fallback.
+  printf 'INPUT_LFTP_SETTINGS=set ftp:ssl-force true;set net:persist-retries 0;set net:max-retries 1;\n'
+} > "${_env}"
+
+# --- Step 3: invoke the action ------------------------------------------------
+_log=$(mktemp -t actlog.XXXXXX) || log_fail "mktemp log file failed"
+
+log_info "invoking action against implicit FTPS server (port ${_implicit_host_port}, TLS from byte 0)"
+set +e
+timeout 60 ${RUNTIME} run --rm \
+    --network host \
+    -v "${FIXTURES_DIR}:/data:ro" \
+    --env-file "${_env}" \
+    "${IMAGE}" > "${_log}" 2>&1
+_rc=$?
+set -e
+
+# --- Step 4: assert end-to-end success --------------------------------------
+assert_action_success "${_log}" "${_rc}"
+
+# --- Step 5: assert the fixture entries landed on the server ------------------
+_ftp_home="${FTP_DATA_DIR}/${FTP_USER}"
+
+assert_present "${_ftp_home}" "index.html"
+assert_present "${_ftp_home}" "about.html"
+
+rm -f "${_log}"
+
+log_pass "scenario 04 passed: action uploaded fixtures over FTPS implicit (TLS from byte 0 on port ${_implicit_host_port})"
+
 exit 0
