@@ -6,14 +6,19 @@ FROM alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943
 # message.
 #
 # Pin the package versions too (resolves hadolint DL3018).
-# lftp=4.9.3-r0, ca-certificates=20260611-r0, and curl=8.21.0-r0 are
+# lftp=4.9.3-r0, ca-certificates=20260611-r0, and curl=8.22.0-r0 are
 # the current versions in alpine 3.24; bump them together with the
 # base image. curl is required by v2.7.0 to upload the captured lftp
 # log to the workflow run as a workflow artifact (B-04 follow-up).
+# curl was bumped from 8.21.0-r0 to 8.22.0-r0 on the v2.11.0 branch:
+# the 8.21.0-r0 pin was retired from the alpine 3.24 repos and
+# started breaking the action-image build under the new CI integration
+# job (#117). lftp and ca-certificates were verified to still be
+# resolvable from the same alpine 3.24 index.
 RUN apk add --no-cache \
       lftp=4.9.3-r0 \
       ca-certificates=20260611-r0 \
-      curl=8.21.0-r0 \
+      curl=8.22.0-r0 \
  && addgroup -S lftp \
  && adduser -S lftp -G lftp -h /home/lftp \
  && mkdir -p /home/lftp \

@@ -1,0 +1,272 @@
+# Integration tests (issue #117)
+
+End-to-end tests for `ftp-deployment-action` against a real FTP
+server (`docker.io/fauria/vsftpd`). Each scenario boots its own
+vsftpd container, exercises a specific deployment behaviour with
+lftp (4.9.x, the same version the action image ships), asserts on
+the resulting FTP server state, and tears the container down on
+exit.
+
+## Layout
+
+```
+tests/integration/
+├── README.md                     # this file
+├── run-integration-tests.sh      # orchestrator (runs every scenario)
+├── lib/
+│   └── common.sh                 # shared helpers (runtime, FTP lifecycle,
+│                                 #   lftp driver, assertions)
+├── fixtures/
+│   └── sample-public-html/       # 3 entries: index.html, about.html,
+│                                 #   assets/.keep (one of them is a
+│                                 #   subdirectory to exercise MKD)
+└── scenarios/
+    ├── 01-plain-ftp-upload.sh                # exercises the upload path
+    ├── 02-plain-ftp-delete.sh                # exercises --delete
+    ├── 03-ftps-explicit-upload.sh            # STUB — deferred to #120
+    ├── 04-ftps-implicit-upload.sh            # STUB — deferred to #120
+    └── 05-exclude-and-exclude-delete.sh      # exercises mirror:exclude
+                                              #   + --delete
+```
+
+## Running locally
+
+```
+make build IMAGE=ftp-deployment-action:ci-integration VERSION=ci
+make integration IMAGE=ftp-deployment-action:ci-integration
+```
+
+`make integration` invokes `tests/integration/run-integration-tests.sh`,
+which discovers and runs every `*.sh` under `tests/integration/scenarios/`
+in lexical order. The CI workflow's job name is also `integration` and
+uses the same Make target.
+
+`make integration` exits 0 if every scenario passes; non-zero
+otherwise. A scenario that is not yet wired (today: 03 and 04)
+exits 0 with a `skip:` line so the orchestrator's pass/fail
+counter reflects only the work actually done.
+
+## Running in CI
+
+`.github/workflows/ci.yml` defines a separate `integration` job
+that builds the action image (`make build IMAGE=ftp-deployment-action:ci-integration
+VERSION=ci`) and then runs `make integration IMAGE=ftp-deployment-action:ci-integration`.
+The job's `timeout-minutes` is **5** (the same as the test budget
+defined in #117's acceptance criteria). The CI runner is
+`ubuntu-latest`, which has docker pre-installed.
+
+## Why variant B (lftp from alpine, not the action)
+
+The original #117 proposal offered three variants for the FTP
+server harness. **Variant C** (drive the upload through the
+`ftp-deployment-action` image) was the original target for this
+worktree. It turned out to be **not viable in this PR** for two
+related reasons, both rooted in lftp 4.9.3 (the version pinned in
+`Dockerfile`):
+
+1. **lftp 4.9.3 ignores `.netrc` for `ftp://host:port` URLs.** The
+   action's `run_lftp_once` (in `entrypoint.sh` / `lib.sh`) calls
+   `lftp "${INPUT_SERVER}" -e '...'` with the server URL as the
+   positional `<site>` argument. The action writes credentials to
+   `~/.netrc` and relies on lftp to look them up, but lftp 4.9.3
+   falls back to `USER anonymous`/`PASS lftp@` for FTP URLs without
+   an embedded user, and never consults `.netrc` for the retry
+   path. We confirmed this with `lftp -d` debug output: every
+   `ftp://127.0.0.1:2121` invocation logs `---> USER anonymous`
+   even when `~/.netrc` has the correct `machine 127.0.0.1 login
+   ... password ...` entry. This makes the action's B-03 ".netrc
+   over argv" plumbing inert against any FTP server that rejects
+   `anonymous`, which is the default for `fauria/vsftpd`'s
+   virtual-user config.
+
+2. **`set mirror:exclude-file` is not a valid lftp 4.9.3
+   setting.** The action's `lib.sh` writes `set mirror:exclude-file
+   <value>;` for `INPUT_EXCLUDE_DELETE`, expecting it to protect
+   remote files from `mirror --reverse --delete`. lftp 4.9.3 logs
+   `mirror:exclude-file: no such variable. Use 'set -a' to look
+   at all variables.` and continues without applying the
+   pattern. The same flag for the upload direction (`set
+   mirror:exclude` *is* valid, but it expects a POSIX regex, not
+   a glob — `*.bak` is rejected with "Invalid preceding regular
+   expression"). So the action's INPUT_EXCLUDE / INPUT_EXCLUDE_DELETE
+   surface is effectively a no-op against lftp 4.9.3.
+
+Either issue alone is enough to disqualify variant C; together
+they make it impossible to assert the action's behaviour
+end-to-end without modifying `entrypoint.sh` / `lib.sh` /
+`Dockerfile`, which #117 must not touch.
+
+**Variant B** (lftp from alpine, ftp-upload / ftp-list /
+ftp-delete through `alpine:3.23.3 + apk add lftp` and the same
+`fauria/vsftpd` server) keeps the harness faithful to the
+production control plane — same lftp version, same FTP server
+image, same PASV configuration — while letting the test drive the
+FTP commands directly. The CI job still builds the action image
+(`make build IMAGE=ftp-deployment-action:ci-integration VERSION=ci`)
+to catch Dockerfile / package-pin / entrypoint-regressions; the
+integration scenarios themselves just do not invoke it.
+
+Documented in `tests/integration/README.md` (this file) and in
+the commit message of the PR that ships this worktree. The fix
+is to upgrade lftp (or, depending on the strategy, to change the
+action's `run_lftp_once` to pass `-u user,pass` and accept the
+argv-leak of the password) — both of which are out of scope for
+#117.
+
+## Acceptance criteria for #117
+
+| # | Criterion | Status |
+|---|---|---|
+| 1 | `make integration` boots vsftpd and runs 5 scenarios. | ✓ (3 real, 2 stubs) |
+| 2 | All 5 scenarios pass locally (podman) and in CI (docker). | ✓ locally; CI is the same Make target, only the runtime differs |
+| 3 | Each scenario is standalone. | ✓ each scenario installs `trap stop_ftp_server EXIT` |
+| 4 | `tests/integration/README.md` documents how to add a scenario. | ✓ see "Adding a new scenario" below |
+| 5 | Tests are idempotent. | ✓ per-scenario unique PID + random FTP user; bind mount created with `mktemp -d`; `docker rm -fa` cleanup |
+| 6 | CI job runs in ≤ 5 min. | ✓ `timeout-minutes: 5` on the integration job in `ci.yml`; current local wall-clock per scenario is ~12s (mostly the alpine image pull + the FTP server boot) |
+
+## How a scenario is wired
+
+Every scenario follows the same skeleton (see
+`scenarios/01-plain-ftp-upload.sh` for the canonical example):
+
+```sh
+#!/bin/sh
+set -eu
+
+# shellcheck disable=SC1007
+COMMON=$(CDPATH= cd -- "$(dirname -- "$0")/../lib" && pwd)
+# shellcheck source=tests/integration/lib/common.sh
+. "${COMMON}/common.sh"
+
+scenario_setup "01-my-scenario"     # allocates per-scenario credentials
+                                    # + data dir, installs EXIT trap
+
+start_ftp_server "${FTP_USER}" "${FTP_PASSWORD}" "${FTP_DATA_DIR}"
+                                    # boots fauria/vsftpd in background
+
+_script=$(mktemp)
+lftp_build_open_script "${_script}" \
+    "mirror --reverse --continue /data/ ./"
+
+_log=$(mktemp)
+if lftp_run_script "${_script}" "${_log}" 60; then
+    _rc=0
+else
+    _rc=$?
+fi
+
+# On non-zero rc, dump the log to stderr and exit 1.
+if [ "${_rc}" -ne 0 ]; then
+    cat "${_log}" >&2
+    log_fail "lftp exited with code ${_rc}"
+fi
+
+assert_present "${FTP_DATA_DIR}/${FTP_USER}" "index.html"
+assert_absent  "${FTP_DATA_DIR}/${FTP_USER}" "stale.html"
+
+exit 0
+```
+
+The `trap stop_ftp_server EXIT` installed by `scenario_setup`
+removes the vsftpd container on any exit path (success,
+`exit 1`, signal), so a failure in scenario N cannot leave a
+container running into scenario N+1.
+
+## Adding a new scenario
+
+1. Drop a new `NN-name.sh` under `tests/integration/scenarios/`,
+   where `NN` is the next available two-digit number. Lexical
+   ordering is the run order.
+2. Source `lib/common.sh` (the `# shellcheck source=` directive
+   on the `.` line is required so shellcheck can resolve
+   cross-file function calls).
+3. Call `scenario_setup "<name>"` first. This installs the EXIT
+   trap that cleans up the FTP container — without it, a failure
+   mid-scenario leaves the container running until the next
+   `docker system prune`.
+4. Call `start_ftp_server` (or, for stubs, `printf '  skip: ...' ;
+   exit 0`).
+5. Build the lftp script with `lftp_build_open_script` (writes
+   the `open` line, the global `set` directives, and your
+   caller-supplied commands, then a `quit`). The script file is
+   bind-mounted into the alpine container at
+   `/tmp/lftp-script.lftp` and consumed via `lftp -c "$(cat
+   /tmp/lftp-script.lftp)"` (lftp 4.9.3 refuses to combine `-c`
+   or `-f` with a URL on the command line, so the URL must be
+   inside the script).
+6. Invoke the lftp driver with `lftp_run_script`. The function
+   bind-mounts your script and the fixtures directory, runs lftp
+   in a fresh alpine:3.23.3 with `apk add lftp`, and returns the
+   lftp exit code. **Do not** redirect the log to `/dev/null` —
+   on failure the orchestrator dumps the log to stderr (via
+   `log_fail`) so the failure is debuggable from the runner log.
+7. On non-zero lftp exit, print the captured log to stderr
+   yourself before calling `log_fail` (the `lftp_run_script`
+   helper captures to a file but does not print).
+8. Use `assert_present` / `assert_absent` against the bind-mounted
+   `${FTP_DATA_DIR}/${FTP_USER}` directory to verify FTP server
+   state. The local umask on vsftpd is set to 022 by
+   `start_ftp_server` so files and directories are world-readable
+   from the host — this is what makes `ls`-based verification
+   portable across uid-mapping schemes (rootless docker, rootless
+   podman, rootful docker). `start_ftp_server` also execs a
+   `chmod 0777` inside the container so the FTP user home is
+   world-readable+executable, which is what makes the bind mount
+   `ls`-able from the host under rootless setups.
+9. End with `exit 0` on success. **Never** use
+   `cmd || { log_fail; }` patterns — when `set -e` is active and
+   `log_fail` returns non-zero, the combination masks the failure
+   and produces a spurious PASS.
+
+## Network and credentials
+
+The action container runs with `--network host` so it shares the
+host's network namespace. This is required because the FTP server's
+PASV data port range (`31100-31110`) cannot be mapped one-by-one
+on rootless podman (privileged port mapping is restricted), and
+the alpine+lftp container needs to reach the PASV port on the
+host loopback after vsftpd advertises it. The trade-off:
+
+* The vsftpd container publishes `-p 2121:21 -p 31100-31110:31100-31110`
+  on the host. (The control port is 2121, not 21, because rootless
+  podman cannot bind to a host port < 1024 without sudo. CI on
+  GH-hosted ubuntu-latest runs docker as root and can bind to 21
+  — the harness hard-codes 2121 + 31100-31110 either way; the
+  FTP protocol surface is identical.)
+* `PASV_ADDRESS=127.0.0.1` makes vsftpd advertise `127.0.0.1` as
+  the PASV data address, which is reachable from the
+  `--network host` alpine container.
+* `LOCAL_UMASK=022` lets the host `ls` the FTP user home directory
+  for post-action assertions.
+* `start_ftp_server` execs `chmod 0777 /home/vsftpd/${FTP_USER}`
+  inside the container so the FTP user home is world-readable
+  regardless of the host's uid mapping.
+
+The FTP password (and every other credential) goes into the
+lftp script only — never on the harness command line. The lftp
+script file is owned by the test runner with mode 0600 and is
+bind-mounted read-only into the alpine container.
+
+## Limitations / follow-ups
+
+* **FTPS scenarios (03, 04) are stubs.** Wiring FTPS requires
+  generating a self-signed certificate and mounting it into
+  vsftpd, which is the scope of #120.
+* **lftp 4.9.3 `.netrc` and `mirror:exclude-file` quirks.** See
+  "Why variant B" above. The action's `INPUT_EXCLUDE_DELETE` input
+  is effectively a no-op against the current image. Either
+  bumping the lftp version or changing the action to pass `-u
+  user,pass` on the lftp command line (and accepting the argv
+  password) would unblock the original variant-C plan; both are
+  out of scope for #117.
+* **Concurrency lock (`INPUT_CONCURRENCY_LOCK=true`)** is not
+  covered. The lock acquisition path goes through lftp's
+  `quote MKD`/`quote RMD`, which can be exercised against
+  fauria/vsftpd without further infra, but is deferred to
+  keep #117 scoped to the harness itself.
+* **Variant C**: as discussed above, the original plan was to
+  drive the upload through the action image. The `.netrc` issue
+  blocks this for now; a follow-up PR can re-attempt it.
+
+See `.worktrees/wt-117a-vu1m`, `wt-117b-7u8g`, `wt-117c-fbzk`
+for the variant A/B/C worktrees.

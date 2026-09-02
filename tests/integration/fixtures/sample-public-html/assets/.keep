@@ -1,0 +1,4 @@
+Placeholder file so the assets/ directory survives a git checkout.
+The ftp-deployment-action's mirror must create this empty directory
+on the FTP server side; the presence of a subdirectory in the
+uploaded tree exercises lftp's MKD recursion.
