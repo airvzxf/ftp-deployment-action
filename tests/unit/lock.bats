@@ -213,8 +213,11 @@ teardown() {
   acquire_lock_with_recovery \
     "ftp://example.test" ".lftp-deployment.lock" "5" "1" || rc=$?
   [ "${rc:-0}" -eq 0 ]
-  # The first lftp call must be the MKD.
-  grep -q "quote MKD .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
+  # The first lftp call must be the mkdir (v2.11.0: switched from
+  # `quote MKD` — which silently swallowed 5xx replies in lftp
+  # 4.9.x — to lftp's high-level mkdir command, which propagates
+  # the 550 properly).
+  grep -q "mkdir .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
   # The second lftp call must be the PUT for the sentinel.
   grep -q "put " "${FAKE_LFTP_LOG}"
   grep -q ".lftp-deployment.lock.*.info" "${FAKE_LFTP_LOG}"
@@ -283,8 +286,12 @@ FAKE
   # RMD lock dir, MKD (success), PUT sentinel.
   call_count=$(wc -l < "${FAKE_LFTP_LOG}")
   [ "${call_count}" -eq 6 ]
-  grep -q "quote MKD .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
-  grep -q "quote LIST" "${FAKE_LFTP_LOG}"
+  # v2.11.0: switched MKD from `quote MKD` (which swallows 5xx in
+  # lftp 4.9.x) to lftp's high-level `mkdir`. Stale-recovery LIST
+  # also moved from raw `quote LIST` (rejected by vsftpd for lack
+  # of PASV) to lftp's high-level `cls`.
+  grep -q "mkdir .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
+  grep -q "cls -la ." "${FAKE_LFTP_LOG}"
   grep -q "quote DELE" "${FAKE_LFTP_LOG}"
   grep -q "quote RMD" "${FAKE_LFTP_LOG}"
   grep -q "put " "${FAKE_LFTP_LOG}"
@@ -359,7 +366,7 @@ FAKE
     "ftp://example.test" ".lftp-deployment.lock" "0" "5" || rc=$?
   [ "${rc:-0}" -eq 1 ]
   # At least one MKD call (and no sentinel write).
-  grep -q "quote MKD" "${FAKE_LFTP_LOG}"
+  grep -q "mkdir .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
   if grep -q "put " "${FAKE_LFTP_LOG}"; then
     echo "timeout=0 + MKD fail should not attempt sentinel write"
     cat "${FAKE_LFTP_LOG}"
