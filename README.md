@@ -654,12 +654,63 @@ log for debugging).
 | `mirror: Access failed: 550 ... No such file or directory` | The remote path does not exist or the FTP user has no permission to create it. | Create the `remote_dir` manually (or set `delete: false` and accept a partial mirror) and confirm the FTP user owns it. |
 | `getpeername: Connection refused` on `ftps://host:990` | The server is **not** speaking implicit FTPS — it is almost certainly explicit FTPS on port 21. The `ftps://` URL forces TLS from byte 0, which the server rejects. | Switch `server` to `ftp://host:21` and keep `ftp_ssl_allow: "true"`. See the "Plain FTP vs FTPS" table in [Security and SSL](#security-and-ssl). |
 | lftp logs `PROT command not understood` then drops the data connection | Some legacy FTPS servers do not support `PROT P` even though they accept `AUTH TLS`. lftp falls back to `PROT C` (clear data channel) by default; if the server closes the data connection instead, the action exits 1. | Add `lftp_settings: "set ftps:initial-prot C;"` to the step, or ask the hoster to enable `PROT P` server-side. |
+| `can't create /<some-path>/.netrc: Permission denied` (or `Read-only file system`) on self-hosted runners | The runner is forwarding its host `HOME` into the container. The action tried to write `<HOME>/.netrc`, but the directory is read-only or owned by a different uid than the in-container `lftp` user. | **Fixed in v2.11.0** — `entrypoint.sh` now pins `NETRC=/home/lftp/.netrc` and `export HOME=/home/lftp` regardless of any inherited `HOME`. On older versions, add `env: HOME: /home/lftp` to the step. See [Self-hosted runners](#self-hosted-runners) below for the full picture. |
 
 > **The job is still running for hours**: `lftp` is probably waiting on a
 > half-open TCP connection. Since v1.5.0 the action wraps every
 > invocation in a hard 5-hour `timeout`; the job will be killed (exit
 > `1`) at that point. If you want to fail faster, set `net_timeout` /
 > `dns_fatal_timeout` lower than the defaults (`15s` / `10s`).
+
+## Self-hosted runners
+
+The action is a Docker action — it is forwards-compatible with
+any Linux runner that ships a recent Docker or Podman (GitHub-hosted
+`ubuntu-latest`, self-hosted Linux containers, k8s pods). macOS
+and Windows runners are not supported for container actions;
+runners that wrap a non-Linux container engine (Apple Colima,
+Rancher Desktop) are out of scope because the image we build is
+`linux/amd64` Alpine (see `Dockerfile`).
+
+Self-hosted runners forward environment variables from the host
+into the container by default. In practice this means `HOME` is
+copied from the runner process, which is usually `/github/home`
+(the GitHub Actions Runner service) or `/home/runner` (bare-metal).
+Since **v2.11.0**, the action ignores the inherited `HOME` and pins
+`HOME=/home/lftp` unconditionally — `entrypoint.sh` writes the
+credentials to `/home/lftp/.netrc` (the path the `Dockerfile`
+guarantees to be writable for the `lftp` user), so the deployment
+succeeds even when the host `HOME` is read-only or owned by a
+different uid.
+
+On older versions (`v2.10.0` and below) the action wrote the
+credentials to `${HOME}/.netrc`, which made the `.netrc` write
+fail with `can't create /<HOME>/.netrc: Permission denied` on
+self-hosted runners with the default `HOME` forwarding. If you
+cannot yet upgrade to v2.11.0, the workaround is to pin `HOME`
+explicitly on the step:
+
+```yaml
+- uses: airvzxf/ftp-deployment-action@v2
+  env:
+    HOME: /home/lftp        # override the runner's HOME
+  with:
+    server: ftp://example.com
+    user: ${{ secrets.FTP_USERNAME }}
+    password: ${{ secrets.FTP_PASSWORD }}
+    local_dir: .
+    remote_dir: /www
+```
+
+The `env` block on the action step ships only `HOME` to the
+container, leaving every other environment variable forwarded
+normally. This is the documented escape hatch for v2.10.0 and
+remains valid on v2.11.0+.
+
+See also `SECURITY.md` → "Self-hosted runners" for the security
+implications of environment forwarding and how the action's
+`.netrc` path pin keeps the password out of argv in every
+configuration.
 
 ## Security
 
