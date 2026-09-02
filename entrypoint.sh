@@ -180,9 +180,17 @@ print_resolved_config
 # to ~/.netrc with mode 0600 is the POSIX-blessed way to feed lftp a
 # password. The file is removed via an EXIT trap so it does not
 # survive a `set -e` abort, a SIGINT, or a normal exit.
+#
+# v2.11.0: pin NETRC and HOME to the path the Dockerfile guarantees to be
+# writable for the `lftp` user. Self-hosted runners that forward
+# HOME=/github/home (or any other host path) into the container would
+# otherwise make the fallback `: "${HOME:=/home/lftp}"` a no-op, and the
+# `lftp` user could not create /github/home/.netrc. This closes #111.
+# See tests/integration/scenarios/07-self-hosted-home.sh for the
+# regression test that pinned this fix.
 # ------------------------------------------------------------------------------
-: "${HOME:=/home/lftp}"
-NETRC="${HOME}/.netrc"
+NETRC="/home/lftp/.netrc"
+export HOME="/home/lftp"
 NETRC_HOST=$(extract_netrc_host "${INPUT_SERVER}")
 write_netrc "${NETRC}" "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
 
@@ -267,8 +275,8 @@ LFTP_KILL_AFTER="30s"
 # directory is created here rather than at the top of the script
 # so test runs that exit before the loop (validate_int / deprecated
 # ref) do not leave an empty .lftp-logs directory behind.
-mkdir -p "${HOME}/.lftp-logs"
-LOG_FILE="${HOME}/.lftp-logs/run-$(date -u +%Y%m%dT%H%M%SZ).log"
+mkdir -p "/home/lftp/.lftp-logs"
+LOG_FILE="/home/lftp/.lftp-logs/run-$(date -u +%Y%m%dT%H%M%SZ).log"
 
 printf '::group::Upload\n'
 while true; do
