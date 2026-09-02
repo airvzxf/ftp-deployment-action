@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **#111** — `entrypoint.sh` trusted the inherited `HOME` from self-hosted runners, causing `can't create /github/home/.netrc: Permission denied` when the runner forwarded `HOME=/github/home` (or any other host path) into the container. v2.11.0 pins `NETRC=/home/lftp/.netrc` and `export HOME=/home/lftp` unconditionally, closing the bug. The `env: HOME: /home/lftp` workaround is no longer required (it remains valid).
 - **#124** — the `ftp-deployment-action` was inert against every real FTP server: `lftp 4.9.3` (the version pinned in `Dockerfile`) ignores `.netrc` when the URL has a scheme but no embedded user, falling back to `USER anonymous`. v2.11.0 rewrites `INPUT_SERVER` from `ftp://host:port` to `ftp://<user>@host:port` inside `lib.sh::run_lftp_once` (only when the URL has no embedded user), so the lftp netrc lookup actually fires. The password still comes from the `.netrc` written by the action (B-03 is preserved; only the user is in the URL, which is the documented safe form per the audit in #124). Closes #124.
 
+### Documentation
+
+- **README.md** ("Troubleshooting" table + new "Self-hosted runners" section): a new row documents the `can't create /<some-path>/.netrc: Permission denied` symptom from #111, marks it as fixed in v2.11.0, and points users on older versions to the `env: HOME: /home/lftp` workaround. The new top-level "Self-hosted runners" subsection explains why self-hosted Linux runners work, why macOS / Windows don't, and what `HOME` forwarding meant before v2.11.0.
+- **SECURITY.md** (new "Self-hosted runners" section): explains the `HOME` inheritance threat model (#111), records the v2.11.0 fix, and lists the three concrete steps a self-hosted runner operator can take to verify no password reaches the host (`env: HOME: /home/lftp` pin, signed-tag verification, `make integration` end-to-end).
+
 
 ## [2.10.0] - 2026-07-08
 

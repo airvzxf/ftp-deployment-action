@@ -66,6 +66,43 @@ warning emitted by the action itself at runtime. Users who
 need to verify a legacy tag's integrity can pin to a specific
 commit SHA instead of the tag name.
 
+## Self-hosted runners
+
+Self-hosted runners copy environment variables from the host into
+the container by default. The most consequential one is `HOME`:
+the runner process's `HOME` (typically `/github/home` on the
+GitHub Actions Runner service, or `/home/runner` on a bare-metal
+runner) is forwarded as `HOME=/github/home` (or similar) inside
+the container, which historically caused the
+`can't create /<HOME>/.netrc: Permission denied` failure
+reported in #111.
+
+Since **v2.11.0** the action pins `HOME=/home/lftp` and
+`NETRC=/home/lftp/.netrc` unconditionally inside `entrypoint.sh`,
+so self-hosted runners no longer trigger that bug. The password
+still comes from the `.netrc` file the action writes, which is
+mode `0600`, owned by the in-container `lftp` user, and removed
+by an `EXIT` trap — so it does not appear in `/proc/<pid>/cmdline`,
+in the runner log, or in any subsequent container filesystem
+state.
+
+A self-hosted runner operator who needs to verify that the
+password never reaches the host can:
+
+- Pin `HOME` on the step explicitly (`env: HOME: /home/lftp`).
+  This is the documented escape hatch for users on older versions
+  and is now redundant but still valid.
+- Confirm the image tag is GPG-signed (`git verify-tag <tag>`
+  against the maintainer key listed in the "Tag signing policy"
+  section above). The release pipeline refuses to publish an
+  image whose tag does not verify, so a signed image is also a
+  signed-source-image.
+- Run the integration suite locally against a real FTP server
+  with `make integration` — see `tests/integration/README.md`.
+  The suite boots `fauria/vsftpd` in a sibling container and runs
+  every scenario end-to-end against it; CI runs the same suite
+  on every PR.
+
 ## Reporting a vulnerability
 
 Please **do not** open a public GitHub issue for security problems.
