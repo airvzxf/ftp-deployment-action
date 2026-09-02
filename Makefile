@@ -31,8 +31,13 @@ shellcheck:
 	@command -v shellcheck >/dev/null 2>&1 || { \
 		echo "shellcheck not found; install with: apt-get install shellcheck / apk add shellcheck"; \
 		exit 1; }
-	# -x: follow `shellcheck source=` directives (entrypoint.sh sources lib.sh).
+	# -x: follow `shellcheck source=` directives (entrypoint.sh sources lib.sh,
+	# tests/integration/scenarios/*.sh source tests/integration/lib/common.sh).
+	# Pass common.sh alongside each scenario so shellcheck's source= path
+	# resolution can find the shared library.
 	shellcheck -x entrypoint.sh lib.sh tests/contract.sh tests/smoke.sh scripts/backfill-releases.sh
+	shellcheck -x tests/integration/lib/common.sh tests/integration/run-integration-tests.sh
+	shellcheck -x tests/integration/scenarios/*.sh
 
 .PHONY: actionlint
 actionlint:
@@ -87,6 +92,25 @@ unit:
 .PHONY: build
 build:
 	docker build -t $(IMAGE) --build-arg VERSION=$(VERSION) .
+
+# ----------------------------------------------------------------------------
+# Integration: boot a real vsftpd container (docker.io/fauria/vsftpd) and
+# exercise the action against it. Wired by #117; see tests/integration/README.md
+# for the harness layout, the per-scenario conventions, and how to add a
+# new scenario.
+#
+# IMAGE is the ftp-deployment-action image under test. CI sets
+# IMAGE=ftp-deployment-action:ci-integration and builds it with `make build
+# IMAGE=ftp-deployment-action:ci-integration VERSION=ci` first.
+#
+# Skips (exit 0) if no docker/podman is on PATH, mirroring tests/smoke.sh.
+# ----------------------------------------------------------------------------
+.PHONY: integration
+integration:
+	@command -v docker >/dev/null 2>&1 || command -v podman >/dev/null 2>&1 || { \
+		echo "no docker/podman found; skipping integration tests"; \
+		exit 0; }
+	$(SH) tests/integration/run-integration-tests.sh
 
 .PHONY: run
 run: build

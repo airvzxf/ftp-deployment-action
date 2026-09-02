@@ -23,10 +23,13 @@ jobs:
       - name: Run shellcheck
         run: |
           set -e
-          # -x: follow `shellcheck source=` directives (entrypoint.sh sources lib.sh).
+          # -x: follow `shellcheck source=` directives (entrypoint.sh sources lib.sh,
+          # tests/integration/scenarios/*.sh source tests/integration/lib/common.sh).
           shellcheck -x entrypoint.sh lib.sh
           shellcheck tests/contract.sh
           shellcheck tests/smoke.sh
+          shellcheck -x tests/integration/lib/common.sh tests/integration/run-integration-tests.sh
+          shellcheck -x tests/integration/scenarios/*.sh
 
   actionlint:
     name: actionlint
@@ -92,3 +95,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run entrypoint.sh smoke tests in alpine
         run: tests/smoke.sh
+
+  # Integration tests (issue #117): boot a real vsftpd container
+  # (docker.io/fauria/vsftpd) and exercise the action against it.
+  # Three scenarios actually run today (01, 02, 05); scenarios 03
+  # and 04 are stubs deferred to #120 (FTPS integration). The
+  # timeout-minutes: 5 reflects the budget defined in #117's
+  # acceptance criteria; previously this section had no explicit
+  # timeout (default 360 min), which let regressions hide behind
+  # GH Actions' default budget. Pinning it to 5 minutes forces the
+  # harness to stay fast.
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the action image under test
+        run: make build IMAGE=ftp-deployment-action:ci-integration VERSION=ci
+      - name: Run integration scenarios against a real vsftpd
+        run: make integration IMAGE=ftp-deployment-action:ci-integration
