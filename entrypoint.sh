@@ -295,7 +295,8 @@ while true; do
     "${LFTP_TIMEOUT}" \
     "${LFTP_KILL_AFTER}" \
     "${LOCK_ACQUIRE}" \
-    "${LOCK_RELEASE}"
+    "${LOCK_RELEASE}" \
+    "${INPUT_USER}"
   LFTP_RC=$?
   set -e
 

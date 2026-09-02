@@ -685,13 +685,36 @@ run_lftp_once() {
   _rlo_kill_after=$8
   _rlo_lock_acquire=$9
   _rlo_lock_release=${10}
+  _rlo_user=${11}  # v2.11.0: optional. When non-empty AND the URL
+                   # has no embedded user, we rewrite the URL to
+                   # "scheme://user@host:port" so lftp's lookup against
+                   # ~/.netrc (B-03) actually triggers. See
+                   # tests/integration/scenarios/08-action-driven-upload.sh
+                   # and #124 (closes lftp-by-design workaround).
 
-  # B-03: no -u USER,PASS — lftp reads credentials from ${NETRC}.
+  # v2.11.0: rewrite the URL when it has a scheme but no embedded user.
+  # Without this, lftp 4.9.3 falls back to USER anonymous for
+  # `ftp://host:port` URLs and never consults ~/.netrc — see #124 and
+  # the upstream issue lavv17/lftp#372 (where lavv17 closed the
+  # equivalent report as by-design). When the URL already has a user
+  # ("scheme://user@host:..."), leave it as-is.
+  _rlo_server_eff=${_rlo_server}
+  if [ -n "${_rlo_user}" ]; then
+    case ${_rlo_server_eff} in
+      *://*@*) ;;                                                    # user already present; no-op
+      *://*)   _rlo_server_eff="${_rlo_server_eff%%://*}://${_rlo_user}@${_rlo_server_eff#*://}" ;;
+      *)       ;;                                                    # no scheme; lftp's open code already covers netrc lookup
+    esac
+  fi
+
+  # B-03: no -u USER,PASS — lftp reads the password from ${NETRC}.
+  # The user embedded in the URL above is what triggers lftp's
+  # NetRC::LookupHost call (see commands.cc:1055 in upstream).
   # B-04: redirect combined stdout+stderr to the timestamped log file
   # so the captured output can be inspected after the fact and, if
   # the user wishes, attached as a workflow artifact.
   timeout -k "${_rlo_kill_after}" "${_rlo_timeout}" lftp \
-    "${_rlo_server}" \
+    "${_rlo_server_eff}" \
     -e "${_rlo_settings} ${_rlo_lock_acquire}${_rlo_mirror} ${_rlo_local} ${_rlo_remote}; ${_rlo_lock_release}quit;" \
     > "${_rlo_log}" 2>&1
 }
