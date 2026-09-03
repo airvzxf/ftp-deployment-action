@@ -306,6 +306,16 @@ print_inputs_dump() {
 #       so the user can override the above via lftp_settings if
 #       needed.
 #
+#   `set mirror:exclude-file <value>;` is NOT emitted as a plain
+#   directive: lftp 4.9.x hides that variable behind the `set -a`
+#   toggle (off by default; turns on "show all variables" so the
+#   plain `set mirror:exclude-file ...` form is recognised). Toggling
+#   `-a` on for the whole chain would also flip the auto-show for
+#   every other directive and produce surprising side effects, so we
+#   wrap the assignment in `set -a; ... ; set -a;` — on for the one
+#   write, off again so the rest of the chain behaves normally. See
+#   #131 (closes).
+#
 #   The "Remove leading space" trick at the end of the function
 #   keeps the output clean when the first directive is preceded by
 #   one of the extension blocks.
@@ -344,7 +354,10 @@ build_ftp_settings() {
   fi
   _bfs_exclude_delete=$(_indirection "INPUT_EXCLUDE_DELETE")
   if [ -n "${_bfs_exclude_delete}" ]; then
-    _bfs_settings="${_bfs_settings} set mirror:exclude-file ${_bfs_exclude_delete};"
+    # lftp 4.9.x hides `mirror:exclude-file` behind the `set -a`
+    # toggle. Toggle it on for this one write, then toggle it off so
+    # the rest of the chain behaves normally. See #131.
+    _bfs_settings="${_bfs_settings} set -a; set mirror:exclude-file ${_bfs_exclude_delete}; set -a;"
   fi
   # Any manual settings (B-16, already validated).
   _bfs_extra=$(_indirection "INPUT_LFTP_SETTINGS")

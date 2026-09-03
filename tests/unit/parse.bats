@@ -165,7 +165,7 @@ setup() {
   [[ "$output" != *"mirror:exclude-file"* ]]
 }
 
-@test "build_ftp_settings: INPUT_EXCLUDE_DELETE=*.bak appends `set mirror:exclude-file *.bak;`" {
+@test "build_ftp_settings: INPUT_EXCLUDE_DELETE=*.bak appends `set -a; set mirror:exclude-file *.bak; set -a;` (closes #131)" {
   unset INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME \
         INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
         INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
@@ -174,10 +174,16 @@ setup() {
   INPUT_EXCLUDE_DELETE="*.bak"
   run build_ftp_settings
   [ "$status" -eq 0 ]
+  # The core assignment must still be present.
   [[ "$output" == *"set mirror:exclude-file *.bak;"* ]]
-  # 11 standard + 1 exclude-file = 12.
+  # The full scoped directive wraps the assignment in two `set -a;`
+  # toggles (lftp 4.9.x hides `mirror:exclude-file` behind `set -a`;
+  # the first toggle enables "show all variables", the second disables
+  # it so the rest of the chain behaves normally). See #131.
+  [[ "$output" == *"set -a; set mirror:exclude-file *.bak; set -a;"* ]]
+  # 11 standard + 3 EXCLUDE_DELETE (`set -a;`, `set mirror:exclude-file ...`, `set -a;`) = 14.
   n=$(printf '%s' "$output" | grep -oE 'set ' | wc -l | tr -d ' ')
-  [ "$n" -eq 12 ]
+  [ "$n" -eq 14 ]
   # mirror:exclude (no -file) must NOT appear.
   # The grep below is anchored on the whole token "set mirror:exclude "
   # to avoid matching "set mirror:exclude-file".
@@ -195,9 +201,9 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"set mirror:exclude *.map;"* ]]
   [[ "$output" == *"set mirror:exclude-file *.bak;"* ]]
-  # 11 standard + 2 exclude = 13.
+  # 11 standard + 1 EXCLUDE + 3 EXCLUDE_DELETE (`set -a;`, `set mirror:exclude-file ...`, `set -a;`) = 15.
   n=$(printf '%s' "$output" | grep -oE 'set ' | wc -l | tr -d ' ')
-  [ "$n" -eq 13 ]
+  [ "$n" -eq 15 ]
   # Order: mirror:exclude appears before mirror:exclude-file.
   pos_exclude=$(printf '%s' "$output" | grep -boE 'set mirror:exclude \*\.map;' | head -1 | cut -d: -f1)
   pos_exclude_file=$(printf '%s' "$output" | grep -boE 'set mirror:exclude-file \*\.bak;' | head -1 | cut -d: -f1)
