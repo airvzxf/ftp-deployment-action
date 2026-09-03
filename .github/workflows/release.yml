@@ -346,7 +346,19 @@ jobs:
             echo "::notice::Docker Hub secrets (DOCKERHUB_USERNAME, DOCKERHUB_TOKEN) not set; skipping docker.io publish"
           fi
 
-          if [ -n "${AWS_ROLE_TO_ASSUME}" ]; then
+          # ECR Public publishing is temporarily disabled. The
+          # AWS_ROLE_TO_ASSUME secret exists in the repo but the
+          # IAM role's OIDC trust policy is not configured to
+          # allow this repo, which makes `Configure AWS
+          # credentials (OIDC) for ECR Public` fail with
+          # `Not authorized to perform sts:AssumeRoleWithWebIdentity`.
+          # The maintainer does not currently have access to the
+          # AWS account, so we cannot fix the trust policy from
+          # the repo side. To re-enable: replace `false` with
+          # `[ -n "${AWS_ROLE_TO_ASSUME}" ]` and uncomment the
+          # two ECR Public steps in the `Build · release image`
+          # job below.
+          if false; then
             ecr_image="public.ecr.aws/m2z1h0m9/ftp-deployment-action"
             tags="${tags}"$'\n'"${ecr_image}:${version}"$'\n'"${ecr_image}:${tag}"$'\n'"${ecr_image}:latest"
             {
@@ -355,7 +367,7 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             echo "ECR Public publishing ENABLED (${ecr_image})"
           else
-            echo "::notice::AWS_ROLE_TO_ASSUME secret not set; skipping public.ecr.aws publish"
+            echo "::notice::ECR Public publishing disabled in release.yml (AWS IAM trust policy needs update); skipping public.ecr.aws publish"
           fi
 
           # Heredoc-style multi-line output for `all_tags`.
@@ -413,19 +425,6 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Configure AWS credentials (OIDC) for ECR Public
-        if: ${{ steps.meta.outputs.ecr_enabled == 'true' }}
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          aws-region: us-east-1
-
-      - name: Log in to ECR Public
-        if: ${{ steps.meta.outputs.ecr_enabled == 'true' }}
-        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
-        with:
-          registry-type: public
-
       - name: Build and push image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -458,6 +457,41 @@ jobs:
           # build path.
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # v2.10.0+: ECR Public is a SECONDARY publish target. OIDC
+      # role assumption (no static AWS secrets) is configured in
+      # two steps: configure-aws-credentials assumes the role and
+      # exports AWS_ACCESS_KEY_ID/secret/session to subsequent
+      # steps; amazon-ecr-login then uses those credentials to
+      # call ecr-public:GetAuthorizationToken and to docker login
+      # to public.ecr.aws. The IAM role trust policy must list
+      # `token.actions.githubusercontent.com` as a federated
+      # principal with a `sub` condition matching this repo (see
+      # README section "Publishing targets" for the JSON).
+      #
+      # DISABLED: see the comment on the ECR Public block in
+      # the `Resolve tag, version and enabled registries` step
+      # above for why these two steps are commented out. The
+      # conditional `if: ecr_enabled == 'true'` is dead until
+      # ECR is re-enabled, but we keep it as documentation and
+      # to make the re-enable diff trivial.
+      #
+      # - name: Configure AWS credentials (OIDC) for ECR Public
+      #   if: ${{ steps.meta.outputs.ecr_enabled == 'true' }}
+      #   uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+      #   with:
+      #     role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+      #     # ECR Public control plane lives in us-east-1 regardless
+      #     # of where the ECR Public registry "lives" (ECR Public
+      #     # has no region concept; the public.ecr.aws endpoint is
+      #     # global).
+      #     aws-region: us-east-1
+      #
+      # - name: Log in to ECR Public
+      #   if: ${{ steps.meta.outputs.ecr_enabled == 'true' }}
+      #   uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+      #   with:
+      #     registry-type: public
 
       # v2.4.0+: smoke-test the just-pushed image before
       # signing and attaching the SBOM. Catches Dockerfile /

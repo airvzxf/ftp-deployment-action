@@ -99,32 +99,40 @@ jobs:
 
 ## Publishing targets (v2.10.0+)
 
-Every tag is published to **three registries** so consumers can
+Every tag is published to **two registries** so consumers can
 pick whichever is closest (or already trusted) in their supply chain:
 
 | Registry | Image | How to consume |
 |---|---|---|
 | GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.10.0` | `uses: airvzxf/ftp-deployment-action@v2` (the example above) |
 | Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.10.0` | `uses: docker://docker.io/airvzxf/ftp-deployment-action@v2` |
-| AWS ECR Public | `public.ecr.aws/m2z1h0m9/ftp-deployment-action:v2.10.0` | `uses: docker://public.ecr.aws/m2z1h0m9/ftp-deployment-action@v2` |
 
-All three carry the same OCI image bytes (one `docker buildx build`,
+Both carry the same OCI image bytes (one `docker buildx build`,
 one digest), the same `cosign` keyless signature
 (`cosign verify --certificate-identity-regexp ... --certificate-oidc-issuer ...`
-against any of the three image refs), and the same CycloneDX SBOM
+against either image ref), and the same CycloneDX SBOM
 attestation (attached via `actions/attest`). ghcr.io is always
-published; Docker Hub and ECR Public are **conditional on the
-repo having the right secrets configured** (see the
-[Maintainer setup](#maintainer-setup-publishing-to-docker-hub-and-ecr-public)
-section below). If a secret is missing, the release pipeline
-emits a `::notice::` and skips that registry — the v2.9.0
-behaviour (ghcr.io only) is preserved bit-for-bit.
+published; Docker Hub is **conditional on the repo having the
+right secrets configured** (see the [Maintainer setup](#maintainer-setup-publishing-to-docker-hub)
+section below). If the Docker Hub secrets are missing, the
+release pipeline emits a `::notice::` and skips that registry —
+the v2.9.0 behaviour (ghcr.io only) is preserved bit-for-bit.
 
-### Maintainer setup: publishing to Docker Hub and ECR Public
+> **Note on ECR Public**: A third registry (`public.ecr.aws/m2z1h0m9/...`)
+> was added in v2.10.0 for enterprise visibility. It is **temporarily
+> disabled** as of the post-v2.11.1 commits because the AWS IAM
+> role's OIDC trust policy is no longer aligned with this repo,
+> and the maintainer does not currently have access to the AWS
+> account. The `release.yml` ECR Public steps are commented out
+> (not deleted) so re-enabling is a one-line change in two places
+> when the trust policy is fixed. See the "Re-enable ECR Public"
+> section below for the exact diff.
 
-These are **one-time** per-registry setups. They are not required
-to use the action; they are only required if you are the
-maintainer pushing new releases.
+### Maintainer setup: publishing to Docker Hub
+
+This is a **one-time** setup. It is not required to use the
+action; it is only required if you are the maintainer pushing
+new releases.
 
 **Docker Hub** (publishes to `docker.io/airvzxf/ftp-deployment-action`):
 
@@ -139,7 +147,39 @@ maintainer pushing new releases.
 3. Tag and push the next release. The pipeline will detect both
    secrets and push to docker.io alongside ghcr.io.
 
-**ECR Public with OIDC** (publishes to
+**Skipping a registry**: leave its secrets unset. The pipeline
+emits a `::notice::` and falls back to the registries that *do*
+have secrets configured. The ghcr.io path is unaffected.
+
+### Re-enable ECR Public (when AWS access is restored)
+
+The ECR Public publishing code is fully present in
+`.github/workflows/release.yml` but gated by `if false; then` in
+the meta step and commented-out steps in the build job. To
+re-enable, two edits in `release.yml`:
+
+1. In the `Resolve tag, version and enabled registries` step,
+   change the `if false; then` line to:
+   ```bash
+   if [ -n "${AWS_ROLE_TO_ASSUME}" ]; then
+   ```
+   (and delete the "ECR Public publishing is temporarily disabled"
+   comment block above it).
+2. In the `Build · release image` job, uncomment the two steps
+   marked `# - name: Configure AWS credentials (OIDC) for ECR Public`
+   and `# - name: Log in to ECR Public` (the line `# - name:`
+   becomes `      - name:` and the `# ` prefix is removed from
+   each subsequent line).
+
+Then update the IAM role's OIDC trust policy as documented
+in this section (below — kept for reference, no longer active).
+
+#### Reference: ECR Public with OIDC (currently disabled)
+
+The original setup (kept here so re-enabling does not require
+re-deriving the IAM policy from scratch):
+
+ECR Public (publishes to
 `public.ecr.aws/m2z1h0m9/ftp-deployment-action` — no static AWS
 secrets):
 
