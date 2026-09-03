@@ -1,0 +1,36 @@
+# Trusted tag signers — used by `.github/workflows/release.yml`
+# `verify-tag-signature` job to gate release builds on the tag being
+# signed by a key listed here.
+#
+# This file is consulted via `git config gpg.ssh.allowedsignersfile`.
+# Format: one line per signer, `<principal> <key-type> <key-body>`.
+# OpenSSH's `sshsig.c` skips `#`-prefixed lines anywhere in the file,
+# so the explanatory header is safe to keep.
+#
+# Matching is by **key body**, not principal — git calls
+# `ssh-keygen -Y find-principals` and accepts the signature if any
+# principal in this file owns the key that produced it. The
+# `<principal>` field is a label that documents which identity
+# the key represents, not a constraint. An entry with a wildcard
+# or wrong-but-plausible principal still grants release authority;
+# treat every line as an unconditional grant.
+#
+# Tags signed with the GPG RSA key
+# (`82DE44111B30F91F55BCEB1F414687A3CD7E65B9`, long ID
+# `414687A3CD7E65B9`) — used for v2.10.0 and earlier — are
+# verified via the GPG backend after
+# `.github/trusted-signers.asc` is imported into the runner keyring.
+# `git verify-tag` auto-detects which backend the tag used, so both
+# formats work without conditional logic in the workflow.
+#
+# ED25519 fingerprint: SHA256:POu2Sr8ILb1IM05Vh1cGU3xivjx05QjWoWYhdLc6YHA
+# GPG long ID: 414687A3CD7E65B9 (primary fingerprint
+# `82DE44111B30F91F55BCEB1F414687A3CD7E65B9`).
+#
+# Adding / removing signers: see AGENTS.md §"Tag signature guard"
+# for the canonical procedure.
+#
+# Verify locally with:
+#   scripts/verify-tag.sh v2.11.0
+
+israel.alberto.rv@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPq6Zvvu+eTZQ0hUb/vHC5EfPEGvy1hTc0Psq9W2TMdz

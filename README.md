@@ -88,6 +88,14 @@ jobs:
 > latest v2.x release. For stricter reproducibility pin to a specific
 > tag (`@v2.0.0`) or a full commit SHA. Avoid `@latest` and `@main` —
 > they move under you and can introduce regressions.
+>
+> **Verify a tag's signature before pinning to it**:
+> `scripts/verify-tag.sh v2.11.0` checks the tag against the
+> in-repo allow-list (`.github/trusted-signers` for SSH-signed
+> v2.11.0+ tags, `.github/trusted-signers.asc` for PGP-signed
+> v1.5.0 – v2.10.0). The release pipeline's
+> `verify-tag-signature` job runs the same check on every push
+> before any image is published.
 
 ## Publishing targets (v2.10.0+)
 

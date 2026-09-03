@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Release pipeline with tag-signature guard (port of `airvzxf/moagan` PR #737)** — `.github/workflows/release.yml` is now a five-job pipeline (`validate-tag-input` → `verify-tag-reachability` ∥ `verify-tag-signature` → `build` → `publish`) with two parallel verify jobs that gate the build. `validate-tag-input` regex-checks the dispatch input. `verify-tag-reachability` enforces the AGENTS.md "tag the trunk merge commit, NOT the branch tip" rule mechanically (`git merge-base --is-ancestor`). `verify-tag-signature` runs `git verify-tag` against an in-repo allow-list fetched from `origin/main` (so revoking a key on main takes effect on the next release). The `build` job checks out the immutable tag commit SHA (not the mutable ref) so a tag force-push mid-run cannot redirect the build. `publish` is the only job with `contents: write`. Top-level `concurrency: release-<tag>` prevents two `release.yml` runs against the same tag from racing the publish step.
+- **In-repo trusted-signers allow-list** — two new files under `.github/`. `.github/trusted-signers` is the SSH backend (one line: the maintainer's ED25519 key, fingerprint `SHA256:POu2Sr8ILb1IM05Vh1cGU3xivjx05QjWoWYhdLc6YHA`). `.github/trusted-signers.asc` is the PGP backend (ASCII-armored RSA key, fingerprint `82DE44111B30F91F55BCEB1F414687A3CD7E65B9`, used for `v1.5.0` … `v2.10.0`). `git verify-tag` auto-detects the tag's signature format; the workflow imports the PGP key into a temp keyring only when the tag is PGP-signed, so SSH-only releases never need the `.asc` file (keeps the documented key-removal path in AGENTS.md intact).
+- **`AGENTS.md`** — project-level agent instructions mirroring the structure of `airvzxf/moagan`'s `AGENTS.md` (complementary to the existing `ROADMAP.md`). Documents the tag-signature guard, the dual-backend allow-list, the local-verification command, the "tag the trunk merge commit" procedure, and the red-workflow repair loop. The procedural rules are load-bearing; the workflow guards are the structural check.
+- **`scripts/verify-tag.sh`** — single-purpose local re-verifier. Imports the PGP allow-list into a `mktemp -d` keyring (so the developer's permanent `~/.gnupg` is untouched), configures git via per-invocation `git -c` overrides (so `.git/config` is untouched), and runs `git verify-tag` against the tag. Handles SSH-signed (`v2.11.0+`), PGP-signed (`v2.10.0` and earlier), and lightweight (`v1.0-alpha.1` … `v1.3.3`, exits 0 with INFO) tags. Shellcheck-clean.
+
+### Changed
+
+- **`SECURITY.md` (Tag signing policy)** — replaced the out-of-date "GPG-signed" claim with a per-tag-range table covering all three historical formats (lightweight legacy, PGP, SSH), and added the local-verification command (`scripts/verify-tag.sh <tag>`).
+
 ## [2.11.1] - 2026-09-03
 
 Pre-baked FTPS test server image (PR #139, closes #135): scenarios 03 (explicit) and 04 (implicit) no longer pay the per-run `apk add --no-cache` cost, eliminating the apk-index download race that intermittently failed CI.
