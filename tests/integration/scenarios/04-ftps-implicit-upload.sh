@@ -71,6 +71,14 @@ start_ftps_server "${FTP_USER}" "${FTP_PASSWORD}" "${FTP_DATA_DIR}" "${_cert}" "
 # which is what implicit FTPS expects on the wire.
 #
 # Same user-in-URL / SSL-flag reasoning as scenario 03.
+#
+# INPUT_MAX_RETRIES=3 (vs 1 in scenarios 08/09/10): defense-in-depth
+# against the residual flake mode B from #135 — lftp 4.9.3
+# occasionally fails the TLS handshake on the first attempt and
+# the action exits 1 before INPUT_MAX_RETRIES can fire on the
+# retry path. Cost is ~2-3s of extra CI wall time; eliminates the
+# residual flake if the pre-baked image work (closes #135) ever
+# regresses on the apk-index race front.
 _env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env failed"
 trap 'rm -f "${_env}"; stop_ftp_server' EXIT
 
@@ -80,7 +88,7 @@ trap 'rm -f "${_env}"; stop_ftp_server' EXIT
   printf 'INPUT_PASSWORD=%s\n' "${FTP_PASSWORD}"
   printf 'INPUT_LOCAL_DIR=/data\n'
   printf 'INPUT_REMOTE_DIR=/\n'
-  printf 'INPUT_MAX_RETRIES=1\n'
+  printf 'INPUT_MAX_RETRIES=3\n'
   printf 'INPUT_NET_TIMEOUT=10s\n'
   printf 'INPUT_DNS_FATAL_TIMEOUT=10s\n'
   printf 'INPUT_FTP_SSL_ALLOW=true\n'

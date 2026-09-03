@@ -15,13 +15,20 @@ SH := $(shell command -v bash 2>/dev/null || echo sh)
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 # Override on the command line: make build VERSION=dev, etc.
-VERSION ?= dev
-IMAGE   ?= ftp-deployment-action:local
+VERSION          ?= dev
+IMAGE            ?= ftp-deployment-action:local
+# Pre-baked FTPS test server image (tests/integration/Dockerfile.test-
+# server). Used by scenarios 03 / 04 in tests/integration/scenarios/.
+# Closed #135: the previous inline `apk add vsftpd openssl` on every
+# scenario start raced the apk index download against the 20s
+# wait_for_port deadline in CI; the pre-baked image eliminates that
+# race.
+TEST_SERVER_IMAGE ?= ftp-deployment-action-test-server:ci-integration
 
 # ----------------------------------------------------------------------------
 # Lint: shellcheck on all .sh files, actionlint on action.yml, hadolint
-# on the Dockerfile. actionlint is installed from upstream's release tarball
-# to avoid pulling the full Go toolchain.
+# on every Dockerfile in the repo. actionlint is installed from
+# upstream's release tarball to avoid pulling the full Go toolchain.
 # ----------------------------------------------------------------------------
 .PHONY: lint
 lint: shellcheck actionlint hadolint
@@ -51,7 +58,11 @@ hadolint:
 	@command -v hadolint >/dev/null 2>&1 || { \
 		echo "hadolint not found; install with: brew install hadolint / download from hadolint/hadolint releases"; \
 		exit 1; }
+	# Both the action Dockerfile and the pre-baked FTPS test server
+	# Dockerfile (closes #135). The previous target only covered
+	# `Dockerfile`, which left Dockerfile.test-server unlinted in CI.
 	hadolint --failure-threshold error Dockerfile
+	hadolint --failure-threshold error tests/integration/Dockerfile.test-server
 
 # ----------------------------------------------------------------------------
 # Test: the contract test (action.yml <-> entrypoint.sh/lib.sh consistency)
@@ -94,6 +105,27 @@ build:
 	docker build -t $(IMAGE) --build-arg VERSION=$(VERSION) .
 
 # ----------------------------------------------------------------------------
+# build-test-server-image: build the pre-baked FTPS test server image
+# (tests/integration/Dockerfile.test-server) used by scenarios 03 and
+# 04. CI builds this before `make integration`; local developers can
+# run it standalone with `make build-test-server-image
+# TEST_SERVER_IMAGE=ftpint-test-server:local`. The Makefile variable
+# TEST_SERVER_IMAGE defaults to `ftp-deployment-action-test-server:
+# ci-integration`, matching the tag the CI workflow uses, so the
+# Makefile target is in lockstep with `make integration` without
+# needing a separate flag.
+#
+# `tests/integration` is the build context (not the repo root) so
+# only the Dockerfile.test-server and its adjacent files are sent to
+# the docker daemon — the rest of the repo (action source, fixtures,
+# etc.) is never visible to the build.
+# ----------------------------------------------------------------------------
+.PHONY: build-test-server-image
+build-test-server-image:
+	docker build -f tests/integration/Dockerfile.test-server \
+	    -t $(TEST_SERVER_IMAGE) tests/integration
+
+# ----------------------------------------------------------------------------
 # Integration: boot a real vsftpd container (docker.io/fauria/vsftpd) and
 # exercise the action against it. Wired by #117; see tests/integration/README.md
 # for the harness layout, the per-scenario conventions, and how to add a
@@ -102,6 +134,11 @@ build:
 # IMAGE is the ftp-deployment-action image under test. CI sets
 # IMAGE=ftp-deployment-action:ci-integration and builds it with `make build
 # IMAGE=ftp-deployment-action:ci-integration VERSION=ci` first.
+#
+# TEST_SERVER_IMAGE is the pre-baked FTPS test server image used by
+# scenarios 03 / 04 (closes #135). CI builds it with `make build-test-
+# server-image` before invoking this target. The default tag matches
+# what CI uses; override for local development with a different name.
 #
 # Skips (exit 0) if no docker/podman is on PATH, mirroring tests/smoke.sh.
 # ----------------------------------------------------------------------------
@@ -154,3 +191,4 @@ release:
 .PHONY: clean
 clean:
 	docker rmi -f $(IMAGE) 2>/dev/null || true
+	docker rmi -f $(TEST_SERVER_IMAGE) 2>/dev/null || true
