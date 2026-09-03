@@ -16,28 +16,55 @@ README for the recommended pattern.
 
 ## Tag signing policy
 
-Starting with `v1.5.0`, every release tag is **annotated and
-GPG-signed** by the maintainer (key
-`82DE44111B30F91F55BCEB1F414687A3CD7E65B9`). The signature is
-verified by the release pipeline before the image is published.
-Locally, a signed tag can be distinguished from a lightweight
-one and checked like this:
+Release tags are signed in one of two formats, depending on the
+tag's age. The release pipeline's `verify-tag-signature` job
+runs `git verify-tag` against an in-repo allow-list and refuses
+to publish an image whose tag does not verify.
+
+| Tag range | Format | Allow-list entry | Maintainer key |
+|---|---|---|---|
+| `v1.0-alpha.1` … `v1.3.3` | Lightweight (unsigned) | n/a — EOL | n/a |
+| `v1.5.0` … `v2.10.0` | PGP (RSA) | `.github/trusted-signers.asc` | `82DE44111B30F91F55BCEB1F414687A3CD7E65B9` (long ID `414687A3CD7E65B9`) |
+| `v2.11.0` and later | SSH (ED25519) | `.github/trusted-signers` | `SHA256:POu2Sr8ILb1IM05Vh1cGU3xivjx05QjWoWYhdLc6YHA` (principal `israel.alberto.rv@gmail.com`) |
+
+`git verify-tag` auto-detects which backend the tag used, so
+both formats are supported by the same workflow job. The PGP
+`.asc` allow-list is imported into the runner's keyring only
+when the tag being verified is PGP-signed; v2.11.0+ SSH tags
+never import the GPG key. This keeps the documented key-removal
+path intact (see AGENTS.md §"Tag signature guard" → "Removing a
+signer") — the `.asc` is optional for new releases.
+
+The maintainer's PGP public key can be fetched from
+<https://keys.openpgp.net/search?q=82DE44111B30F91F55BCEB1F414687A3CD7E65B9>
+or with
+`gpg --keyserver keys.openpgp.net --recv-keys 82DE44111B30F91F55BCEB1F414687A3CD7E65B9`
+to verify PGP-signed tags (`v2.10.0` and earlier) locally. The
+SSH key is the maintainer's standard GitHub authentication key
+(fingerprint on the user's GitHub settings page).
+
+**Verify any tag locally** with the in-repo script (handles all
+three formats; safe to run, writes nothing to your `~/.gnupg` or
+`.git/config`):
+
+```sh
+scripts/verify-tag.sh v2.11.0   # SSH path (v2.11.0+)
+scripts/verify-tag.sh v2.10.0   # PGP path (v2.10.0 and earlier)
+scripts/verify-tag.sh v1.3.3    # lightweight, exits 0 with INFO
+```
+
+Or by hand (the script is a thin wrapper around these calls):
 
 ```sh
 git verify-tag <tag>      # exit 0 + "Good signature" for signed tags
 git cat-file -t <tag>     # 'tag' for annotated, 'commit' for lightweight
 ```
 
-The maintainer's public key can be fetched from
-<https://keys.openpgp.net/search?q=82DE44111B30F91F55BCEB1F414687A3CD7E65B9>
-or with
-`gpg --keyserver keys.openpgp.net --recv-keys 82DE44111B30F91F55BCEB1F414687A3CD7E65B9`
-to verify tag signatures locally without trusting the GitHub web
-UI.
+### Legacy lightweight tags (v1.0-alpha.1 … v1.3.3)
 
 The 8 legacy tags below are **lightweight pointers** (raw
 commits, not annotated tag objects), so they cannot be
-GPG-signed in their current form. They pre-date the signing
+signed in their current form. They pre-date the signing
 policy that was introduced when the release pipeline landed
 alongside `v1.5.0`:
 
@@ -92,11 +119,11 @@ password never reaches the host can:
 - Pin `HOME` on the step explicitly (`env: HOME: /home/lftp`).
   This is the documented escape hatch for users on older versions
   and is now redundant but still valid.
-- Confirm the image tag is GPG-signed (`git verify-tag <tag>`
-  against the maintainer key listed in the "Tag signing policy"
-  section above). The release pipeline refuses to publish an
-  image whose tag does not verify, so a signed image is also a
-  signed-source-image.
+- Confirm the image tag is signed (`scripts/verify-tag.sh <tag>`,
+  or `git verify-tag <tag>` against the maintainer key listed in
+  the "Tag signing policy" section above). The release pipeline
+  refuses to publish an image whose tag does not verify, so a
+  signed image is also a signed-source-image.
 - Run the integration suite locally against a real FTP server
   with `make integration` — see `tests/integration/README.md`.
   The suite boots `fauria/vsftpd` in a sibling container and runs

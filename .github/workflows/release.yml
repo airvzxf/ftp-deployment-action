@@ -1,9 +1,41 @@
 name: Release
 
-# Trigger on every pushed tag matching v*.*.* (e.g. v2.0.1, v2.1.0,
-# v3.0.0-rc.1). Tag pushes fire on any branch; this workflow does not
-# filter by branch, so the release pipeline works the same on `main`,
-# `master`, or any feature branch used for a hotfix release.
+# Five-job pipeline: validate-tag-input → (verify-tag-reachability
+# ∥ verify-tag-signature) → build → publish. Mirrors
+# `airvzxf/moagan`/.github/workflows/release.yml so both repos
+# share the same structural guarantees on a release.
+#
+# Triggers
+# --------
+# * `push` on tags matching `v[0-9]+.[0-9]+.[0-9]+*` — the `*`
+#   suffix allows pre-release tags like `v2.12.0-rc.1` while
+#   keeping the strict version-root.
+# * `workflow_dispatch` with a strict `pattern:` that fails fast
+#   in `validate-tag-input` if the operator mistypes the tag.
+#
+# Why five jobs (not one)
+# -----------------------
+# * `validate-tag-input` runs first and exits in <2 s, so a
+#   malformed dispatch input is caught before any image is built.
+# * `verify-tag-reachability` and `verify-tag-signature` run in
+#   parallel and gate `build`. They prove (a) the tag points at a
+#   commit reachable from `main` and (b) the tag was signed by a
+#   key in the in-repo allow-list. Defence in depth: AGENTS.md
+#   spells out the procedural recipe; these jobs are the
+#   structural check.
+# * `build` checks out the **immutable commit SHA** resolved by
+#   `verify-tag-reachability` (not the mutable ref), so a tag
+#   force-push mid-run cannot redirect the build.
+# * `publish` only creates the GitHub Release page. The
+#   `contents: write` permission is scoped to this job, not the
+#   workflow as a whole.
+#
+# Concurrency
+# -----------
+# A single release per tag. The group key is the tag name so two
+# `release.yml` runs against the same tag cannot race the
+# publish step (the second would corrupt the first's release
+# page).
 
 on:
   push:
@@ -12,40 +44,268 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Tag to release (e.g. v2.0.1). Must already exist on the remote.'
+        description: 'Tag to release (e.g. v2.12.0). Must exist on the remote. Format is validated by the validate-tag-input job.'
         required: true
         type: string
+        # The GitHub Actions schema for `workflow_dispatch` inputs
+        # does not support a `pattern:` field (only `description`,
+        # `required`, `type`, `default`), so the regex lives in the
+        # `validate-tag-input` job below. The push trigger's tag
+        # filter (`v[0-9]+.[0-9]+.[0-9]+*`) is the first line of
+        # defence for the push path.
 
-# `id-token: write` is required for two OIDC flows: cosign keyless
-# signing (Sigstore Fulcio) and AWS role assumption
-# (aws-actions/configure-aws-credentials@v4 with role-to-assume).
-permissions:
-  contents: write
-  packages: write
-  id-token: write
-  attestations: write
+concurrency:
+  group: release-${{ github.event.inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+# No top-level `permissions:` — each job declares its own,
+# following the principle of least privilege.
 
 jobs:
-  release:
-    name: Build, sign and publish
+  # Job 1: tag-input validator. Fails fast on a malformed
+  # dispatch input. The `push` tag filter already restricts to
+  # `v[0-9]+.[0-9]+.[0-9]+*`, so this job is mostly defensive
+  # for the `workflow_dispatch` path where a user could feed
+  # arbitrary strings (`main`, `refs/tags/v…`, leading
+  # whitespace) into `git rev-parse`. Mirrors moagan's
+  # `validate-tag-input` verbatim, with the pre-release suffix
+  # added.
+  validate-tag-input:
+    name: 'Validate · tag input'
     runs-on: ubuntu-latest
-    # The pipeline tolerates the absence of DOCKERHUB_* and
-    # AWS_ROLE_TO_ASSUME secrets: in that case the corresponding
-    # registry is skipped (a ::notice:: is emitted). ghcr.io is
-    # always published because GITHUB_TOKEN is automatic. Set
-    # both Docker Hub PAT secrets and AWS_ROLE_TO_ASSUME on the
-    # repo to publish to all three registries on every release.
-    # See README section "Publishing targets" for the one-time
-    # setup.
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.resolve.outputs.TAG }}
     steps:
-      # v2.10.0+: this step resolves the tag/version (unchanged
-      # from v2.9.0) AND decides which secondary registries are
-      # enabled, based on the presence of
-      # DOCKERHUB_USERNAME+DOCKERHUB_TOKEN and AWS_ROLE_TO_ASSUME
-      # secrets. The `all_tags` output is a heredoc YAML literal
-      # the build-push step consumes verbatim; conditional
-      # registries contribute zero lines because we only append
-      # when their flag is on.
+      - name: Validate tag shape
+        id: resolve
+        env:
+          RAW: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          TAG="${RAW}"
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]] \
+            || { echo "ERROR: '$TAG' is not vX.Y.Z (optionally -suffix)"; exit 1; }
+          echo "TAG=${TAG}" >> "$GITHUB_OUTPUT"
+
+  # Job 2: tag-reachability guard. Enforces AGENTS.md "tag the
+  # trunk merge commit, NOT the branch tip". Runs in parallel
+  # with `verify-tag-signature`. Mirrors moagan's
+  # `verify-tag-reachability` verbatim, adapted to the
+  # `version` input name.
+  verify-tag-reachability:
+    name: 'Verify · tag is reachable from main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    needs: validate-tag-input
+    outputs:
+      tag_commit: ${{ steps.resolve.outputs.TAG_COMMIT }}
+    steps:
+      - name: Checkout at ref
+        # Need a checkout so `git fetch` and `git rev-parse`
+        # have a `.git/` to operate on. Pin to the mutable ref
+        # here; SHA-pinning is the `build` job's responsibility.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.version || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve tag commit + fetch main
+        id: resolve
+        env:
+          TAG: ${{ needs.validate-tag-input.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          TAG_COMMIT="$(git rev-parse "${TAG}^{commit}")"
+          MAIN_COMMIT="$(git rev-parse origin/main)"
+          echo "tag=${TAG} tag_commit=${TAG_COMMIT} main_head=${MAIN_COMMIT}"
+          {
+            echo "TAG=${TAG}"
+            echo "TAG_COMMIT=${TAG_COMMIT}"
+            echo "MAIN_COMMIT=${MAIN_COMMIT}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Fail if tag^{commit} is not an ancestor of main
+        env:
+          TAG: ${{ steps.resolve.outputs.TAG }}
+          TAG_COMMIT: ${{ steps.resolve.outputs.TAG_COMMIT }}
+          MAIN_COMMIT: ${{ steps.resolve.outputs.MAIN_COMMIT }}
+        run: |
+          set -euo pipefail
+          if git merge-base --is-ancestor "${TAG_COMMIT}" origin/main; then
+            echo "✓ ${TAG} (${TAG_COMMIT}) is reachable from origin/main (${MAIN_COMMIT})"
+            exit 0
+          fi
+          {
+            echo "ERROR: tag ${TAG} points at ${TAG_COMMIT}, which is NOT an"
+            echo "ancestor of origin/main (${MAIN_COMMIT})."
+            echo ""
+            echo "This means the tag was created on a branch tip or a local"
+            echo "commit that was later squashed away when the release PR"
+            echo "was merged into main. The release would publish an image"
+            echo "whose SHA does not correspond to any commit reachable from"
+            echo "main, breaking the audit log."
+            echo ""
+            echo "Fix (delete the orphan tag, re-tag the merge commit on main):"
+            echo "  git tag -d ${TAG}"
+            echo "  git push origin :refs/tags/${TAG}"
+            echo "  git checkout main && git reset --hard origin/main"
+            echo "  git tag -s ${TAG} \$(git rev-parse origin/main)"
+            echo "  git push origin ${TAG}"
+            echo ""
+            echo "See AGENTS.md 'tag the trunk merge commit, NOT the branch tip'."
+          } >&2
+          exit 1
+
+  # Job 3: tag-signature guard. Verifies that the tag was
+  # signed by a key in `.github/trusted-signers` (SSH) or
+  # `.github/trusted-signers.asc` (PGP) before any image is
+  # built or published. The allow-list is fetched from
+  # `origin/main` (NOT the tagged tree) so revoking a key on
+  # main takes effect on the next release — otherwise the
+  # trust anchor is the same object being verified and
+  # revocation is structurally impossible. The PGP `.asc`
+  # allow-list is consulted only when the tag being verified
+  # is PGP-signed (v2.10.0 and earlier); v2.11.0+ SSH tags
+  # never import the GPG key. Mirrors moagan's
+  # `verify-tag-signature` job, with the dual-backend
+  # detection added.
+  verify-tag-signature:
+    name: 'Verify · tag is signed by a trusted signer'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    needs: validate-tag-input
+    steps:
+      - name: Checkout at ref
+        # Need a checkout so `git show` and `git fetch` have a
+        # `.git/` to operate on. Pin to the mutable ref (the
+        # SHA pinning is `build`'s job).
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.version || github.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Fetch allow-list from origin/main
+        # The trust anchor lives on `main`, not on the tagged
+        # tree. Reading it from the tagged tree makes key
+        # revocation ineffective: a compromised key could
+        # re-cut a tag pointing at an old commit whose tree
+        # still lists that key, and verification would pass.
+        # Pinning to a fixed ref (origin/main) closes that
+        # gap.
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main
+          mkdir -p "$RUNNER_TEMP/trusted"
+          git show "origin/main:.github/trusted-signers" \
+            > "$RUNNER_TEMP/trusted/allowed_signers"
+          # `.asc` is optional: only imported when the tag is
+          # actually PGP-signed (v2.10.0 and earlier). v2.11.0+
+          # tags are SSH-signed and never consult this file.
+          if git show "origin/main:.github/trusted-signers.asc" \
+              > "$RUNNER_TEMP/trusted/allowed_signers.asc" 2>/dev/null; then
+            echo "PGP allow-list fetched"
+          else
+            echo "PGP allow-list absent on origin/main (acceptable; SSH-only signers)"
+            rm -f "$RUNNER_TEMP/trusted/allowed_signers.asc"
+          fi
+          test -s "$RUNNER_TEMP/trusted/allowed_signers" \
+            || { echo "ERROR: empty .github/trusted-signers on origin/main"; exit 1; }
+
+      - name: Configure git to use the trusted signers file
+        # `git verify-tag` consults `gpg.ssh.allowedsignersfile`
+        # for SSH-signed tags and the GPG keyring for PGP-signed
+        # tags. Both paths auto-detect from the tag's signature
+        # format, so the same verification works for v2.10.0
+        # (PGP) and v2.11.0+ (SSH) without conditional logic.
+        run: |
+          set -euo pipefail
+          git config gpg.format ssh
+          git config gpg.ssh.allowedsignersfile "$RUNNER_TEMP/trusted/allowed_signers"
+
+      - name: Import GPG allow-list if the tag is PGP-signed
+        # v2.10.0 and earlier were PGP-signed with the
+        # maintainer's RSA key. Importing into the runner's
+        # keyring only when needed avoids the `.asc` becoming
+        # a hard dependency for SSH-only releases (which would
+        # otherwise block the documented key-removal path in
+        # AGENTS.md).
+        env:
+          TAG: ${{ needs.validate-tag-input.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git cat-file tag "$TAG" | grep -q 'BEGIN PGP SIGNATURE'; then
+            test -f "$RUNNER_TEMP/trusted/allowed_signers.asc" \
+              || { echo "ERROR: tag is PGP-signed but .github/trusted-signers.asc is missing on origin/main"; exit 1; }
+            gpg --batch --import "$RUNNER_TEMP/trusted/allowed_signers.asc"
+          else
+            echo "Tag uses SSH signature — GPG keyring not required"
+          fi
+
+      - name: Verify tag signature
+        env:
+          TAG: ${{ needs.validate-tag-input.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git verify-tag "${TAG}"; then
+            echo "✓ ${TAG} is signed by a key in .github/trusted-signers"
+            exit 0
+          fi
+          {
+            echo "ERROR: tag ${TAG} is NOT signed by a key in"
+            echo ".github/trusted-signers (fetched from origin/main)."
+            echo ""
+            echo "Signer info for diagnosis:"
+            git cat-file tag "${TAG}" \
+              | grep -E '^(tagger|-----BEGIN|-----END)' \
+              | head -10 >&2 || true
+            echo ""
+            echo "Allow-list (SSH): $(wc -l < "$RUNNER_TEMP/trusted/allowed_signers") lines"
+            echo ""
+            echo "Either the tag is unsigned, or it was signed by a key"
+            echo "not on the allow-list."
+            echo ""
+            echo "Fix (re-tag with the maintainer's signing key):"
+            echo "  git tag -d ${TAG}"
+            echo "  git push origin :refs/tags/${TAG}"
+            echo "  git tag -s ${TAG} -m 'release: ${TAG#v}'"
+            echo "  git push origin ${TAG}"
+            echo ""
+            echo "See .github/trusted-signers and AGENTS.md 'Tag signature guard'."
+          } >&2
+          exit 1
+
+  # Job 4: build. Gated on jobs 2 + 3. SHA-pinned checkout.
+  # Pushes to ghcr.io (always) plus Docker Hub and ECR Public
+  # (when the right secrets are set), signs with cosign
+  # keyless, attaches a CycloneDX SBOM attestation, extracts
+  # the CHANGELOG section for this version, and bundles the
+  # SBOM + body file for the publish job.
+  build:
+    name: 'Build · release image'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    needs: [verify-tag-reachability, verify-tag-signature]
+    steps:
+      # v2.10.0+: this step resolves the tag/version AND
+      # decides which secondary registries are enabled, based
+      # on the presence of DOCKERHUB_USERNAME+DOCKERHUB_TOKEN
+      # and AWS_ROLE_TO_ASSUME secrets. Kept verbatim from the
+      # v2.10.0 single-job pipeline.
       - name: Resolve tag, version and enabled registries
         id: meta
         env:
@@ -98,14 +358,11 @@ jobs:
             echo "::notice::AWS_ROLE_TO_ASSUME secret not set; skipping public.ecr.aws publish"
           fi
 
-          # Heredoc-style multi-line output for `all_tags`. Each tag
-          # is written on its own line with `echo` so the EOF
-          # delimiter lands on its own line — `printf '%s'` would
-          # glue the last tag to the EOF marker and trip GitHub's
-          # output parser with "Matching delimiter not found 'EOF'".
-          # This per-line shape also guarantees no trailing newline
-          # on the last tag, which would otherwise produce a spurious
-          # empty tag in docker/build-push-action.
+          # Heredoc-style multi-line output for `all_tags`.
+          # Each tag on its own line so the EOF delimiter lands
+          # on its own line — `printf '%s'` would glue the last
+          # tag to the EOF marker and trip GitHub's output
+          # parser with "Matching delimiter not found 'EOF'".
           {
             echo "all_tags<<EOF"
             echo "${image}:${version}"
@@ -128,11 +385,15 @@ jobs:
           echo "Tags to push:"
           printf '%s\n' "${tags}"
 
-      - name: Checkout source at the release tag
+      # SHA-pinned checkout: closes the TOCTOU gap. A tag
+      # force-push that arrives mid-run cannot redirect
+      # checkout away from the commit the two verify jobs just
+      # approved.
+      - name: Checkout source at the pinned tag SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ steps.meta.outputs.tag }}
+          ref: ${{ needs.verify-tag-reachability.outputs.tag_commit }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -144,12 +405,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # v2.10.0+: Docker Hub is a SECONDARY publish target. The
-      # conditional is gated on both DOCKERHUB_USERNAME and
-      # DOCKERHUB_TOKEN being present; missing either is a no-op
-      # (with a ::notice:: from the meta step) so forks and the
-      # upstream maintainer can iterate without touching secrets
-      # globally.
       - name: Log in to Docker Hub
         if: ${{ steps.meta.outputs.dockerhub_enabled == 'true' }}
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -158,25 +413,11 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # v2.10.0+: ECR Public is a SECONDARY publish target. OIDC
-      # role assumption (no static AWS secrets) is configured in
-      # two steps: configure-aws-credentials assumes the role and
-      # exports AWS_ACCESS_KEY_ID/secret/session to subsequent
-      # steps; amazon-ecr-login then uses those credentials to
-      # call ecr-public:GetAuthorizationToken and to docker login
-      # to public.ecr.aws. The IAM role trust policy must list
-      # `token.actions.githubusercontent.com` as a federated
-      # principal with a `sub` condition matching this repo (see
-      # README section "Publishing targets" for the JSON).
       - name: Configure AWS credentials (OIDC) for ECR Public
         if: ${{ steps.meta.outputs.ecr_enabled == 'true' }}
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          # ECR Public control plane lives in us-east-1 regardless
-          # of where the ECR Public registry "lives" (ECR Public
-          # has no region concept; the public.ecr.aws endpoint is
-          # global).
           aws-region: us-east-1
 
       - name: Log in to ECR Public
@@ -192,15 +433,16 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          # Bake the resolved tag into /app/VERSION so init.sh's
-          # deprecation warning can print the actual image version
-          # (default in the Dockerfile is "dev" for local builds).
+          # Bake the resolved tag into /app/VERSION so
+          # init.sh's deprecation warning can print the actual
+          # image version (default in the Dockerfile is "dev"
+          # for local builds).
           build-args: VERSION=${{ steps.meta.outputs.tag }}
-          # `all_tags` is a multi-line string emitted by the meta
-          # step. The buildx builder receives every tag exactly
-          # once and pushes each to the corresponding registry
-          # (docker/build-push-action routes per-tag based on the
-          # registry hostname).
+          # `all_tags` is a multi-line string emitted by the
+          # meta step. The buildx builder receives every tag
+          # exactly once and pushes each to the corresponding
+          # registry (docker/build-push-action routes per-tag
+          # based on the registry hostname).
           tags: ${{ steps.meta.outputs.all_tags }}
           labels: |
             org.opencontainers.image.title=ftp-deployment-action
@@ -208,33 +450,23 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.licenses=AGPL-3.0
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+          # GHA cache is keyed on the image hash, not the ref,
+          # so it survives the tag-to-tag transition. This
+          # differs from moagan's rust-cache decision (the rust
+          # cache is keyed on Cargo.lock + ref and is wasted
+          # per release). Keep the GHA cache for the docker
+          # build path.
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # v2.4.0+: smoke-test the just-pushed image before signing
-      # and attaching the SBOM. The release pipeline previously
-      # only exercised the image via CI (which runs init.sh
-      # against a plain alpine:3.23.3, not the published image
-      # with its pinned lftp and ca-certificates versions). The
-      # v2.3.0 release was cut and pushed with a build that
-      # could not resolve lftp=4.9.2-r9 against the new alpine
-      # 3.24 base image; the failure surfaced only at the
-      # cosign step, after a broken image was already in ghcr.io
-      # and after the SBOM was generated for the broken image.
-      # This step catches that class of failure earlier: it
-      # pulls the just-pushed image, runs three cheap checks
-      # (path-traversal validation, deprecation warning, the
-      # /app/VERSION bake), and aborts the pipeline on any
-      # failure. SBOM generation, cosign signing, and the SBOM
-      # attestation are skipped on failure, so we never publish
-      # or sign a broken image.
-      #
-      # v2.10.0+: smoke-test only the ghcr.io image. The three
-      # registries receive the exact same image bytes from a
-      # single `docker buildx build`, so a ghcr.io failure
-      # implies the same failure on docker.io and public.ecr.aws.
-      # Pulling the image three times would triple the pipeline
-      # latency for zero added coverage.
+      # v2.4.0+: smoke-test the just-pushed image before
+      # signing and attaching the SBOM. Catches Dockerfile /
+      # lftp pin / runtime regressions before they ship.
+      # v2.10.0+: smoke-test only the ghcr.io image. The
+      # three registries receive the exact same image bytes
+      # from a single `docker buildx build`, so a ghcr.io
+      # failure implies the same failure on docker.io and
+      # public.ecr.aws.
       - name: Smoke test the just-pushed image
         env:
           IMAGE: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
@@ -249,7 +481,7 @@ jobs:
           format: cyclonedx-json
           artifact-name: sbom.cyclonedx.json
 
-      - name: Download SBOM artifact for attestation
+      - name: Download SBOM artifact for attestation + bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sbom.cyclonedx.json
@@ -258,12 +490,6 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      # v2.10.0+: sign every published image. The digest is the
-      # same across registries (single build produces one OCI
-      # manifest, identical digests), so we sign
-      # `<registry>/<ns>/image@digest` per enabled registry. The
-      # digest is captured into an env var so secret masking
-      # doesn't apply.
       - name: Sign image with cosign (keyless, OIDC)
         env:
           COSIGN_EXPERIMENTAL: '1'
@@ -278,11 +504,6 @@ jobs:
             cosign sign --yes "${{ steps.meta.outputs.ecr_image }}@${DIGEST}"
           fi
 
-      # v2.10.0+: attach the SBOM attestation to every published
-      # image. `actions/attest` takes a single (subject-name,
-      # subject-digest) pair per call, so we invoke it once per
-      # enabled registry. The signature, attestation, and image
-      # manifest together constitute the supply-chain bundle.
       - name: Attach SBOM attestation to ghcr.io image
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -309,18 +530,19 @@ jobs:
           sbom-path: sbom.cyclonedx.json
           push-to-registry: true
 
-      # Extract the CHANGELOG.md section for this version so the
-      # GitHub Release body mirrors the existing markdown. The
-      # awk pattern ignores any `## [Unreleased]` block (defensive
-      # against the duplicate that lived in the changelog once and
-      # against future [Unreleased] entries) and stops at the next
-      # `## [...]` heading or the compare-link footer for this
-      # version. `body-empty=true` is exported when no section was
-      # found, so the next step can fall back to
-      # `generate_release_notes: true`.
+      # Extract the CHANGELOG.md section for this version so
+      # the GitHub Release body mirrors the existing markdown.
+      # The awk pattern ignores any `## [Unreleased]` block
+      # (defensive against the duplicate that lived in the
+      # changelog once) and stops at the next `## [...]`
+      # heading or the compare-link footer. The body is
+      # written to a deterministic path inside the bundle so
+      # the `publish` job can find it without re-running the
+      # awk.
       - name: Extract CHANGELOG notes for this version
         id: notes
         run: |
+          set -eu
           version="${{ steps.meta.outputs.version }}"
           notes=$(awk -v v="${version}" '
               BEGIN {
@@ -336,32 +558,78 @@ jobs:
               in_section && $0 ~ compare_re { exit }
               in_section { print }
           ' CHANGELOG.md)
+          ART_DIR="${{ runner.temp }}/release-artifacts"
+          mkdir -p "${ART_DIR}"
           if [ -z "${notes}" ]; then
             echo "::warning::no CHANGELOG section found for ${version}; falling back to generate_release_notes"
-            echo "body-empty=true" >> "$GITHUB_OUTPUT"
+            touch "${ART_DIR}/body-empty"
           else
-            body_file=$(mktemp)
-            printf '%s\n' "${notes}" > "${body_file}"
-            echo "body-file=${body_file}" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "${notes}" > "${ART_DIR}/CHANGELOG.body.md"
+            echo "wrote $(wc -l < "${ART_DIR}/CHANGELOG.body.md") lines to CHANGELOG.body.md"
           fi
 
-      # Create a GitHub Release for the tag. Auto-publish: a tag
-      # in this repo is the maintainer's already-made decision to
-      # ship, so the release goes live the moment the image is
-      # signed and attached (no manual click). If a release turns
-      # out to be wrong, the recovery path is a hotfix tag +
-      # `gh release edit <bad-tag> --prerelease` (or delete via
-      # the API), not a draft kept in reserve. `make_latest: 'true'`
-      # marks this release as Latest so notification feeds and
+      # Bundle the SBOM + CHANGELOG body so `publish` can pick
+      # them up without re-running the work. Mirrors moagan's
+      # bundle step.
+      - name: Bundle artefacts for the publisher job
+        run: |
+          set -euo pipefail
+          cp sbom.cyclonedx.json "${{ runner.temp }}/release-artifacts/"
+          ls -la "${{ runner.temp }}/release-artifacts/"
+
+      - name: Upload bundle for the publisher job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ftp-deployment-action-release-bundle
+          path: ${{ runner.temp }}/release-artifacts/
+          retention-days: 7
+          if-no-files-found: error
+
+  # Job 5: publish. Creates the GitHub Release page from the
+  # CHANGELOG section extracted by `build`. `contents: write`
+  # is scoped to this job; the rest of the pipeline does not
+  # need it.
+  publish:
+    name: 'Publish · GitHub Release'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ftp-deployment-action-release-bundle
+          path: release/
+
+      - name: Extract metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.version || github.ref_name }}"
+          {
+            echo "tag=${TAG}"
+            echo "version=${TAG#v}"
+            echo "body-empty=$(test -f release/body-empty && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+
+      # Create the GitHub Release. `make_latest: 'true'` marks
+      # this release as Latest so notification feeds and
       # tooling that hits `/releases/latest` see the new tag.
-      # If the previous step did not find a CHANGELOG section,
+      # If `build` did not find a CHANGELOG section,
       # `generate_release_notes` builds the body from the tag
-      # delta as a fallback.
+      # delta as a fallback. `fail_on_unmatched_files: true`
+      # (moagan's hardening) aborts the publish if the bundle
+      # is missing the expected SBOM.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.tag }}
           make_latest: 'true'
-          generate_release_notes: ${{ steps.notes.outputs.body-empty == 'true' }}
-          body_path: ${{ steps.notes.outputs.body-file }}
+          generate_release_notes: ${{ steps.meta.outputs.body-empty == 'true' }}
+          body_path: ${{ steps.meta.outputs.body-empty == 'true' && '' || 'release/CHANGELOG.body.md' }}
+          files: |
+            release/sbom.cyclonedx.json
+          fail_on_unmatched_files: true
