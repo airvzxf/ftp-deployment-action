@@ -211,7 +211,7 @@ teardown() {
   INPUT_CONCURRENCY_LOCK_POLL_INTERVAL="1"
   unset ACQUIRED_LOCK_SENTINEL
   acquire_lock_with_recovery \
-    "ftp://example.test" ".lftp-deployment.lock" "5" "1" || rc=$?
+    "ftp://example.test" ".lftp-deployment.lock" "5" "1" "ftptest" || rc=$?
   [ "${rc:-0}" -eq 0 ]
   # The first lftp call must be the mkdir (v2.11.0: switched from
   # `quote MKD` — which silently swallowed 5xx replies in lftp
@@ -221,6 +221,15 @@ teardown() {
   # The second lftp call must be the PUT for the sentinel.
   grep -q "put " "${FAKE_LFTP_LOG}"
   grep -q ".lftp-deployment.lock.*.info" "${FAKE_LFTP_LOG}"
+  # v2.11.x (#132): the URL passed to lftp MUST carry the embedded
+  # user so lftp's .netrc lookup fires. If we regress to passing the
+  # bare `ftp://example.test` URL, real FTP servers reject with 530.
+  grep -q "ftp://ftptest@example.test" "${FAKE_LFTP_LOG}"
+  if grep -q "ftp://example.test " "${FAKE_LFTP_LOG}"; then
+    echo "acquire_lock_with_recovery passed the BARE URL to lftp; #132 regression"
+    cat "${FAKE_LFTP_LOG}"
+    false
+  fi
   # ACQUIRED_LOCK_SENTINEL must be set.
   [ -n "${ACQUIRED_LOCK_SENTINEL:-}" ]
   case "${ACQUIRED_LOCK_SENTINEL}" in
@@ -280,7 +289,7 @@ FAKE
 
   unset ACQUIRED_LOCK_SENTINEL
   acquire_lock_with_recovery \
-    "ftp://example.test" ".lftp-deployment.lock" "5" "1" || rc=$?
+    "ftp://example.test" ".lftp-deployment.lock" "5" "1" "ftptest" || rc=$?
   [ "${rc:-0}" -eq 0 ]
   # The fake received 6 calls: MKD (fail), LIST, DELE stale,
   # RMD lock dir, MKD (success), PUT sentinel.
@@ -295,6 +304,16 @@ FAKE
   grep -q "quote DELE" "${FAKE_LFTP_LOG}"
   grep -q "quote RMD" "${FAKE_LFTP_LOG}"
   grep -q "put " "${FAKE_LFTP_LOG}"
+  # v2.11.x (#132): every lftp call carries the embedded user.
+  for _expected in \
+      "ftp://ftptest@example.test.*mkdir .lftp-deployment.lock" \
+      "ftp://ftptest@example.test.*cls -la" \
+      "ftp://ftptest@example.test.*quote DELE" \
+      "ftp://ftptest@example.test.*quote RMD" \
+      "ftp://ftptest@example.test.*put "; do
+    grep -q "${_expected}" "${FAKE_LFTP_LOG}" \
+      || { echo "missing call: ${_expected}"; cat "${FAKE_LFTP_LOG}"; false; }
+  done
   [ -n "${ACQUIRED_LOCK_SENTINEL:-}" ]
 }
 
@@ -339,7 +358,7 @@ FAKE
 
   unset ACQUIRED_LOCK_SENTINEL
   acquire_lock_with_recovery \
-    "ftp://example.test" ".lftp-deployment.lock" "1" "1" || rc=$?
+    "ftp://example.test" ".lftp-deployment.lock" "1" "1" "ftptest" || rc=$?
   [ "${rc:-0}" -eq 1 ]
   # Recent sentinel -> NO DELE / RMD cleanup, no sentinel write.
   if grep -q "quote DELE" "${FAKE_LFTP_LOG}"; then
@@ -363,7 +382,7 @@ FAKE
   export FAKE_LFTP_RC="1"
   unset ACQUIRED_LOCK_SENTINEL
   acquire_lock_with_recovery \
-    "ftp://example.test" ".lftp-deployment.lock" "0" "5" || rc=$?
+    "ftp://example.test" ".lftp-deployment.lock" "0" "5" "ftptest" || rc=$?
   [ "${rc:-0}" -eq 1 ]
   # At least one MKD call (and no sentinel write).
   grep -q "mkdir .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
@@ -375,6 +394,57 @@ FAKE
 }
 
 # ----------------------------------------------------------------------------
+# rewrite_lftp_url — pure helper extracted from run_lftp_once
+# (closes #132). The URL rewrite is the v2.11.0 fix that makes lftp
+# 4.9.3 consult ~/.netrc for a bare `ftp://host:port` URL.
+# ----------------------------------------------------------------------------
+
+@test "rewrite_lftp_url: bare ftp://host:21 + user -> ftp://user@host:21" {
+  result=$(rewrite_lftp_url "ftp://host:21" "alice")
+  [ "${result}" = "ftp://alice@host:21" ]
+}
+
+@test "rewrite_lftp_url: ftp://host:2121 (non-default port) + user -> ftp://user@host:2121" {
+  result=$(rewrite_lftp_url "ftp://127.0.0.1:2121" "ftptest")
+  [ "${result}" = "ftp://ftptest@127.0.0.1:2121" ]
+}
+
+@test "rewrite_lftp_url: ftp://user@host:21 + user -> unchanged (already has user)" {
+  result=$(rewrite_lftp_url "ftp://alice@host:21" "bob")
+  [ "${result}" = "ftp://alice@host:21" ]
+}
+
+@test "rewrite_lftp_url: ftp://user:pw@host:21 + user -> unchanged (B-03 preserved)" {
+  result=$(rewrite_lftp_url "ftp://alice:hunter2@host:21" "bob")
+  [ "${result}" = "ftp://alice:hunter2@host:21" ]
+}
+
+@test "rewrite_lftp_url: ftp://host:21 + empty user -> unchanged (no-op)" {
+  result=$(rewrite_lftp_url "ftp://host:21" "")
+  [ "${result}" = "ftp://host:21" ]
+}
+
+@test "rewrite_lftp_url: no-scheme host:21 + user -> unchanged (no scheme to rewrite)" {
+  result=$(rewrite_lftp_url "host:21" "alice")
+  [ "${result}" = "host:21" ]
+}
+
+@test "rewrite_lftp_url: ftps://host:990 + user -> ftps://user@host:990 (scheme preserved)" {
+  result=$(rewrite_lftp_url "ftps://host:990" "alice")
+  [ "${result}" = "ftps://alice@host:990" ]
+}
+
+@test "rewrite_lftp_url: ftp://host (no port) + user -> ftp://user@host" {
+  result=$(rewrite_lftp_url "ftp://host" "alice")
+  [ "${result}" = "ftp://alice@host" ]
+}
+
+@test "rewrite_lftp_url: ftp://[::1]:21 + user -> ftp://user@[::1]:21 (IPv6)" {
+  result=$(rewrite_lftp_url "ftp://[::1]:21" "alice")
+  [ "${result}" = "ftp://alice@[::1]:21" ]
+}
+
+# ----------------------------------------------------------------------------
 # release_lock_safely — uses lftp, tested via fake
 # ----------------------------------------------------------------------------
 
@@ -382,17 +452,21 @@ FAKE
   rm -f "${FAKE_LFTP_LOG}"
   run release_lock_safely \
     "ftp://example.test" ".lftp-deployment.lock" \
-    ".lftp-deployment.lock.20260707T080000Z.1234.info"
+    ".lftp-deployment.lock.20260707T080000Z.1234.info" \
+    "ftptest"
   [ "$status" -eq 0 ]
   grep -q "quote DELE .lftp-deployment.lock.20260707T080000Z.1234.info" "${FAKE_LFTP_LOG}"
   grep -q "quote RMD .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
+  # v2.11.x (#132): the EXIT-trap release URL must carry the
+  # embedded user, same as acquire_lock_with_recovery.
+  grep -q "ftp://ftptest@example.test" "${FAKE_LFTP_LOG}"
 }
 
 @test "release_lock_safely: only RMDs lock dir when no sentinel provided" {
   unset ACQUIRED_LOCK_SENTINEL
   rm -f "${FAKE_LFTP_LOG}"
   run release_lock_safely \
-    "ftp://example.test" ".lftp-deployment.lock"
+    "ftp://example.test" ".lftp-deployment.lock" "" "ftptest"
   [ "$status" -eq 0 ]
   grep -q "quote RMD .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
   if grep -q "quote DELE" "${FAKE_LFTP_LOG}"; then
@@ -406,14 +480,14 @@ FAKE
   rm -f "${FAKE_LFTP_LOG}"
   ACQUIRED_LOCK_SENTINEL=".lftp-deployment.lock.20260707T080000Z.1234.info"
   run release_lock_safely \
-    "ftp://example.test" ".lftp-deployment.lock"
+    "ftp://example.test" ".lftp-deployment.lock" "" "ftptest"
   [ "$status" -eq 0 ]
   grep -q "quote DELE .lftp-deployment.lock.20260707T080000Z.1234.info" "${FAKE_LFTP_LOG}"
 }
 
 @test "release_lock_safely: no-op when lock_path is empty" {
   rm -f "${FAKE_LFTP_LOG}"
-  run release_lock_safely "ftp://example.test" ""
+  run release_lock_safely "ftp://example.test" "" "" "ftptest"
   [ "$status" -eq 0 ]
   [ ! -s "${FAKE_LFTP_LOG}" ]
 }
@@ -425,7 +499,7 @@ FAKE
 @test "run_lftp_lock_release: no-op when lock path is empty" {
   run run_lftp_lock_release "ftp://nonexistent.invalid" \
                             "/tmp/does-not-exist-netrc" \
-                            ""
+                            "" "" "ftptest"
   [ "$status" -eq 0 ]
   [ ! -s "${FAKE_LFTP_LOG}" ]
 }
@@ -434,7 +508,7 @@ FAKE
   rm -f "${FAKE_LFTP_LOG}"
   run run_lftp_lock_release "ftp://nonexistent.invalid" \
                             "/tmp/does-not-exist-netrc" \
-                            ".lftp-deployment.lock"
+                            ".lftp-deployment.lock" "" "ftptest"
   [ "$status" -eq 0 ]
   [ ! -s "${FAKE_LFTP_LOG}" ]
 }
@@ -447,8 +521,11 @@ FAKE
   run run_lftp_lock_release "ftp://example.test" \
                             "${fake_netrc}" \
                             ".lftp-deployment.lock" \
-                            ".lftp-deployment.lock.20260707T080000Z.1234.info"
+                            ".lftp-deployment.lock.20260707T080000Z.1234.info" \
+                            "ftptest"
   [ "$status" -eq 0 ]
   grep -q "quote RMD .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
   grep -q "quote DELE .lftp-deployment.lock.20260707T080000Z.1234.info" "${FAKE_LFTP_LOG}"
+  # v2.11.x (#132): URL must carry the embedded user.
+  grep -q "ftp://ftptest@example.test" "${FAKE_LFTP_LOG}"
 }
