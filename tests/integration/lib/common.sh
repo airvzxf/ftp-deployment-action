@@ -137,7 +137,6 @@ wait_for_port() {
   _wfp_deadline=$((_wfp_timeout * 2))
   _wfp_i=0
   while [ "${_wfp_i}" -lt "${_wfp_deadline}" ]; do
-    if _wfp_busybox_ok=1; then :; fi
     # Use the runtime's built-in port-check; `docker run --rm -i
     # alpine` is reliable and the alpine image is already cached.
     if ${RUNTIME} run --rm --network host alpine:3.23.3 \

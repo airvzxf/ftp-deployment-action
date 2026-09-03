@@ -49,12 +49,13 @@
 #     The pre-baked image (tests/integration/Dockerfile.test-server,
 #     built by `make build-test-server-image`) eliminates the
 #     per-run network dependency: vsftpd is already installed,
-#     /var/log/vsftpd / /etc/pam.d/vsftpd_virtual / /home/vsftpd
-#     are already created. The scenario only does the user-specific
-#     work (adduser, the overlay vsftpd.conf, the alpine-vsftpd TLS
-#     variable rename, exec vsftpd). Note: the openssl CLI used to
-#     generate the per-run self-signed cert lives on the HOST (see
-#     generate_self_signed_cert), not in the server image.
+#     /var/log/vsftpd is pre-created, and
+#     /etc/pam.d/vsftpd_virtual is written. The scenario only does
+#     the user-specific work (adduser, the overlay vsftpd.conf,
+#     the alpine-vsftpd TLS variable rename, exec vsftpd). Note:
+#     the openssl CLI used to generate the per-run self-signed
+#     cert lives on the HOST (see generate_self_signed_cert), not
+#     in the server image.
 #
 #     Why alpine-based instead of docker.io/fauria/vsftpd
 #     (the image the plain-FTP scenarios use): fauria's
@@ -259,13 +260,14 @@ _write_ftps_vsftpd_conf() {
 #   on rootless podman / docker-rootless setups).
 #
 #   The pre-baked image (closes #135): tests/integration/Dockerfile.
-#   test-server installs vsftpd and pre-creates /var/log/vsftpd,
-#   /etc/pam.d/vsftpd_virtual (delegating to pam_unix /
-#   /etc/shadow), and /home/vsftpd. The previous inline-`apk add`
-#   shape ran a network-dependent package install on every scenario
-#   start, which made the 20s wait_for_port race flaky in CI. The
-#   pre-baked image eliminates that race: `docker run` of an
-#   already-pulled image takes <1s and never races the apk index.
+#   test-server installs vsftpd, pre-creates /var/log/vsftpd
+#   (vsftpd's xferlog target), and writes /etc/pam.d/
+#   vsftpd_virtual (delegating to pam_unix / /etc/shadow). The
+#   previous inline-`apk add` shape ran a network-dependent
+#   package install on every scenario start, which made the 20s
+#   wait_for_port race flaky in CI. The pre-baked image eliminates
+#   that race: `docker run` of an already-pulled image takes <1s
+#   and never races the apk index.
 #
 #   Why alpine-based (vs fauria/vsftpd): fauria's
 #   /usr/sbin/run-vsftpd.sh wrapper has docker-in-docker quirks
@@ -390,9 +392,9 @@ start_ftps_server() {
   # every scenario run. That step occasionally took >20s in CI and
   # even failed outright on transient network blips, surfacing as
   # flaky scenario failures. tests/integration/Dockerfile.test-server
-  # moves the apk install + the /var/log/vsftpd, /etc/pam.d/
-  # vsftpd_virtual, /home/vsftpd prep into the image so this
-  # payload is purely per-scenario work (no network).
+  # moves the apk install + the /var/log/vsftpd and /etc/pam.d/
+  # vsftpd_virtual prep into the image so this payload is purely
+  # per-scenario work (no network).
   #
   # Why no `--rm`: when the FTPS container died during boot (the
   # root cause of the #135 flake), `--rm` garbage-collected it
