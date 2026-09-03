@@ -97,6 +97,17 @@ export FTP_INTEGRATION_CERT_DIR
 : "${FTP_TEST_SERVER_IMAGE:=${TEST_SERVER_IMAGE:-ftp-deployment-action-test-server:ci-integration}}"
 export FTP_TEST_SERVER_IMAGE
 
+# Implicit-FTPS host port (the port the container's vsftpd binds
+# under --network host). 2122 is unprivileged on the host (no
+# `ip_unprivileged_port_start=0` workaround needed on rootless
+# podman / docker-rootless setups). Explicit FTPS uses
+# $FTP_CONTROL_PORT (2121) from common.sh; implicit FTPS uses
+# this value. Exported so scenario 04 can build the
+# INPUT_SERVER=ftps://...:<port> URL from the same source of
+# truth instead of duplicating the literal here.
+FTP_IMPLICIT_PORT=${FTP_IMPLICIT_PORT:-2122}
+export FTP_IMPLICIT_PORT
+
 # ------------------------------------------------------------------------------
 # generate_self_signed_cert
 #   Print the absolute path to the cached self-signed cert PEM on
@@ -360,8 +371,8 @@ start_ftps_server() {
       _sfs_implicit_flag=no
       ;;
     implicit)
-      _sfs_host_port=2122
-      _sfs_container_port=2122
+      _sfs_host_port=${FTP_IMPLICIT_PORT}
+      _sfs_container_port=${FTP_IMPLICIT_PORT}
       _sfs_implicit_flag=yes
       ;;
     *)
