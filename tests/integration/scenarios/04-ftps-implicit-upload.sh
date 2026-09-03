@@ -110,7 +110,7 @@ trap 'rm -f "${_env}" "${FTP_VSFTPD_CONF:-}"; stop_ftp_server' EXIT
   # scenario 03 — if a future lftp release decides to skip the
   # TLS handshake on ftps:// for any reason, ssl-force prevents
   # a silent plaintext fallback.
-  printf 'INPUT_LFTP_SETTINGS=set ftp:ssl-force true;set net:persist-retries 0;set net:max-retries 1;\n'
+  printf 'INPUT_LFTP_SETTINGS=set ftp:ssl-force true;set net:persist-retries 0;\n'
 } > "${_env}"
 
 # --- Step 3: invoke the action ------------------------------------------------

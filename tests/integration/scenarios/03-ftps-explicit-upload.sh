@@ -105,7 +105,7 @@ trap 'rm -f "${_env}" "${FTP_VSFTPD_CONF:-}"; stop_ftp_server' EXIT
   printf 'INPUT_FTP_SSL_ALLOW=true\n'
   printf 'INPUT_SSL_VERIFY_CERTIFICATE=false\n'
   printf 'INPUT_SSL_CHECK_HOSTNAME=false\n'
-  printf 'INPUT_LFTP_SETTINGS=set ftp:ssl-force true;set net:persist-retries 0;set net:max-retries 1;\n'
+  printf 'INPUT_LFTP_SETTINGS=set ftp:ssl-force true;set net:persist-retries 0;\n'
 } > "${_env}"
 
 # --- Step 3: invoke the action ------------------------------------------------
