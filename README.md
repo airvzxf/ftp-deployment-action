@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/airvzxf/ftp-deployment-action/actions/workflows/ci.yml/badge.svg)](https://github.com/airvzxf/ftp-deployment-action/actions/workflows/ci.yml)
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/airvzxf/ftp-deployment-action)](https://github.com/airvzxf/ftp-deployment-action/releases)
-[![License: GPL-3.0](https://img.shields.io/github/license/airvzxf/ftp-deployment-action)](https://github.com/airvzxf/ftp-deployment-action/blob/main/LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/github/license/airvzxf/ftp-deployment-action)](https://github.com/airvzxf/ftp-deployment-action/blob/main/LICENSE)
 
 This GitHub action copies the files via FTP from your Git project to your server in a specific path.
 
@@ -99,8 +99,8 @@ jobs:
 
 ## Publishing targets (v2.10.0+)
 
-Every tag is published to **two registries** so consumers can
-pick whichever is closest (or already trusted) in their supply chain:
+Every tag is published to **two registries by default** (ghcr.io + Docker Hub
+when configured); a third (ECR Public) is currently disabled — see below:
 
 | Registry | Image | How to consume |
 |---|---|---|
@@ -276,7 +276,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | no_symlinks            | Do not create symbolic links.                                                         | No       | true    | N/A                                                                                               |
 | mirror_verbose         | Mirror verbosity level.                                                               | No       | 1       | N/A                                                                                               |
 | ftp_ssl_allow          | FTP - Allow SSL encryption.                                                           | No       | true    | N/A                                                                                               |
-| ssl_verify_certificate | FTP - Verify SSL certificate.                                                         | No       | false   | N/A                                                                                               |
+| ssl_verify_certificate | FTP - Verify SSL certificate.                                                         | No       | true    | N/A                                                                                               |
 | ssl_check_hostname     | FTP - Check certificate hostname.                                                     | No       | true    | N/A                                                                                               |
 | ftp_passive_mode       | FTP - This can be useful if you are behind a firewall or a dumb masquerading router.  | No       | true    | N/A                                                                                               |
 | ftp_use_feat           | FTP - FEAT: Determining what extended features the FTP server supports.               | No       | false   | N/A                                                                                               |

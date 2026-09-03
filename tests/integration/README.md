@@ -28,8 +28,16 @@ tests/integration/
     ├── 02-plain-ftp-delete.sh                # exercises --delete
     ├── 03-ftps-explicit-upload.sh            # FTPS explicit (AUTH TLS upgrade)
     ├── 04-ftps-implicit-upload.sh            # FTPS implicit (TLS from byte 0)
-    └── 05-exclude-and-exclude-delete.sh      # exercises mirror:exclude
+    ├── 05-exclude-and-exclude-delete.sh      # exercises mirror:exclude
                                               #   + --delete
+    ├── 07-self-hosted-home.sh                # regression guard for #111
+    ├── 08-action-driven-upload.sh            # action-driven upload
+                                              #   (closes #124)
+    ├── 09-concurrency-lock-e2e.sh            # INPUT_CONCURRENCY_LOCK=true
+                                              #   end-to-end
+    ├── 10-stale-lock-recovery.sh             # stale-sentinel takeover
+    └── 11-exclude-delete-protects-remote.sh  # INPUT_EXCLUDE_DELETE
+                                              #   end-to-end (closes #131)
 ```
 
 ## Running locally
@@ -123,17 +131,24 @@ related reasons, both rooted in lftp 4.9.3 (the version pinned in
    `anonymous`, which is the default for `fauria/vsftpd`'s
    virtual-user config.
 
-2. **`set mirror:exclude-file` is not a valid lftp 4.9.3
-   setting.** The action's `lib.sh` writes `set mirror:exclude-file
-   <value>;` for `INPUT_EXCLUDE_DELETE`, expecting it to protect
-   remote files from `mirror --reverse --delete`. lftp 4.9.3 logs
-   `mirror:exclude-file: no such variable. Use 'set -a' to look
-   at all variables.` and continues without applying the
-   pattern. The same flag for the upload direction (`set
-   mirror:exclude` *is* valid, but it expects a POSIX regex, not
-   a glob — `*.bak` is rejected with "Invalid preceding regular
-   expression"). So the action's INPUT_EXCLUDE / INPUT_EXCLUDE_DELETE
-   surface is effectively a no-op against lftp 4.9.3.
+2. **`set mirror:exclude-file` is hidden behind `set -a` in
+   lftp 4.9.3.** The action's `lib.sh::build_ftp_settings` writes
+   `set mirror:exclude-file <value>;` for `INPUT_EXCLUDE_DELETE`,
+   expecting it to protect remote files from `mirror --reverse
+   --delete`. lftp 4.9.3 logs `mirror:exclude-file: no such
+   variable. Use 'set -a' to look at all variables.` and
+   continues without applying the pattern. The same flag for the
+   upload direction (`set mirror:exclude` *is* valid, but it
+   expects a POSIX regex, not a glob — `*.bak` is rejected with
+   "Invalid preceding regular expression").
+
+   Closed by `lib.sh::build_ftp_settings` wrapping the assignment
+   in `set -a; set mirror:exclude-file <value>; set -a;` (closes
+   #131). The first `set -a` enables lftp's "show all variables"
+   toggle so the assignment is recognised; the second toggles it
+   back off so the rest of the action's lftp settings are not
+   affected by the wider auto-execute semantics. See scenario 11
+   for the end-to-end regression guard.
 
 Either issue alone is enough to disqualify variant C; together
 they make it impossible to assert the action's behaviour
@@ -293,21 +308,13 @@ bind-mounted read-only into the alpine container.
 
 ## Limitations / follow-ups
 
-* **lftp 4.9.3 `.netrc` and `mirror:exclude-file` quirks.** See
-  "Why variant B" above. The action's `INPUT_EXCLUDE_DELETE` input
-  is effectively a no-op against the current image. Either
-  bumping the lftp version or changing the action to pass `-u
-  user,pass` on the lftp command line (and accepting the argv
-  password) would unblock the original variant-C plan; both are
-  out of scope for #117.
-* **Concurrency lock (`INPUT_CONCURRENCY_LOCK=true`)** is not
-  covered. The lock acquisition path goes through lftp's
-  `quote MKD`/`quote RMD`, which can be exercised against
-  fauria/vsftpd without further infra, but is deferred to
-  keep #117 scoped to the harness itself.
-* **Variant C**: as discussed above, the original plan was to
-  drive the upload through the action image. The `.netrc` issue
-  blocks this for now; a follow-up PR can re-attempt it.
+* **lftp 4.9.3 `.netrc` quirk.** See "Why variant B" above.
+  Bumping the lftp version (or, depending on the strategy,
+  changing the action's `run_lftp_once` to pass `-u user,pass`
+  on the lftp command line and accepting the argv-leak of the
+  password) would unblock scenarios that cannot use a URL with
+  an embedded user. Scenario 08 already works around it via
+  the v2.11.0 fix to `run_lftp_once` (closes #124).
 
 See `.worktrees/wt-117a-vu1m`, `wt-117b-7u8g`, `wt-117c-fbzk`
 for the variant A/B/C worktrees.

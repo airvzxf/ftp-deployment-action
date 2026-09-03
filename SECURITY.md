@@ -4,7 +4,7 @@
 
 | Track                  | Tag range                                  | Support                                                              |
 |------------------------|--------------------------------------------|-----------------------------------------------------------------------|
-| Currently maintained   | `v2.x` (latest = `v2.10.0`)                | Active — security and bug fixes published in the next v2.x.y release. |
+| Currently maintained   | `v2.x` (latest = `v2.11.1`)                | Active — security and bug fixes published in the next v2.x.y release. |
 | Legacy support window  | `v1.4` — `v1.9`                            | Security-only backports on a best-effort basis.                       |
 | End-of-life            | `v1.0-alpha.*`, `v1.1`, `v1.2.0`, `v1.3.x`  | No support.                                                           |
 

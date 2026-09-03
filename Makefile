@@ -25,6 +25,34 @@ IMAGE            ?= ftp-deployment-action:local
 # race.
 TEST_SERVER_IMAGE ?= ftp-deployment-action-test-server:ci-integration
 
+# Container runtime detection (matches the runtime-detection logic in
+# tests/integration/lib/common.sh: docker first, podman fallback).
+# Used by `clean` so a rootless-podman-only developer gets their
+# images removed instead of `docker rmi` failing silently. `make
+# build` and `make build-test-server-image` keep their explicit
+# `docker` invocations — docker is the CI runtime, and the local
+# dev / CI parity check wants the build to error loudly if docker
+# is missing rather than fall through to a different binary.
+RUNTIME          := $(shell command -v docker 2>/dev/null || command -v podman 2>/dev/null)
+
+# Export IMAGE / TEST_SERVER_IMAGE so sub-process invocations
+# (`make integration` -> tests/integration/run-integration-tests.sh,
+# `make build-test-server-image` -> the buildx subprocess) inherit
+# the Makefile defaults. Without `export`, a developer who runs
+#   make build IMAGE=mytag:local
+#   make build-test-server-image TEST_SERVER_IMAGE=mytag-server:local
+#   make integration
+# would have `make integration` use the Makefile's hardcoded
+# default (ftp-deployment-action-test-server:ci-integration)
+# instead of the locally-built mytag-server:local, because each
+# `make` invocation starts a fresh shell and the prior command-
+# line overrides do not persist. `export` here propagates the
+# command-line overrides set on this `make` invocation into the
+# sub-shell that runs the recipe. CI already passes both on the
+# command line; this only affects the local-dev override path.
+export IMAGE
+export TEST_SERVER_IMAGE
+
 # ----------------------------------------------------------------------------
 # Lint: shellcheck on all .sh files, actionlint on action.yml, hadolint
 # on every Dockerfile in the repo. actionlint is installed from
@@ -151,13 +179,18 @@ integration:
 
 .PHONY: run
 run: build
+	@tmp=$$(mktemp -t actenv.XXXXXX); \
+	trap 'rm -f "$${tmp}"' EXIT; \
+	{ printf '%s\n' "INPUT_SERVER=$${FTP_SERVER:-ftp://example.com}"; \
+	  printf '%s\n' "INPUT_USER=$${FTP_USERNAME:-anonymous}"; \
+	  printf '%s\n' "INPUT_PASSWORD=$${FTP_PASSWORD:-}"; \
+	  printf '%s\n' "INPUT_LOCAL_DIR=/data"; \
+	} > "$${tmp}"; \
+	chmod 0600 "$${tmp}"; \
 	docker run --rm -it \
-		-e INPUT_SERVER=$${FTP_SERVER:-ftp://example.com} \
-		-e INPUT_USER=$${FTP_USERNAME:-anonymous} \
-		-e INPUT_PASSWORD=$${FTP_PASSWORD:-} \
-		-e INPUT_LOCAL_DIR=/data \
-		-v "$(PWD)":/data:ro \
-		$(IMAGE)
+	    --env-file "$${tmp}" \
+	    -v "$(PWD)":/data:ro \
+	    $(IMAGE)
 
 # ----------------------------------------------------------------------------
 # Release smoke tests: run the same checks the release pipeline
@@ -190,5 +223,5 @@ release:
 
 .PHONY: clean
 clean:
-	docker rmi -f $(IMAGE) 2>/dev/null || true
-	docker rmi -f $(TEST_SERVER_IMAGE) 2>/dev/null || true
+	-$(RUNTIME) rmi -f $(IMAGE) 2>/dev/null
+	-$(RUNTIME) rmi -f $(TEST_SERVER_IMAGE) 2>/dev/null

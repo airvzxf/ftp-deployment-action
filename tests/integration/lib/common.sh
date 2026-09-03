@@ -137,7 +137,6 @@ wait_for_port() {
   _wfp_deadline=$((_wfp_timeout * 2))
   _wfp_i=0
   while [ "${_wfp_i}" -lt "${_wfp_deadline}" ]; do
-    if _wfp_busybox_ok=1; then :; fi
     # Use the runtime's built-in port-check; `docker run --rm -i
     # alpine` is reliable and the alpine image is already cached.
     if ${RUNTIME} run --rm --network host alpine:3.23.3 \
@@ -358,6 +357,11 @@ lftp_build_open_script() {
 #   the env-file. The file path is echoed on stdout so the caller can
 #   capture it (avoids shellcheck SC2034 on a temp path).
 #
+#   The output file is chmod 0600'd before this function returns so
+#   INPUT_PASSWORD is not world-readable between the write and the
+#   podman/docker invocation (closes #133; the previous mktemp-derived
+#   mode was not portable — alpine busybox mktemp -t produces 0644).
+#
 #   NOTE: as of the variant B fallback (see README "Why variant B"),
 #   this helper is no longer the primary driver of scenarios 01/02/05.
 #   It is kept for two reasons: (a) the harness asserts the action
@@ -391,6 +395,15 @@ build_action_env_file() {
       printf '%s\n' "${_baef_kv}"
     done
   } > "${_baef_out}"
+
+  # The env-file carries INPUT_PASSWORD in plain text (the same secret
+  # the .netrc file inside the action carries). Lock it down to the
+  # runner's umask-derived permissions: without this chmod, the file
+  # mode would depend on the host mktemp flavour (0600 on GNU coreutils,
+  # 0644 on alpine busybox) and INPUT_PASSWORD would be readable to any
+  # other process on the host between the write and the runtime
+  # invocation. Closes #133.
+  chmod 0600 "${_baef_out}"
 }
 
 # ------------------------------------------------------------------------------
@@ -492,6 +505,14 @@ assert_absent() {
 #
 #   FTP user/password are unique per scenario (PID + random) so two
 #   parallel runs cannot step on each other on the same FTP server.
+#   The credentials are validated against [A-Za-z0-9_] before being
+#   exported, because start_ftps_server interpolates them into a -c
+#   payload that runs inside the FTPS container with --network host
+#   (and FTPS scenarios bind-mount the host /home/vsftpd tree).
+#   Pure-alphanumeric values keep the payload safe; if a future
+#   refactor changes the credential shape to include special chars,
+#   this guard surfaces it loudly instead of letting the payload
+#   silently break or expose a shell-injection vector.
 # ------------------------------------------------------------------------------
 scenario_setup() {
   _ss_name=$1
@@ -504,6 +525,18 @@ scenario_setup() {
   FTP_PASSWORD="p$$_$(rand_suffix)"
   FTP_DATA_DIR=$(mktemp -d -t ftpint.XXXXXX) || log_fail "mktemp failed"
   chmod 0777 "${FTP_DATA_DIR}"
+
+  # Defensive validation: start_ftps_server (and the rest of the
+  # harness) embed these values in container -c payloads and in
+  # scp / URL strings. Refuse anything that would change a single-
+  # quoted literal into a multi-token expansion.
+  case "${FTP_USER}" in
+    *[!A-Za-z0-9_]*) log_fail "FTP_USER contains non-[A-Za-z0-9_] chars: ${FTP_USER}" ;;
+  esac
+  case "${FTP_PASSWORD}" in
+    *[!A-Za-z0-9_]*) log_fail "FTP_PASSWORD contains non-[A-Za-z0-9_] chars" ;;
+  esac
+
   export FTP_USER FTP_PASSWORD FTP_DATA_DIR
 
   trap stop_ftp_server EXIT

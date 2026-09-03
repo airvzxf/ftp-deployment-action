@@ -58,11 +58,14 @@ scenario_setup "04-ftps-implicit-upload"
 _cert=$(generate_self_signed_cert)
 log_info "using cert ${_cert}"
 
-# MODE="implicit" maps host port 2122 -> container port 2122,
-# with implicit_ssl=YES (TLS from byte 0). The shared PASV range
-# is the same — both modes negotiate data connections on the
-# same data ports.
-_implicit_host_port=2122
+# MODE="implicit" maps host port $FTP_IMPLICIT_PORT -> container
+# port $FTP_IMPLICIT_PORT, with implicit_ssl=YES (TLS from byte
+# 0). FTP_IMPLICIT_PORT is exported from
+# tests/integration/lib/self-signed-cert.sh (default 2122) so the
+# port literal lives in exactly one place; the INPUT_SERVER URL
+# below reads from the same variable. The shared PASV range is
+# the same as explicit FTPS — both modes negotiate data
+# connections on the same data ports.
 start_ftps_server "${FTP_USER}" "${FTP_PASSWORD}" "${FTP_DATA_DIR}" "${_cert}" "implicit"
 
 # --- Step 2: env-file --------------------------------------------------------
@@ -80,10 +83,16 @@ start_ftps_server "${FTP_USER}" "${FTP_PASSWORD}" "${FTP_DATA_DIR}" "${_cert}" "
 # residual flake if the pre-baked image work (closes #135) ever
 # regresses on the apk-index race front.
 _env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env failed"
-trap 'rm -f "${_env}"; stop_ftp_server' EXIT
+# FTP_VSFTPD_CONF is the overlay vsftpd.conf bind-mounted into the
+# FTPS container (exported by start_ftps_server). Cleanup mirrors
+# the pattern start_ftp_server uses for plain-FTP scenarios (where
+# the data dir is the only per-scenario helper state). Use the
+# :- default so the trap is safe when start_ftps_server failed
+# before exporting FTP_VSFTPD_CONF (e.g. mktemp vsftpd.conf failed).
+trap 'rm -f "${_env}" "${FTP_VSFTPD_CONF:-}"; stop_ftp_server' EXIT
 
 {
-  printf 'INPUT_SERVER=ftps://%s@127.0.0.1:%s\n' "${FTP_USER}" "${_implicit_host_port}"
+  printf 'INPUT_SERVER=ftps://%s@127.0.0.1:%s\n' "${FTP_USER}" "${FTP_IMPLICIT_PORT}"
   printf 'INPUT_USER=%s\n' "${FTP_USER}"
   printf 'INPUT_PASSWORD=%s\n' "${FTP_PASSWORD}"
   printf 'INPUT_LOCAL_DIR=/data\n'
@@ -101,13 +110,13 @@ trap 'rm -f "${_env}"; stop_ftp_server' EXIT
   # scenario 03 — if a future lftp release decides to skip the
   # TLS handshake on ftps:// for any reason, ssl-force prevents
   # a silent plaintext fallback.
-  printf 'INPUT_LFTP_SETTINGS=set ftp:ssl-force true;set net:persist-retries 0;set net:max-retries 1;\n'
+  printf 'INPUT_LFTP_SETTINGS=set ftp:ssl-force true;set net:persist-retries 0;\n'
 } > "${_env}"
 
 # --- Step 3: invoke the action ------------------------------------------------
 _log=$(mktemp -t actlog.XXXXXX) || log_fail "mktemp log file failed"
 
-log_info "invoking action against implicit FTPS server (port ${_implicit_host_port}, TLS from byte 0)"
+log_info "invoking action against implicit FTPS server (port ${FTP_IMPLICIT_PORT}, TLS from byte 0)"
 set +e
 timeout 60 ${RUNTIME} run --rm \
     --network host \
@@ -128,6 +137,6 @@ assert_present "${_ftp_home}" "about.html"
 
 rm -f "${_log}"
 
-log_pass "scenario 04 passed: action uploaded fixtures over FTPS implicit (TLS from byte 0 on port ${_implicit_host_port})"
+log_pass "scenario 04 passed: action uploaded fixtures over FTPS implicit (TLS from byte 0 on port ${FTP_IMPLICIT_PORT})"
 
 exit 0
