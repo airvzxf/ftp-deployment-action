@@ -86,7 +86,7 @@ trap 'rm -f "${_env}"; stop_ftp_server' EXIT
   printf 'INPUT_PASSWORD=%s\n' "${FTP_PASSWORD}"
   printf 'INPUT_LOCAL_DIR=/data\n'
   printf 'INPUT_REMOTE_DIR=/\n'
-  printf 'INPUT_MAX_RETRIES=1\n'
+  printf 'INPUT_MAX_RETRIES=3\n'
   printf 'INPUT_NET_TIMEOUT=10s\n'
   printf 'INPUT_DNS_FATAL_TIMEOUT=10s\n'
   printf 'INPUT_FTP_SSL_ALLOW=true\n'

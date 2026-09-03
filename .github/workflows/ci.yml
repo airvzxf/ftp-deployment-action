@@ -98,9 +98,15 @@ jobs:
 
   # Integration tests (issue #117): boot a real vsftpd container
   # (docker.io/fauria/vsftpd) and exercise the action against it.
-  # Three scenarios actually run today (01, 02, 05); scenarios 03
-  # and 04 are stubs deferred to #120 (FTPS integration). The
-  # timeout-minutes: 5 reflects the budget defined in #117's
+  # Scenarios 01/02/05 use fauria/vsftpd (plain FTP). Scenarios 03/04
+  # (FTPS explicit / implicit, added by #120 / PR #130) use a
+  # pre-baked vsftpd+openssl alpine image built from
+  # tests/integration/Dockerfile.test-server (closes #135): the
+  # previous inline-`apk add` shape raced the apk index download
+  # against the 20s wait_for_port deadline in CI. Building the
+  # FTPS test server image in this job (rather than per-scenario)
+  # eliminates that race.
+  # The timeout-minutes: 5 reflects the budget defined in #117's
   # acceptance criteria; previously this section had no explicit
   # timeout (default 360 min), which let regressions hide behind
   # GH Actions' default budget. Pinning it to 5 minutes forces the
@@ -113,5 +119,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build the action image under test
         run: make build IMAGE=ftp-deployment-action:ci-integration VERSION=ci
+      # Build the pre-baked FTPS test server image used by scenarios
+      # 03 / 04 (closes #135). Same `ci-integration` suffix as the
+      # action image so both rebuild together on the same CI run;
+      # the Dockerfile.test-server is small (alpine base + 2 packages)
+      # and the build completes in <10s on the CI runner.
+      - name: Build the FTPS test server image
+        run: make build-test-server-image TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
       - name: Run integration scenarios against a real vsftpd
-        run: make integration IMAGE=ftp-deployment-action:ci-integration
+        run: make integration IMAGE=ftp-deployment-action:ci-integration TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration

@@ -28,7 +28,7 @@
 #     well within validity for any single CI job.
 #
 #   start_ftps_server FTP_USER FTP_PASS DATA_DIR CERT_FILE MODE
-#     Boot alpine:3.23.3 with vsftpd installed and SSL/TLS enabled.
+#     Boot a pre-baked vsftpd+openssl image with SSL/TLS enabled.
 #     MODE is either "explicit" (AUTH TLS upgrade on the control
 #     channel) or "implicit" (TLS from byte 0 — the ftps:// protocol
 #     shape). For "explicit" the host port is $FTP_CONTROL_PORT
@@ -36,16 +36,33 @@
 #     the host port is 2122 (unprivileged, no privileged-port
 #     workaround needed on rootless runtimes).
 #
-#     Why alpine:3.23.3 instead of docker.io/fauria/vsftpd (the
-#     image the plain-FTP scenarios use): fauria's
+#     Why a pre-baked image (vs the original inline `apk add`):
+#     the original start_ftps_server booted `alpine:3.23.3 -c 'apk
+#     add --no-cache vsftpd openssl && ...'` on every scenario run.
+#     The `apk add` step downloads the alpine package index from the
+#     network, which made scenarios 03 / 04 flaky in CI (#135):
+#       * apk index download took 1-15s and occasionally exceeded
+#         wait_for_port's 20s deadline.
+#       * on a transient network blip, apk failed outright; the
+#         container died and was garbage-collected by --rm, which
+#         surfaced as "No such container" in the harness.
+#     The pre-baked image (tests/integration/Dockerfile.test-server,
+#     built by `make build-test-server-image`) eliminates the
+#     per-run network dependency: vsftpd and openssl are already
+#     installed, /var/log/vsftpd / /etc/pam.d/vsftpd_virtual /
+#     /home/vsftpd are already created. The scenario only does the
+#     user-specific work (adduser, the overlay vsftpd.conf, the
+#     alpine-vsftpd TLS variable rename, exec vsftpd).
+#
+#     Why alpine:3.23.3-based instead of docker.io/fauria/vsftpd
+#     (the image the plain-FTP scenarios use): fauria's
 #     /usr/sbin/run-vsftpd.sh wrapper has docker-in-docker quirks
 #     in CI (ubuntu-latest + GitHub Actions) that surface as vsftpd
 #     dying a few seconds after the container is created. Podman
 #     rootless (local dev) does not reproduce the issue, so the
 #     failure was not caught until CI ran the FTPS scenarios. A
-#     plain alpine base + `apk add vsftpd` avoids the wrapper
-#     entirely and runs identically on both podman local and docker
-#     CI. Closes #120.
+#     plain alpine base avoids the wrapper entirely and runs
+#     identically on both podman local and docker CI. Closes #120.
 #
 #     Sets the FTP_CONTAINER_NAME / FTP_DATA_DIR globals so the
 #     existing stop_ftp_server helper (from common.sh, installed
@@ -57,9 +74,28 @@
 # mount /tmp read-only. FTP_INTEGRATION_CERT_DIR is overridable
 # for the rare CI that does mount /tmp :ro (e.g. some container-in-
 # container setups).
+#
+# Pre-baked FTPS test server image. Built by `make
+# build-test-server-image` from tests/integration/Dockerfile.test-
+# server; CI / the Makefile pass the matching tag. The image has
+# vsftpd + openssl pre-installed and /var/log/vsftpd, /etc/pam.d/
+# vsftpd_virtual, /home/vsftpd pre-created so the per-scenario
+# `docker run` does not need network access to an apk index.
+# Overridable for developers who build the image under a different
+# tag; the default matches the suffix the Makefile and the CI
+# workflow use (`-ci-integration`).
 # ------------------------------------------------------------------------------
 : "${FTP_INTEGRATION_CERT_DIR:=/tmp/ftpint-certs}"
 export FTP_INTEGRATION_CERT_DIR
+# FTP_TEST_SERVER_IMAGE is the image start_ftps_server boots. The
+# orchestrator (tests/integration/run-integration-tests.sh) and the
+# Makefile pass it as TEST_SERVER_IMAGE; we re-default from
+# TEST_SERVER_IMAGE when FTP_TEST_SERVER_IMAGE itself is unset so
+# the env var convention is consistent across plain-FTP and FTPS
+# scenarios. Falls back to the canonical ci-integration tag for
+# callers that set neither.
+: "${FTP_TEST_SERVER_IMAGE:=${TEST_SERVER_IMAGE:-ftp-deployment-action-test-server:ci-integration}}"
+export FTP_TEST_SERVER_IMAGE
 
 # ------------------------------------------------------------------------------
 # generate_self_signed_cert
@@ -208,8 +244,9 @@ _write_ftps_vsftpd_conf() {
 
 # ------------------------------------------------------------------------------
 # start_ftps_server FTP_USER FTP_PASS DATA_DIR CERT_FILE MODE
-#   Boot alpine:3.23.3 with vsftpd installed at startup and SSL/TLS
-#   enabled via the bind-mounted vsftpd.conf overlay. MODE = "explicit"
+#   Boot the pre-baked FTPS test server image (built from
+#   tests/integration/Dockerfile.test-server) with SSL/TLS enabled
+#   via the bind-mounted vsftpd.conf overlay. MODE = "explicit"
 #   (AUTH TLS upgrade) or "implicit" (TLS from byte 0). The host
 #   port differs by mode:
 #
@@ -219,17 +256,25 @@ _write_ftps_vsftpd_conf() {
 #   Both are unprivileged on the host (no special sysctl needed
 #   on rootless podman / docker-rootless setups).
 #
-#   Why alpine:3.23.3 + vsftpd (no Dockerfile, no fauria wrapper):
-#   fauria/vsftpd's /usr/sbin/run-vsftpd.sh has docker-in-docker
-#   quirks in CI (ubuntu-latest) where vsftpd dies within seconds
-#   of `docker run -d`. Podman rootless (local dev) does not
+#   The pre-baked image (closes #135): tests/integration/Dockerfile.
+#   test-server installs vsftpd + openssl and pre-creates
+#   /var/log/vsftpd, /etc/pam.d/vsftpd_virtual (delegating to
+#   pam_unix / /etc/shadow), and /home/vsftpd. The previous
+#   inline-`apk add` shape ran a network-dependent package install
+#   on every scenario start, which made the 20s wait_for_port
+#   race flaky in CI. The pre-baked image eliminates that race:
+#   `docker run` of an already-pulled image takes <1s and never
+#   races the apk index.
+#
+#   Why alpine:3.23.3-based (vs fauria/vsftpd): fauria's
+#   /usr/sbin/run-vsftpd.sh wrapper has docker-in-docker quirks
+#   in CI (ubuntu-latest) where vsftpd dies within seconds of
+#   `docker run -d`. Podman rootless (local dev) does not
 #   reproduce the issue, so the failure only surfaced when the FTPS
 #   scenarios actually ran in CI (#120, PR #130). A plain alpine
-#   base + `apk add vsftpd` avoids the wrapper entirely and runs
-#   identically on podman local and docker CI. The whole setup is
-#   one `podman run -d ... --entrypoint /bin/sh alpine:3.23.3 -c
-#   '...'` invocation; the trailing `exec vsftpd` makes vsftpd
-#   PID 1 so it gets the container's signals.
+#   base avoids the wrapper entirely and runs identically on podman
+#   local and docker CI. The pre-baked Dockerfile keeps us off the
+#   fauria wrapper for the same reason.
 #
 #   Why --network host: with it, vsftpd inside the container binds
 #   directly on the host ports we want to expose (2121 / 2122),
@@ -250,10 +295,9 @@ _write_ftps_vsftpd_conf() {
 #
 #   Authentication: local_enable=YES with a real alpine user
 #   created at startup via adduser + chpasswd. The vsftpd overlay
-#   still names the PAM service vsftpd_virtual; alpine's vsftpd
-#   package only ships /etc/pam.d/vsftpd, so the startup script
-#   creates a parallel vsftpd_virtual that delegates to pam_unix
-#   (local /etc/shadow). This is the simplest auth path that
+#   still names the PAM service vsftpd_virtual; the pre-baked
+#   image ships /etc/pam.d/vsftpd_virtual (delegating to pam_unix
+#   / local /etc/shadow). This is the simplest auth path that
 #   works on a stock alpine image — virtual users (fauria's
 #   approach) require db_load, /etc/vsftpd/virtual_users.db, and
 #   pam_userdb.so, which alpine's vsftpd package does not ship.
@@ -317,14 +361,15 @@ start_ftps_server() {
 
   _sfs_name=$(unique_container_name "ftpsvr")
 
-  # Boot alpine:3.23.3 detached. The -c payload installs vsftpd
-  # via apk, sets up the PAM service vsftpd expects, creates the
-  # FTP user, fixes the alpine-vsftpd TLS variable naming (see
-  # below), and exec's vsftpd (so vsftpd is PID 1 and inherits
-  # the container's signal handling). Quoting is the standard
-  # single-quoted-literal / double-quoted-interpolation mix so
-  # ${_sfs_user} and ${_sfs_pass} are expanded by the OUTER shell
-  # (the harness) and not by the container's /bin/sh.
+  # Boot the pre-baked FTPS test server image detached. The -c
+  # payload only does the per-scenario work that depends on the
+  # scenario's FTP_USER/FTP_PASS: fixes the alpine-vsftpd TLS
+  # variable naming (see below), creates the FTP user, fixes the
+  # chown of the user home, and exec's vsftpd (so vsftpd is PID 1
+  # and inherits the container's signal handling). Quoting is the
+  # standard single-quoted-literal / double-quoted-interpolation
+  # mix so ${_sfs_user} and ${_sfs_pass} are expanded by the OUTER
+  # shell (the harness) and not by the container's /bin/sh.
   #
   # alpine's vsftpd 3.0.5-r3 names its TLS version gates without
   # the underscore before the version digit: ssl_tlsv11 / ssl_tlsv12
@@ -335,6 +380,16 @@ start_ftps_server() {
   # variable in config file". To keep _write_ftps_vsftpd_conf
   # untouched, we copy its bind-mounted output to a writable path
   # and sed-rewrite the two lines in-place.
+  #
+  # Why the image is pre-baked (closes #135): the previous version
+  # of this payload started with `apk add --no-cache vsftpd openssl`,
+  # which downloaded the alpine package index from the network on
+  # every scenario run. That step occasionally took >20s in CI and
+  # even failed outright on transient network blips, surfacing as
+  # flaky scenario failures. tests/integration/Dockerfile.test-server
+  # moves the apk install + the /var/log/vsftpd, /etc/pam.d/
+  # vsftpd_virtual, /home/vsftpd prep into the image so this
+  # payload is purely per-scenario work (no network).
   if ! ${RUNTIME} run -d --rm \
       --name "${_sfs_name}" \
       --network host \
@@ -344,16 +399,9 @@ start_ftps_server() {
       -v "${_sfs_cert}:/etc/vsftpd/vsftpd.pem:ro" \
       -v "${_sfs_conf}:/etc/vsftpd.conf:ro" \
       --entrypoint '/bin/sh' \
-      alpine:3.23.3 \
+      "${FTP_TEST_SERVER_IMAGE}" \
       -c '
           set -eu
-          apk add --no-cache vsftpd openssl >/dev/null 2>&1
-          mkdir -p /var/log/vsftpd /etc/pam.d
-          cat > /etc/pam.d/vsftpd_virtual <<EOF
-auth required pam_unix.so
-account required pam_unix.so
-session required pam_unix.so
-EOF
           cp /etc/vsftpd.conf /tmp/vsftpd.conf
           sed -i "s/^ssl_tlsv1_1=/ssl_tlsv11=/; s/^ssl_tlsv1_2=/ssl_tlsv12=/" /tmp/vsftpd.conf
           adduser -D -h /home/vsftpd '"${_sfs_user}"' 2>/dev/null || true

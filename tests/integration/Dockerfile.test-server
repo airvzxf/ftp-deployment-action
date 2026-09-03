@@ -1,0 +1,83 @@
+# tests/integration/Dockerfile.test-server
+#
+# Pre-baked FTPS test server image for the scenarios in
+# tests/integration/scenarios/ (specifically 03-ftps-explicit-upload
+# and 04-ftps-implicit-upload, which source
+# tests/integration/lib/self-signed-cert.sh).
+#
+# Build with:
+#   make build-test-server-image TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
+#
+# Why this image exists (closes #135):
+#   The original start_ftps_server booted `alpine:3.23.3 -c 'apk add
+#   --no-cache vsftpd openssl && ...'` on every scenario run. The
+#   `apk add` step downloads the alpine package index from the
+#   network, which made scenario 03 and 04 flaky in CI
+#   (ubuntu-latest, GitHub Actions):
+#     * apk index download took 1-15s and occasionally exceeded the
+#       wait_for_port deadline (20s).
+#     * on a transient network blip, apk failed outright; the
+#       container then died and was garbage-collected by --rm,
+#       surfacing as "No such container" in the harness.
+#   Pre-baking vsftpd into a dedicated image eliminates the per-run
+#   network dependency: the scenario only does
+#   `docker run` against an already-pulled image, which takes <1s to
+#   start and never races the apk index.
+#
+# Base image: alpine:3.23.3 (the same tag start_ftps_server used to
+# pin inline). Kept on the 3.23 line for byte-for-byte parity with
+# the original setup; bump in lockstep with the action Dockerfile if
+# the alpine base ever moves.
+#
+# Packages installed at build time (resolves hadolint DL3018 — same
+# pattern the action Dockerfile uses):
+#   * vsftpd   — the FTP/FTPS daemon the scenarios exercise.
+#   * openssl  — used by the action image to generate the per-run
+#                self-signed cert; the server image itself only
+#                needs it for consistency with the original
+#                `apk add vsftpd openssl` line.
+#
+# Filesystem prep (moved out of the per-scenario -c payload into
+# the image, because they are CONSTANT across every scenario run):
+#   * /var/log/vsftpd           — vsftpd's xferlog target
+#                                 (xferlog_file=/var/log/vsftpd/
+#                                 vsftpd.log in the overlay conf).
+#   * /etc/pam.d/vsftpd_virtual — PAM service name referenced by
+#                                 pam_service_name=vsftpd_virtual in
+#                                 the overlay conf. alpine's vsftpd
+#                                 package only ships /etc/pam.d/vsftpd;
+#                                 we add a vsftpd_virtual that
+#                                 delegates to pam_unix (local
+#                                 /etc/shadow), which is the auth
+#                                 path the scenarios depend on
+#                                 (start_ftps_server creates the FTP
+#                                 user with `adduser`+`chpasswd`).
+#   * /home/vsftpd              — bind-mount target for the
+#                                 per-scenario data directory. The
+#                                 directory must exist inside the
+#                                 container so the `-v
+#                                 ${DATA_DIR}:/home/vsftpd` bind
+#                                 mount succeeds.
+#
+# The per-scenario startup still does the user-specific work (create
+# the FTP user, write the overlay vsftpd.conf with the per-scenario
+# SSL/PASV settings, exec vsftpd). See start_ftps_server in
+# tests/integration/lib/self-signed-cert.sh.
+#
+# Why --network host is the caller's choice: the start_ftps_server
+# helper passes `--network host` so vsftpd inside the container can
+# bind directly on the unprivileged host ports 2121 / 2122, which
+# rootless podman / docker-rootless setups can handle. No
+# network-related setup is required here.
+
+FROM alpine:3.23.3
+
+RUN apk add --no-cache \
+      vsftpd \
+      openssl \
+ && mkdir -p /var/log/vsftpd /etc/pam.d /home/vsftpd \
+ && cat > /etc/pam.d/vsftpd_virtual <<'EOF'
+auth required pam_unix.so
+account required pam_unix.so
+session required pam_unix.so
+EOF

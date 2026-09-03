@@ -13,6 +13,9 @@ exit.
 tests/integration/
 ├── README.md                     # this file
 ├── run-integration-tests.sh      # orchestrator (runs every scenario)
+├── Dockerfile.test-server        # pre-baked FTPS test server image
+│                                 #   (vsftpd + openssl on alpine 3.23.3);
+│                                 #   built by `make build-test-server-image`
 ├── lib/
 │   └── common.sh                 # shared helpers (runtime, FTP lifecycle,
 │                                 #   lftp driver, assertions)
@@ -23,8 +26,8 @@ tests/integration/
 └── scenarios/
     ├── 01-plain-ftp-upload.sh                # exercises the upload path
     ├── 02-plain-ftp-delete.sh                # exercises --delete
-    ├── 03-ftps-explicit-upload.sh            # STUB — deferred to #120
-    ├── 04-ftps-implicit-upload.sh            # STUB — deferred to #120
+    ├── 03-ftps-explicit-upload.sh            # FTPS explicit (AUTH TLS upgrade)
+    ├── 04-ftps-implicit-upload.sh            # FTPS implicit (TLS from byte 0)
     └── 05-exclude-and-exclude-delete.sh      # exercises mirror:exclude
                                               #   + --delete
 ```
@@ -33,8 +36,15 @@ tests/integration/
 
 ```
 make build IMAGE=ftp-deployment-action:ci-integration VERSION=ci
-make integration IMAGE=ftp-deployment-action:ci-integration
+make build-test-server-image TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
+make integration IMAGE=ftp-deployment-action:ci-integration \
+                 TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
 ```
+
+`make build-test-server-image` builds the pre-baked FTPS test
+server image (used by scenarios 03 / 04). The build context is
+`tests/integration` so only the Dockerfile and adjacent files
+are sent to the docker daemon.
 
 `make integration` invokes `tests/integration/run-integration-tests.sh`,
 which discovers and runs every `*.sh` under `tests/integration/scenarios/`
@@ -42,18 +52,49 @@ in lexical order. The CI workflow's job name is also `integration` and
 uses the same Make target.
 
 `make integration` exits 0 if every scenario passes; non-zero
-otherwise. A scenario that is not yet wired (today: 03 and 04)
-exits 0 with a `skip:` line so the orchestrator's pass/fail
-counter reflects only the work actually done.
+otherwise.
 
 ## Running in CI
 
 `.github/workflows/ci.yml` defines a separate `integration` job
-that builds the action image (`make build IMAGE=ftp-deployment-action:ci-integration
-VERSION=ci`) and then runs `make integration IMAGE=ftp-deployment-action:ci-integration`.
+that:
+
+1. Builds the action image (`make build IMAGE=ftp-deployment-action:ci-integration VERSION=ci`).
+2. Builds the pre-baked FTPS test server image (`make build-test-server-image TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration`).
+3. Runs `make integration IMAGE=ftp-deployment-action:ci-integration TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration`.
+
 The job's `timeout-minutes` is **5** (the same as the test budget
 defined in #117's acceptance criteria). The CI runner is
 `ubuntu-latest`, which has docker pre-installed.
+
+## Pre-baked FTPS test server image (closes #135)
+
+The FTPS test server is built ahead of time from
+`tests/integration/Dockerfile.test-server` rather than assembled
+per-scenario on a bare `alpine:3.23.3` image. The previous shape
+(`docker run -d alpine:3.23.3 -c 'apk add --no-cache vsftpd openssl
+&& ...'`) ran the `apk add` on every scenario start, which meant
+the apk package index was downloaded from the network on each
+run. In CI that occasionally:
+
+* took >20s and tripped `wait_for_port`'s deadline;
+* failed outright on a transient network blip, after which the
+  `--rm` container was garbage-collected and surfaced as "No
+  such container" in the harness.
+
+The pre-baked image (alpine 3.23.3 base + `vsftpd openssl` +
+pre-created `/var/log/vsftpd`, `/etc/pam.d/vsftpd_virtual`,
+`/home/vsftpd`) eliminates that race: `docker run` of an
+already-pulled image is a sub-second operation and never depends
+on the network.
+
+`start_ftps_server` (in `tests/integration/lib/self-signed-cert.sh`)
+only does the per-scenario work: copies the bind-mounted
+`vsftpd.conf` to a writable path, sed-rewrites the alpine-vsftpd
+TLS variable names (`ssl_tlsv1_1=` → `ssl_tlsv11=`, etc.),
+`adduser` + `chpasswd` for the scenario's FTP_USER, and `exec
+vsftpd`. The image tag is controlled by `TEST_SERVER_IMAGE`
+(default `ftp-deployment-action-test-server:ci-integration`).
 
 ## Why variant B (lftp from alpine, not the action)
 
@@ -117,7 +158,7 @@ argv-leak of the password) — both of which are out of scope for
 
 | # | Criterion | Status |
 |---|---|---|
-| 1 | `make integration` boots vsftpd and runs 5 scenarios. | ✓ (3 real, 2 stubs) |
+| 1 | `make integration` boots vsftpd and runs 5 scenarios. | ✓ all 5 scenarios wired (01/02/05 plain FTP, 03/04 FTPS) |
 | 2 | All 5 scenarios pass locally (podman) and in CI (docker). | ✓ locally; CI is the same Make target, only the runtime differs |
 | 3 | Each scenario is standalone. | ✓ each scenario installs `trap stop_ftp_server EXIT` |
 | 4 | `tests/integration/README.md` documents how to add a scenario. | ✓ see "Adding a new scenario" below |
@@ -249,9 +290,6 @@ bind-mounted read-only into the alpine container.
 
 ## Limitations / follow-ups
 
-* **FTPS scenarios (03, 04) are stubs.** Wiring FTPS requires
-  generating a self-signed certificate and mounting it into
-  vsftpd, which is the scope of #120.
 * **lftp 4.9.3 `.netrc` and `mirror:exclude-file` quirks.** See
   "Why variant B" above. The action's `INPUT_EXCLUDE_DELETE` input
   is effectively a no-op against the current image. Either
