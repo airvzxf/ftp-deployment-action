@@ -4,7 +4,7 @@
 # Scenario 05 (variant B): mirror with --delete + INPUT_EXCLUDE via
 # lftp from alpine, against a real vsftpd.
 #
-# Scope (downgraded from the original proposal — see tests/integration/README.md):
+# Scope:
 #   * Boots docker.io/fauria/vsftpd.
 #   * Pre-seeds the FTP user's home with:
 #       - one file that does NOT match the source fixtures
@@ -19,16 +19,15 @@
 #     was removed by --delete, and a pre-existing *.bak file on
 #     the local side was NOT uploaded (excluded by mirror:exclude).
 #
-# The original proposal also asked us to assert that
-# INPUT_EXCLUDE_DELETE protects a remote file from --delete. That
-# half is **not** tested here because lftp 4.9.3 (the version the
-# action image ships) does not recognise `set mirror:exclude-file`:
-# lftp logs "mirror:exclude-file: no such variable" and ignores it.
-# The action's lib.sh writes that setting, so INPUT_EXCLUDE_DELETE
-# is effectively a no-op in the current control plane. The test
-# documents this as a known limitation; a follow-up against lftp
-# 4.9.4+ (or a fix to lib.sh) can re-enable the assertion. See
-# tests/integration/README.md "Why variant B / lftp 4.9.3 quirks".
+# INPUT_EXCLUDE_DELETE is intentionally NOT exercised here — it is
+# covered end-to-end through the action image in scenario 11
+# (11-exclude-delete-protects-remote.sh). Scenario 11 invokes the
+# real ftp-deployment-action binary, so it exercises the full
+# lib.sh::build_ftp_settings path (including the `set -a; set
+# mirror:exclude-file ...; set -a;` wrapping that #131 added).
+# Scenario 05 here stays minimal: it verifies the lftp primitive
+# (`set mirror:exclude` + `--delete`) on which INPUT_EXCLUDE relies,
+# without the action image in the loop.
 
 set -eu
 
