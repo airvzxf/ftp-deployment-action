@@ -85,7 +85,13 @@ start_ftps_server "${FTP_USER}" "${FTP_PASSWORD}" "${FTP_DATA_DIR}" "${_cert}" "
 #     the residual flake if the pre-baked image work (closes #135)
 #     ever regresses on the apk-index race front.
 _env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env failed"
-trap 'rm -f "${_env}"; stop_ftp_server' EXIT
+# FTP_VSFTPD_CONF is the overlay vsftpd.conf bind-mounted into the
+# FTPS container (exported by start_ftps_server). Cleanup mirrors
+# the pattern start_ftp_server uses for plain-FTP scenarios (where
+# the data dir is the only per-scenario helper state). Use the
+# :- default so the trap is safe when start_ftps_server failed
+# before exporting FTP_VSFTPD_CONF (e.g. mktemp vsftpd.conf failed).
+trap 'rm -f "${_env}" "${FTP_VSFTPD_CONF:-}"; stop_ftp_server' EXIT
 
 {
   printf 'INPUT_SERVER=ftp://%s@127.0.0.1:%s\n' "${FTP_USER}" "${FTP_CONTROL_PORT}"

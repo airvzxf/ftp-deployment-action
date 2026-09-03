@@ -464,6 +464,13 @@ start_ftps_server() {
   export FTP_CONTAINER_NAME
   FTP_DATA_DIR="${_sfs_data_dir}"
   export FTP_DATA_DIR
+  # Overlay vsftpd.conf bind-mounted into the container. Exported so
+  # the scenario-level EXIT trap can rm -f it on success paths
+  # (the container rm is handled by stop_ftp_server; the overlay
+  # conf is per-scenario helper state). Mirrors the FTP_CONTAINER_NAME
+  # / FTP_DATA_DIR pattern above.
+  FTP_VSFTPD_CONF="${_sfs_conf}"
+  export FTP_VSFTPD_CONF
 
   if ! wait_for_port 127.0.0.1 "${_sfs_host_port}" 20; then
     ${RUNTIME} logs "${FTP_CONTAINER_NAME}" >&2 || true
