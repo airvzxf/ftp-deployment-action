@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`SECURITY.md` (Tag signing policy)** — replaced the out-of-date "GPG-signed" claim with a per-tag-range table covering all three historical formats (lightweight legacy, PGP, SSH), and added the local-verification command (`scripts/verify-tag.sh <tag>`).
+- **ECR Public publishing temporarily disabled** — the `AWS_ROLE_TO_ASSUME` secret is configured in the repo, but the IAM role's OIDC trust policy is not configured to allow this repo, so `Configure AWS credentials (OIDC) for ECR Public` fails with `Not authorized to perform sts:AssumeRoleWithWebIdentity` (the role was set up under an AWS account the maintainer no longer has access to). The two ECR Public steps (`Configure AWS credentials`, `Log in to ECR Public`) and the ECR branch in the meta step are commented out, and the `if false; then` in the meta step emits a `::notice::ECR Public publishing disabled...` line on every release. The cosign sign + SBOM attestation steps for ECR Public remain in the file (gated on `if: ecr_enabled == 'true'`, which is never set), so re-enabling the feature is a one-line change in two places once the IAM trust policy is fixed. The pipeline now publishes to **ghcr.io (always) + Docker Hub (when `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` are set)** only. See the comment in `.github/workflows/release.yml` for the exact re-enable diff.
 
 ## [2.11.1] - 2026-09-03
 
