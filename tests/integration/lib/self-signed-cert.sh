@@ -451,7 +451,13 @@ start_ftps_server() {
           set -eu
           cp /etc/vsftpd.conf /tmp/vsftpd.conf
           sed -i "s/^ssl_tlsv1_1=/ssl_tlsv11=/; s/^ssl_tlsv1_2=/ssl_tlsv12=/" /tmp/vsftpd.conf
-          adduser -D -h /home/vsftpd '"${_sfs_user}"' 2>/dev/null || true
+          if ! adduser -D -h /home/vsftpd '"${_sfs_user}"' 2>"/tmp/adduser.err"; then
+            case "$(cat /tmp/adduser.err)" in
+              *"already exists"*) : ;;
+              *) printf "FAIL: adduser failed: %s\n" "$(cat /tmp/adduser.err)" >&2; exit 1 ;;
+            esac
+          fi
+          rm -f /tmp/adduser.err
           echo '"${_sfs_user}"':'"${_sfs_pass}"' | chpasswd
           chmod 0777 /home/vsftpd/'"${_sfs_user}"'
           exec vsftpd /tmp/vsftpd.conf
