@@ -54,31 +54,34 @@
 #
 # Filesystem prep (moved out of the per-scenario -c payload into
 # the image, because they are CONSTANT across every scenario run):
+#   * /etc/pam.d                — alpine's busybox base does NOT ship
+#                                 this directory (only /etc exists).
+#                                 The vsftpd package's post-install
+#                                 hook creates /etc/pam.d/vsftpd but
+#                                 we are using the vsftpd `pre-install`
+#                                 trigger path that does NOT create
+#                                 the dir; the heredoc below needs
+#                                 it to exist. (Pre-fix #149 removed
+#                                 this mkdir as a "no-op"; CI
+#                                 caught the breakage: the heredoc
+#                                 runs `cat > /etc/pam.d/vsftpd_virtual`
+#                                 and fails with "nonexistent
+#                                 directory". Restored.)
 #   * /var/log/vsftpd           — vsftpd's xferlog target
 #                                 (xferlog_file=/var/log/vsftpd/
 #                                 vsftpd.log in the overlay conf).
-#                                 The other two candidate dirs
-#                                 (/etc/pam.d and /home/vsftpd)
-#                                 are NOT pre-created: /etc/pam.d
-#                                 is part of alpine's base filesystem
-#                                 already, and /home/vsftpd is
-#                                 bind-mounted at runtime from the
-#                                 host's per-scenario ${FTP_DATA_DIR}
-#                                 so a build-time mkdir would be
-#                                 overwritten.
+#   /home/vsftpd is NOT pre-created in this image: the
+#   per-scenario `docker run` carries `-v ${FTP_DATA_DIR}:/home/vsftpd`,
+#   so the in-container /home/vsftpd is the host's bind mount, not a
+#   build-time artefact. docker / podman auto-create the mountpoint on
+#   the IMAGE side if it does not exist, so a build-time mkdir here
+#   would be overwritten by the bind mount. Keeping the comment out of
+#   the prep list is intentional (see #149).
 #
 # The per-scenario startup still does the user-specific work (create
 # the FTP user, write the overlay vsftpd.conf with the per-scenario
 # SSL/PASV settings, exec vsftpd). See start_ftps_server in
 # tests/integration/lib/self-signed-cert.sh.
-#
-# Why /home/vsftpd is NOT pre-created in this image: the
-# per-scenario `docker run` carries `-v ${FTP_DATA_DIR}:/home/vsftpd`,
-# so the in-container /home/vsftpd is the host's bind mount, not a
-# build-time artefact. docker / podman auto-create the mountpoint on
-# the IMAGE side if it does not exist, so a build-time mkdir here
-# would be overwritten by the bind mount. Keeping the comment out of
-# the prep list is intentional (see #149).
 #
 # Why # syntax=docker/dockerfile:1.4: the RUN step uses a heredoc
 # (`cat > /etc/pam.d/vsftpd_virtual <<EOF`) which requires BuildKit's
@@ -92,7 +95,7 @@ FROM alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943
 
 RUN apk add --no-cache \
       vsftpd=3.0.5-r3 \
- && mkdir -p /var/log/vsftpd \
+ && mkdir -p /etc/pam.d /var/log/vsftpd \
  && cat > /etc/pam.d/vsftpd_virtual <<'EOF'
 auth required pam_unix.so
 account required pam_unix.so
