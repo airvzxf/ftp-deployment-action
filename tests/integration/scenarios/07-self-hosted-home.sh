@@ -108,7 +108,10 @@ trap 'rm -rf "${_fake_home}"; stop_ftp_server' EXIT
 # code captured). Output is captured to a tempfile (not /dev/null)
 # so the assertion below can grep for the .netrc error message.
 #
-# Inputs:
+# Inputs (all go through an env-file; we do NOT pass -e KEY=VALUE on
+# the runtime argv because podman/docker put those into /proc/<pid>/
+# cmdline and `ps aux`, briefly exposing INPUT_PASSWORD to any other
+# process on the host while the container is alive — closes #133):
 #   * IMAGE             — the action image under test (orchestrator
 #                          exports this from its own $IMAGE).
 #   * _fake_home        — bind-mounted read-only as /github/home.
@@ -129,17 +132,34 @@ trap 'rm -rf "${_fake_home}"; stop_ftp_server' EXIT
 _log=$(mktemp -t reg119.XXXXXX) \
   || log_fail "mktemp log file failed"
 
+# Build the env-file via build_action_env_file so this scenario gets
+# the same env-file interface (and chmod 0600) that scenarios 08/09/10
+# already use, without the -e flag leaks the v2.11.0 harness shipped.
+# HOME=/github/home is an extra kv: it must land INSIDE the container's
+# environment (not on the host's) so the entrypoint's fixed
+# `export HOME=/home/lftp` overrides it — but we still need the value
+# present so the pre-fix `: "${HOME:=/home/lftp}"` fallback is
+# demonstrably bypassed (the bind-mount then refuses the .netrc write
+# at /github/home/.netrc on the original code path). See #119 for the
+# HOME-pinning fix that made this scenario a regression test for #111.
+_env=$(mktemp -t actenv.XXXXXX) \
+  || log_fail "mktemp env file failed"
+build_action_env_file "${_env}" "${IMAGE}" /data / \
+    "HOME=/github/home"
+
+# Extend the EXIT trap so the env-file is removed on any exit path.
+# The previous trap cleaned _fake_home + FTP container; the new one
+# also removes _env so the temporary INPUT_PASSWORD file does not
+# survive the test run.
+trap 'rm -f "${_env}"; rm -rf "${_fake_home}"; stop_ftp_server' EXIT
+
 log_info "invoking action with HOME=/github/home bind-mounted :ro (log=${_log})"
 set +e
 timeout 30 ${RUNTIME} run --rm \
     --network host \
     -v "${FIXTURES_DIR}:/data:ro" \
     -v "${_fake_home}:/github/home:ro" \
-    -e "HOME=/github/home" \
-    -e "INPUT_SERVER=ftp://127.0.0.1:${FTP_CONTROL_PORT}" \
-    -e "INPUT_USER=${FTP_USER}" \
-    -e "INPUT_PASSWORD=${FTP_PASSWORD}" \
-    -e "INPUT_LOCAL_DIR=/data" \
+    --env-file "${_env}" \
     "${IMAGE}" > "${_log}" 2>&1
 _rc=$?
 set -e

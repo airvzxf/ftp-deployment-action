@@ -358,6 +358,11 @@ lftp_build_open_script() {
 #   the env-file. The file path is echoed on stdout so the caller can
 #   capture it (avoids shellcheck SC2034 on a temp path).
 #
+#   The output file is chmod 0600'd before this function returns so
+#   INPUT_PASSWORD is not world-readable between the write and the
+#   podman/docker invocation (closes #133; the previous mktemp-derived
+#   mode was not portable — alpine busybox mktemp -t produces 0644).
+#
 #   NOTE: as of the variant B fallback (see README "Why variant B"),
 #   this helper is no longer the primary driver of scenarios 01/02/05.
 #   It is kept for two reasons: (a) the harness asserts the action
@@ -391,6 +396,15 @@ build_action_env_file() {
       printf '%s\n' "${_baef_kv}"
     done
   } > "${_baef_out}"
+
+  # The env-file carries INPUT_PASSWORD in plain text (the same secret
+  # the .netrc file inside the action carries). Lock it down to the
+  # runner's umask-derived permissions: without this chmod, the file
+  # mode would depend on the host mktemp flavour (0600 on GNU coreutils,
+  # 0644 on alpine busybox) and INPUT_PASSWORD would be readable to any
+  # other process on the host between the write and the runtime
+  # invocation. Closes #133.
+  chmod 0600 "${_baef_out}"
 }
 
 # ------------------------------------------------------------------------------

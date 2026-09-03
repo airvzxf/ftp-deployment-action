@@ -151,13 +151,18 @@ integration:
 
 .PHONY: run
 run: build
+	@tmp=$$(mktemp -t actenv.XXXXXX); \
+	trap 'rm -f "$${tmp}"' EXIT; \
+	{ printf '%s\n' "INPUT_SERVER=$${FTP_SERVER:-ftp://example.com}"; \
+	  printf '%s\n' "INPUT_USER=$${FTP_USERNAME:-anonymous}"; \
+	  printf '%s\n' "INPUT_PASSWORD=$${FTP_PASSWORD:-}"; \
+	  printf '%s\n' "INPUT_LOCAL_DIR=/data"; \
+	} > "$${tmp}"; \
+	chmod 0600 "$${tmp}"; \
 	docker run --rm -it \
-		-e INPUT_SERVER=$${FTP_SERVER:-ftp://example.com} \
-		-e INPUT_USER=$${FTP_USERNAME:-anonymous} \
-		-e INPUT_PASSWORD=$${FTP_PASSWORD:-} \
-		-e INPUT_LOCAL_DIR=/data \
-		-v "$(PWD)":/data:ro \
-		$(IMAGE)
+	    --env-file "$${tmp}" \
+	    -v "$(PWD)":/data:ro \
+	    $(IMAGE)
 
 # ----------------------------------------------------------------------------
 # Release smoke tests: run the same checks the release pipeline
