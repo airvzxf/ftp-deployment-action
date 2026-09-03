@@ -82,7 +82,7 @@ inputs:
     required: false
     default: '10s'
   lftp_settings:
-    description: 'Additional raw lftp settings, e.g. "set cache:cache-empty-listings true; set cmd:status-interval 1s;". Use with care: this is appended to the lftp `-e` command and not validated.'
+    description: 'Additional raw lftp settings, e.g. "set cache:cache-empty-listings true; set cmd:status-interval 1s;". Appended to the lftp `-e` command; rejected if it contains control characters, backtick, `$`, `!`, or more than 3 `;`-chained directives (see lib.sh::validate_lftp_settings). Same sanitization applies to `exclude` and `exclude_delete`.'
     required: false
     default: ''
   exclude:

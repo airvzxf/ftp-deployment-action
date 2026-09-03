@@ -106,7 +106,7 @@ These are documented for transparency; they are NOT release blockers and there i
   |---|---|---|
   | ghcr.io (always) | `ghcr.io/airvzxf/ftp-deployment-action:<tag>` | `uses: airvzxf/ftp-deployment-action@v2` |
   | Docker Hub (opt-in) | `docker.io/airvzxf/ftp-deployment-action:<tag>` | `uses: docker://docker.io/airvzxf/ftp-deployment-action@v2` |
-  | AWS ECR Public (opt-in, OIDC) | `public.ecr.aws/airvzxf/ftp-deployment-action:<tag>` | `uses: docker://public.ecr.aws/airvzxf/ftp-deployment-action@v2` |
+  | AWS ECR Public (opt-in, OIDC) | `public.ecr.aws/m2z1h0m9/ftp-deployment-action:<tag>` | `uses: docker://public.ecr.aws/m2z1h0m9/ftp-deployment-action@v2` |
 
   The three registries receive the **same image bytes** from a
   single `docker buildx build` (identical OCI manifest digest),
