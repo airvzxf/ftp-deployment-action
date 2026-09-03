@@ -491,6 +491,14 @@ assert_absent() {
 #
 #   FTP user/password are unique per scenario (PID + random) so two
 #   parallel runs cannot step on each other on the same FTP server.
+#   The credentials are validated against [A-Za-z0-9_] before being
+#   exported, because start_ftps_server interpolates them into a -c
+#   payload that runs inside the FTPS container with --network host
+#   (and FTPS scenarios bind-mount the host /home/vsftpd tree).
+#   Pure-alphanumeric values keep the payload safe; if a future
+#   refactor changes the credential shape to include special chars,
+#   this guard surfaces it loudly instead of letting the payload
+#   silently break or expose a shell-injection vector.
 # ------------------------------------------------------------------------------
 scenario_setup() {
   _ss_name=$1
@@ -503,6 +511,18 @@ scenario_setup() {
   FTP_PASSWORD="p$$_$(rand_suffix)"
   FTP_DATA_DIR=$(mktemp -d -t ftpint.XXXXXX) || log_fail "mktemp failed"
   chmod 0777 "${FTP_DATA_DIR}"
+
+  # Defensive validation: start_ftps_server (and the rest of the
+  # harness) embed these values in container -c payloads and in
+  # scp / URL strings. Refuse anything that would change a single-
+  # quoted literal into a multi-token expansion.
+  case "${FTP_USER}" in
+    *[!A-Za-z0-9_]*) log_fail "FTP_USER contains non-[A-Za-z0-9_] chars: ${FTP_USER}" ;;
+  esac
+  case "${FTP_PASSWORD}" in
+    *[!A-Za-z0-9_]*) log_fail "FTP_PASSWORD contains non-[A-Za-z0-9_] chars" ;;
+  esac
+
   export FTP_USER FTP_PASSWORD FTP_DATA_DIR
 
   trap stop_ftp_server EXIT
