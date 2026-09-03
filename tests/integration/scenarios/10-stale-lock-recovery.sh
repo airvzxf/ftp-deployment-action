@@ -100,12 +100,17 @@ chmod 0777 "${_lockdir}"
 assert_present "${_ftp_home}" ".lftp-deployment.lock"
 assert_present "${_ftp_home}" "${_stale_sentinel}"
 
-# Build the env-file. acquire_lock_with_recovery calls lftp with
-# $INPUT_SERVER as-is and predates the v2.11.0 URL rewrite; embed
-# the user in the URL so lftp looks up the password from .netrc.
+# Build the env-file. INPUT_SERVER uses the bare-host form
+# `ftp://127.0.0.1:${FTP_CONTROL_PORT}` (no embedded user). The
+# v2.11.x helper lib.sh::rewrite_lftp_url embeds INPUT_USER into
+# the URL inside both acquire_lock_with_recovery and
+# release_lock_safely (the EXIT trap's release path), so the bare-
+# host URL is enough to make lftp's .netrc lookup fire. This is the
+# production code path; closing #132 ensures the stale-recovery
+# branch's LIST/DELE/RMD/MKD lftp calls do not silently fall back
+# to USER anonymous against a bare-host URL.
 _env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env failed"
 build_action_env_file "${_env}" "${IMAGE}" /data / \
-  "INPUT_SERVER=ftp://${FTP_USER}@127.0.0.1:${FTP_CONTROL_PORT}" \
   "INPUT_CONCURRENCY_LOCK=true" \
   "INPUT_CONCURRENCY_LOCK_TIMEOUT=900" \
   "INPUT_CONCURRENCY_LOCK_POLL_INTERVAL=1" \
