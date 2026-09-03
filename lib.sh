@@ -876,8 +876,22 @@ acquire_lock_with_recovery() {
       timeout 30s lftp "${_alwr_server_eff}" \
         -e "${_alwr_preamble} put ${_alwr_sentinel_body} -o ${_alwr_sentinel}; quit;" \
         >/dev/null 2>&1
+      _alwr_put_rc=$?
       set -e
       rm -f "${_alwr_sentinel_body}"
+      # v2.11.2: surface a PUT failure. Pre-fix, the exit code was
+      # discarded — a MKD success + PUT failure returned 0 with
+      # ACQUIRED_LOCK_SENTINEL set but no file on the FTP server.
+      # The next runner then took over the lock while the original
+      # was mid-mirror; both then mirrored concurrently, defeating
+      # the serialization concurrency_lock exists to provide. Treat
+      # the PUT failure the same as a MKD failure (continue to
+      # stale-recovery / retry); this can re-enter the loop and
+      # either win the MKD against the lock-holder's stale sentinel
+      # or back off and wait.
+      if [ "${_alwr_put_rc}" -ne 0 ]; then
+        continue
+      fi
 
       # Publish sentinel name for release_lock_safely.
       ACQUIRED_LOCK_SENTINEL=${_alwr_sentinel}

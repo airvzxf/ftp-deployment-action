@@ -198,16 +198,31 @@ write_netrc "${NETRC}" "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
 # also release the server-side concurrency lock (best-effort).
 # Order matters: the lock release must run BEFORE the .netrc is
 # removed, because the release invokes lftp which needs the .netrc
-# to authenticate. run_lftp_lock_release is a no-op when the lock
-# is disabled, so installing the extended trap unconditionally is
-# safe and keeps the no-lock code path bit-for-bit identical to
-# v2.7.0.
+# to authenticate.
 #
 # v2.9.0: pass the sentinel name (if any was acquired during this
 # run) so the trap can also DELE the sentinel file. We use the
 # empty string as the default — run_lftp_lock_release falls back
 # to $ACQUIRED_LOCK_SENTINEL, which is set by acquire_lock_with_recovery.
-trap 'run_lftp_lock_release "${INPUT_SERVER}" "${NETRC}" "${INPUT_CONCURRENCY_LOCK_PATH}" "${ACQUIRED_LOCK_SENTINEL:-}" "${INPUT_USER}"; rm -f "${NETRC}"' EXIT
+#
+# v2.11.2: only register the lock-release portion of the EXIT trap
+# when concurrency_lock=true. Without this guard, the trap
+# unconditionally issues an lftp `quote RMD .lftp-deployment.lock`
+# against the FTP server on EVERY action run, even when no lock was
+# acquired in this run. Pre-fix this caused: (1) a spurious ~30s
+# lftp round-trip on every default-mode action run (the trap fires
+# before write_netrc removes .netrc, so the lftp call authenticates
+# then waits for network timeouts on servers where the lock dir
+# never existed), and (2) a real race where a parallel
+# `concurrency_lock=true` runner sees its in-use lock RMDed by the
+# EXIT trap of a default-mode runner sharing the same FTP server
+# and lock path. See tests/integration/scenarios/09-concurrency-
+# lock-e2e.sh which now also covers the default-mode trap shape.
+if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
+  trap 'run_lftp_lock_release "${INPUT_SERVER}" "${NETRC}" "${INPUT_CONCURRENCY_LOCK_PATH}" "${ACQUIRED_LOCK_SENTINEL:-}" "${INPUT_USER}"; rm -f "${NETRC}"' EXIT
+else
+  trap 'rm -f "${NETRC}"' EXIT
+fi
 
 # ------------------------------------------------------------------------------
 # v2.9.0: acquire the server-side concurrency lock BEFORE the
