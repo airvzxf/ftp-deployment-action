@@ -120,6 +120,10 @@ build_action_env_file "${_env}" "${IMAGE}" /data / \
   "INPUT_DELETE=true" \
   "INPUT_EXCLUDE_DELETE=*.bak"
 
+# DEBUG: dump the env-file to confirm what we hand to docker.
+log_info "DEBUG env-file contents ($(wc -l < "${_env}" 2>/dev/null) lines):"
+sed 's/^/    /' "${_env}"
+
 # --- Step 4: invoke the action image ----------------------------------------
 #
 # run_action bind-mounts FIXTURES_DIR at /data:ro, shares the host
