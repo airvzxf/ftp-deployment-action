@@ -59,9 +59,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Pin to a specific tag because the upstream has no floating "v3" ref
       # (only v3.0.0, v3.1.0, ...). Using `@v3` makes the resolver fail.
+      # hadolint/hadolint-action takes a single `dockerfile:` input
+      # (no array support), so each Dockerfile gets its own step. Both
+      # steps fail with `error`-threshold rules; the integration job
+      # only kicks off once both succeed.
       - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
           dockerfile: Dockerfile
+          failure-threshold: error
+      - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: tests/integration/Dockerfile.test-server
           # DL3018 (pin apk versions) is a real concern but fixing it is
           # out of scope for this PR — it will be addressed alongside
           # the image digest pinning work. Treat as info for now.

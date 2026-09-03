@@ -62,6 +62,24 @@ if ! ${RUNTIME} image inspect "${IMAGE}" >/dev/null 2>&1; then
   exit 2
 fi
 
+# Same fail-fast for the pre-baked FTPS test server image (closes
+# #135). Scenarios 03 / 04 will surface a confusing
+# `vsftpd: not found` (or, post-pre-bake, a wait_for_port timeout)
+# if this image is missing; checking up-front makes the failure
+# mode obvious. Mirror the IMAGE block above: re-default from
+# TEST_SERVER_IMAGE for callers that set the make variable but not
+# the orchestrator's FTPS-specific name.
+: "${FTP_TEST_SERVER_IMAGE:=${TEST_SERVER_IMAGE:-ftp-deployment-action-test-server:ci-integration}}"
+export FTP_TEST_SERVER_IMAGE
+
+if ! ${RUNTIME} image inspect "${FTP_TEST_SERVER_IMAGE}" >/dev/null 2>&1; then
+  printf 'FAIL: TEST_SERVER_IMAGE=%s not found in %s. Build it first:\n' \
+    "${FTP_TEST_SERVER_IMAGE}" "${RUNTIME}" >&2
+  printf '  make build-test-server-image TEST_SERVER_IMAGE=%s\n' \
+    "${FTP_TEST_SERVER_IMAGE}" >&2
+  exit 2
+fi
+
 # Confirm the FTP server image is pullable. We try a one-shot
 # `docker/podman pull` so the developer gets a clear error if the
 # registry is unreachable, instead of a downstream failure when
@@ -109,6 +127,7 @@ _failed_names=""
 printf '%s\n' "=== ftp-deployment-action integration tests ==="
 printf '  IMAGE=%s\n' "${IMAGE}"
 printf '  FTP_SERVER_IMAGE=%s\n' "${FTP_SERVER_IMAGE}"
+printf '  FTP_TEST_SERVER_IMAGE=%s\n' "${FTP_TEST_SERVER_IMAGE}"
 printf '  RUNTIME=%s\n' "${RUNTIME}"
 printf '  scenarios:'
 for _s in ${_scenarios}; do

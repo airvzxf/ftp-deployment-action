@@ -14,7 +14,7 @@ tests/integration/
 ├── README.md                     # this file
 ├── run-integration-tests.sh      # orchestrator (runs every scenario)
 ├── Dockerfile.test-server        # pre-baked FTPS test server image
-│                                 #   (vsftpd + openssl on alpine 3.23.3);
+│                                 #   (vsftpd on alpine 3.24, digest-pinned);
 │                                 #   built by `make build-test-server-image`
 ├── lib/
 │   └── common.sh                 # shared helpers (runtime, FTP lifecycle,
@@ -71,7 +71,7 @@ defined in #117's acceptance criteria). The CI runner is
 
 The FTPS test server is built ahead of time from
 `tests/integration/Dockerfile.test-server` rather than assembled
-per-scenario on a bare `alpine:3.23.3` image. The previous shape
+per-scenario on a bare alpine image. The previous shape
 (`docker run -d alpine:3.23.3 -c 'apk add --no-cache vsftpd openssl
 && ...'`) ran the `apk add` on every scenario start, which meant
 the apk package index was downloaded from the network on each
@@ -82,11 +82,14 @@ run. In CI that occasionally:
   `--rm` container was garbage-collected and surfaced as "No
   such container" in the harness.
 
-The pre-baked image (alpine 3.23.3 base + `vsftpd openssl` +
-pre-created `/var/log/vsftpd`, `/etc/pam.d/vsftpd_virtual`,
-`/home/vsftpd`) eliminates that race: `docker run` of an
-already-pulled image is a sub-second operation and never depends
-on the network.
+The pre-baked image (alpine 3.24 base, digest-pinned to the same
+value the action Dockerfile uses, with `vsftpd` only — the
+per-run self-signed cert is generated on the host via
+`openssl req`, so the server image does not need the openssl CLI)
+plus the pre-created `/var/log/vsftpd`,
+`/etc/pam.d/vsftpd_virtual`, `/home/vsftpd` directories
+eliminates that race: `docker run` of an already-pulled image is
+a sub-second operation and never depends on the network.
 
 `start_ftps_server` (in `tests/integration/lib/self-signed-cert.sh`)
 only does the per-scenario work: copies the bind-mounted

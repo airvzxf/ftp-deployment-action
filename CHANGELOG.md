@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- **Pre-baked FTPS test server image (closes #135)** — `tests/integration/Dockerfile.test-server` + `make build-test-server-image` + CI integration step. Scenarios 03 (explicit) and 04 (implicit) no longer pay the per-run `apk add --no-cache` cost, eliminating the apk-index download race that intermittently failed CI (closes #135). Run `make build-test-server-image TEST_SERVER_IMAGE=...` before `make integration`.
+
 ## [2.11.0] - 2026-09-02
 
 Real FTP integration test harness (PR #123, closes #117); FIXED #111 (`HOME` inheritance on self-hosted runners, PR #126, closes #119); lftp netrc quirk (PR #127, closes #124); documentation update (PR #128, closes #122); concurrency_lock end-to-end + lib.sh MKD/LIST fix (PR #129, closes #121); FTPS explicit + implicit coverage (PR #130, closes #120).

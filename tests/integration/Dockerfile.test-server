@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.4
+#
 # tests/integration/Dockerfile.test-server
 #
 # Pre-baked FTPS test server image for the scenarios in
@@ -10,32 +12,45 @@
 #
 # Why this image exists (closes #135):
 #   The original start_ftps_server booted `alpine:3.23.3 -c 'apk add
-#   --no-cache vsftpd openssl && ...'` on every scenario run. The
-#   `apk add` step downloads the alpine package index from the
-#   network, which made scenario 03 and 04 flaky in CI
-#   (ubuntu-latest, GitHub Actions):
+#   --no-cache vsftpd && ...'` on every scenario run. The `apk add`
+#   step downloads the alpine package index from the network, which
+#   made scenario 03 and 04 flaky in CI (ubuntu-latest, GitHub
+#   Actions):
 #     * apk index download took 1-15s and occasionally exceeded the
 #       wait_for_port deadline (20s).
 #     * on a transient network blip, apk failed outright; the
 #       container then died and was garbage-collected by --rm,
 #       surfacing as "No such container" in the harness.
 #   Pre-baking vsftpd into a dedicated image eliminates the per-run
-#   network dependency: the scenario only does
-#   `docker run` against an already-pulled image, which takes <1s to
-#   start and never races the apk index.
+#   network dependency: the scenario only does `docker run` against
+#   an already-pulled image, which takes <1s to start and never races
+#   the apk index.
 #
-# Base image: alpine:3.23.3 (the same tag start_ftps_server used to
-# pin inline). Kept on the 3.23 line for byte-for-byte parity with
-# the original setup; bump in lockstep with the action Dockerfile if
-# the alpine base ever moves.
+# Base image: alpine:3.24, digest-pinned to the same value the action
+# Dockerfile uses (Dockerfile:1). Aligned to 3.24 (not the 3.23 the
+# inline `apk add` originally targeted) because:
+#   * the action image is already on 3.24; building both off the
+#     same digest means CI rebuilds only one base and the local
+#     dev / CI parity check is trivial (same digest == same
+#     contents, by definition).
+#   * keeping the test server on 3.23 would have made any future
+#     3.24-vs-3.23 libssl/glibc-compat diff impossible to debug
+#     (which side diverged?). Pin both to 3.24 and the question
+#     goes away.
+# Bump this digest in lockstep with Dockerfile:1.
 #
-# Packages installed at build time (resolves hadolint DL3018 — same
-# pattern the action Dockerfile uses):
+# Packages installed at build time (hadolint DL3018 — versions
+# pinned, same pattern the action Dockerfile uses):
 #   * vsftpd   — the FTP/FTPS daemon the scenarios exercise.
-#   * openssl  — used by the action image to generate the per-run
-#                self-signed cert; the server image itself only
-#                needs it for consistency with the original
-#                `apk add vsftpd openssl` line.
+#                vsftpd pulls libssl as a package dep, which is
+#                all the FTPS server image needs at runtime; we
+#                intentionally do NOT install the openssl CLI
+#                because the per-run self-signed cert is generated
+#                on the host (in tests/integration/lib/self-signed-
+#                cert.sh via `openssl req`), never inside the
+#                container. Keeping the server image openssl-free
+#                drops ~5 MB and one piece of unused attack
+#                surface.
 #
 # Filesystem prep (moved out of the per-scenario -c payload into
 # the image, because they are CONSTANT across every scenario run):
@@ -69,12 +84,19 @@
 # bind directly on the unprivileged host ports 2121 / 2122, which
 # rootless podman / docker-rootless setups can handle. No
 # network-related setup is required here.
+#
+# Why # syntax=docker/dockerfile:1.4: the RUN step uses a heredoc
+# (`cat > /etc/pam.d/vsftpd_virtual <<EOF`) which requires BuildKit's
+# Dockerfile frontend (>= 1.4). Without the directive, classic
+# `docker build` (no BuildKit) parses this file with a confusing
+# error and a successful `docker buildx build` still emits a
+# deprecation notice. Pinning the frontend here makes the parser
+# unambiguous on every docker version the repo supports.
 
-FROM alpine:3.23.3
+FROM alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
 RUN apk add --no-cache \
-      vsftpd \
-      openssl \
+      vsftpd=3.0.5-r3 \
  && mkdir -p /var/log/vsftpd /etc/pam.d /home/vsftpd \
  && cat > /etc/pam.d/vsftpd_virtual <<'EOF'
 auth required pam_unix.so

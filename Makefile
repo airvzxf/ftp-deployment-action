@@ -27,8 +27,8 @@ TEST_SERVER_IMAGE ?= ftp-deployment-action-test-server:ci-integration
 
 # ----------------------------------------------------------------------------
 # Lint: shellcheck on all .sh files, actionlint on action.yml, hadolint
-# on the Dockerfile. actionlint is installed from upstream's release tarball
-# to avoid pulling the full Go toolchain.
+# on every Dockerfile in the repo. actionlint is installed from
+# upstream's release tarball to avoid pulling the full Go toolchain.
 # ----------------------------------------------------------------------------
 .PHONY: lint
 lint: shellcheck actionlint hadolint
@@ -58,7 +58,11 @@ hadolint:
 	@command -v hadolint >/dev/null 2>&1 || { \
 		echo "hadolint not found; install with: brew install hadolint / download from hadolint/hadolint releases"; \
 		exit 1; }
+	# Both the action Dockerfile and the pre-baked FTPS test server
+	# Dockerfile (closes #135). The previous target only covered
+	# `Dockerfile`, which left Dockerfile.test-server unlinted in CI.
 	hadolint --failure-threshold error Dockerfile
+	hadolint --failure-threshold error tests/integration/Dockerfile.test-server
 
 # ----------------------------------------------------------------------------
 # Test: the contract test (action.yml <-> entrypoint.sh/lib.sh consistency)

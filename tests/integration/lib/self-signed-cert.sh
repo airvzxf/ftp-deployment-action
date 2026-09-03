@@ -28,13 +28,13 @@
 #     well within validity for any single CI job.
 #
 #   start_ftps_server FTP_USER FTP_PASS DATA_DIR CERT_FILE MODE
-#     Boot a pre-baked vsftpd+openssl image with SSL/TLS enabled.
-#     MODE is either "explicit" (AUTH TLS upgrade on the control
-#     channel) or "implicit" (TLS from byte 0 — the ftps:// protocol
-#     shape). For "explicit" the host port is $FTP_CONTROL_PORT
-#     (2121, the same value all other scenarios use); for "implicit"
-#     the host port is 2122 (unprivileged, no privileged-port
-#     workaround needed on rootless runtimes).
+#     Boot a pre-baked vsftpd image with SSL/TLS enabled. MODE is
+#     either "explicit" (AUTH TLS upgrade on the control channel)
+#     or "implicit" (TLS from byte 0 — the ftps:// protocol shape).
+#     For "explicit" the host port is $FTP_CONTROL_PORT (2121, the
+#     same value all other scenarios use); for "implicit" the host
+#     port is 2122 (unprivileged, no privileged-port workaround
+#     needed on rootless runtimes).
 #
 #     Why a pre-baked image (vs the original inline `apk add`):
 #     the original start_ftps_server booted `alpine:3.23.3 -c 'apk
@@ -48,13 +48,15 @@
 #         surfaced as "No such container" in the harness.
 #     The pre-baked image (tests/integration/Dockerfile.test-server,
 #     built by `make build-test-server-image`) eliminates the
-#     per-run network dependency: vsftpd and openssl are already
-#     installed, /var/log/vsftpd / /etc/pam.d/vsftpd_virtual /
-#     /home/vsftpd are already created. The scenario only does the
-#     user-specific work (adduser, the overlay vsftpd.conf, the
-#     alpine-vsftpd TLS variable rename, exec vsftpd).
+#     per-run network dependency: vsftpd is already installed,
+#     /var/log/vsftpd / /etc/pam.d/vsftpd_virtual / /home/vsftpd
+#     are already created. The scenario only does the user-specific
+#     work (adduser, the overlay vsftpd.conf, the alpine-vsftpd TLS
+#     variable rename, exec vsftpd). Note: the openssl CLI used to
+#     generate the per-run self-signed cert lives on the HOST (see
+#     generate_self_signed_cert), not in the server image.
 #
-#     Why alpine:3.23.3-based instead of docker.io/fauria/vsftpd
+#     Why alpine-based instead of docker.io/fauria/vsftpd
 #     (the image the plain-FTP scenarios use): fauria's
 #     /usr/sbin/run-vsftpd.sh wrapper has docker-in-docker quirks
 #     in CI (ubuntu-latest + GitHub Actions) that surface as vsftpd
@@ -78,7 +80,7 @@
 # Pre-baked FTPS test server image. Built by `make
 # build-test-server-image` from tests/integration/Dockerfile.test-
 # server; CI / the Makefile pass the matching tag. The image has
-# vsftpd + openssl pre-installed and /var/log/vsftpd, /etc/pam.d/
+# vsftpd pre-installed and /var/log/vsftpd, /etc/pam.d/
 # vsftpd_virtual, /home/vsftpd pre-created so the per-scenario
 # `docker run` does not need network access to an apk index.
 # Overridable for developers who build the image under a different
@@ -257,16 +259,15 @@ _write_ftps_vsftpd_conf() {
 #   on rootless podman / docker-rootless setups).
 #
 #   The pre-baked image (closes #135): tests/integration/Dockerfile.
-#   test-server installs vsftpd + openssl and pre-creates
-#   /var/log/vsftpd, /etc/pam.d/vsftpd_virtual (delegating to
-#   pam_unix / /etc/shadow), and /home/vsftpd. The previous
-#   inline-`apk add` shape ran a network-dependent package install
-#   on every scenario start, which made the 20s wait_for_port
-#   race flaky in CI. The pre-baked image eliminates that race:
-#   `docker run` of an already-pulled image takes <1s and never
-#   races the apk index.
+#   test-server installs vsftpd and pre-creates /var/log/vsftpd,
+#   /etc/pam.d/vsftpd_virtual (delegating to pam_unix /
+#   /etc/shadow), and /home/vsftpd. The previous inline-`apk add`
+#   shape ran a network-dependent package install on every scenario
+#   start, which made the 20s wait_for_port race flaky in CI. The
+#   pre-baked image eliminates that race: `docker run` of an
+#   already-pulled image takes <1s and never races the apk index.
 #
-#   Why alpine:3.23.3-based (vs fauria/vsftpd): fauria's
+#   Why alpine-based (vs fauria/vsftpd): fauria's
 #   /usr/sbin/run-vsftpd.sh wrapper has docker-in-docker quirks
 #   in CI (ubuntu-latest) where vsftpd dies within seconds of
 #   `docker run -d`. Podman rootless (local dev) does not
@@ -274,7 +275,9 @@ _write_ftps_vsftpd_conf() {
 #   scenarios actually ran in CI (#120, PR #130). A plain alpine
 #   base avoids the wrapper entirely and runs identically on podman
 #   local and docker CI. The pre-baked Dockerfile keeps us off the
-#   fauria wrapper for the same reason.
+#   fauria wrapper for the same reason. The base is digest-pinned
+#   alpine 3.24, the same digest the action Dockerfile uses; bump
+#   them in lockstep.
 #
 #   Why --network host: with it, vsftpd inside the container binds
 #   directly on the host ports we want to expose (2121 / 2122),
@@ -382,7 +385,7 @@ start_ftps_server() {
   # and sed-rewrite the two lines in-place.
   #
   # Why the image is pre-baked (closes #135): the previous version
-  # of this payload started with `apk add --no-cache vsftpd openssl`,
+  # of this payload started with `apk add --no-cache vsftpd`,
   # which downloaded the alpine package index from the network on
   # every scenario run. That step occasionally took >20s in CI and
   # even failed outright on transient network blips, surfacing as
@@ -390,7 +393,17 @@ start_ftps_server() {
   # moves the apk install + the /var/log/vsftpd, /etc/pam.d/
   # vsftpd_virtual, /home/vsftpd prep into the image so this
   # payload is purely per-scenario work (no network).
-  if ! ${RUNTIME} run -d --rm \
+  #
+  # Why no `--rm`: when the FTPS container died during boot (the
+  # root cause of the #135 flake), `--rm` garbage-collected it
+  # before `docker logs` could read the boot trace, surfacing as
+  # "No such container" in the harness and making the failure
+  # impossible to diagnose. The EXIT trap in scenario_setup
+  # installs stop_ftp_server, which already runs `rm -f` on
+  # ${FTP_CONTAINER_NAME} (via docker/podman rm -f), so removing
+  # `--rm` here buys us post-mortem diagnostics at no cleanup
+  # cost.
+  if ! ${RUNTIME} run -d \
       --name "${_sfs_name}" \
       --network host \
       -p "${_sfs_host_port}:${_sfs_container_port}" \
