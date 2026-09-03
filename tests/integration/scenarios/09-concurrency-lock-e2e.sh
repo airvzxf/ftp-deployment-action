@@ -72,17 +72,16 @@ start_ftp_server "${FTP_USER}" "${FTP_PASSWORD}" "${FTP_DATA_DIR}"
 
 _ftp_home="${FTP_DATA_DIR}/${FTP_USER}"
 
-# Build env-file. We override INPUT_SERVER with an embedded user
-# for the same reason scenarios 08 / 10 do: acquire_lock_with_recovery
-# calls lftp with $INPUT_SERVER as-is and does not apply the v2.11.0
-# URL-rewrite that run_lftp_once uses for the mirror. Embedding
-# the user here makes lftp look up the password from the action's
-# /home/lftp/.netrc (written by write_netrc from INPUT_PASSWORD),
-# which is the documented "user in URL, password from .netrc"
-# pattern.
+# Build env-file. INPUT_SERVER uses the bare-host form
+# `ftp://127.0.0.1:${FTP_CONTROL_PORT}` (no embedded user). The
+# v2.11.x helper lib.sh::rewrite_lftp_url embeds INPUT_USER into the
+# URL inside both acquire_lock_with_recovery and release_lock_safely
+# (the EXIT trap's release path), so the bare-host URL is enough to
+# make lftp's .netrc lookup fire. This is the production code path;
+# closing #132 ensures the lock acquire/release does not silently
+# fall back to USER anonymous against a bare-host URL.
 _env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env failed"
 build_action_env_file "${_env}" "${IMAGE}" /data / \
-  "INPUT_SERVER=ftp://${FTP_USER}@127.0.0.1:${FTP_CONTROL_PORT}" \
   "INPUT_CONCURRENCY_LOCK=true" \
   "INPUT_CONCURRENCY_LOCK_TIMEOUT=20" \
   "INPUT_CONCURRENCY_LOCK_POLL_INTERVAL=1" \

@@ -29,6 +29,7 @@ Pre-baked FTPS test server image (PR #139, closes #135): scenarios 03 (explicit)
 
 ### Fixed
 
+- **#132** — `lib.sh::acquire_lock_with_recovery` (and the EXIT trap's `release_lock_safely` path) called `lftp "${INPUT_SERVER}"` directly without applying the v2.11.0 URL rewrite that `run_lftp_once` uses for the mirror, so against the production-default bare-host `INPUT_SERVER=ftp://host:port` lftp 4.9.3 fell back to `USER anonymous`, the FTP server rejected with 530, and the lock-acquire loop spun until `INPUT_CONCURRENCY_LOCK_TIMEOUT`. The rewrite is now extracted into a shared `rewrite_lftp_url SERVER USER` helper used by `run_lftp_once`, `acquire_lock_with_recovery`, and `release_lock_safely` so all three lftp invocations share the same URL semantics and cannot drift again. Scenarios `09-concurrency-lock-e2e.sh` and `10-stale-lock-recovery.sh` drop their `INPUT_SERVER=ftp://user@host:port` workaround; new scenario `12-acquire-vs-bare-host-url.sh` exercises the production code path end-to-end.
 - **Pre-baked FTPS test server image (closes #135)** — `tests/integration/Dockerfile.test-server` + `make build-test-server-image` + CI integration step. Scenarios 03 (explicit) and 04 (implicit) no longer pay the per-run `apk add --no-cache` cost, eliminating the apk-index download race that intermittently failed CI (closes #135). Run `make build-test-server-image TEST_SERVER_IMAGE=...` before `make integration`.
 
 ## [2.11.0] - 2026-09-02

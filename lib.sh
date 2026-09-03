@@ -664,7 +664,45 @@ compute_backoff_seconds() {
 }
 
 # ------------------------------------------------------------------------------
-# run_lftp_once SERVER FTP_SETTINGS MIRROR LOCAL REMOTE LOG_FILE TIMEOUT KILL_AFTER LOCK_ACQUIRE LOCK_RELEASE
+# rewrite_lftp_url SERVER USER
+#   Echo SERVER with USER embedded if SERVER has a scheme but no embedded
+#   user. v2.11.0 fix for the lftp 4.9.3 .netrc quirk (closes #124):
+#   lftp only consults ~/.netrc when the URL carries an explicit user, so
+#   a bare `ftp://host:port` falls back to `USER anonymous` and the FTP
+#   server rejects with 530. Used by run_lftp_once (the mirror),
+#   acquire_lock_with_recovery (the server-side concurrency lock
+#   acquire path), and release_lock_safely (the EXIT trap lock release
+#   path) so all three lftp invocations share the same URL semantics
+#   and cannot drift again. Closes #132.
+#
+#   SERVER: the lftp URL (e.g. ftp://host:21, ftps://[::1]:990, host:21).
+#   USER:   the user to embed. Empty USER is a no-op (URL echoed
+#           unchanged — preserves the pre-v2.11.0 "no rewrite" path
+#           for callers that pass an empty user).
+#
+#   Contract:
+#     ftp://host:21           + user -> ftp://user@host:21
+#     ftp://user@host:21      + user -> ftp://user@host:21    (no-op)
+#     ftp://user:pw@host:21   + user -> ftp://user:pw@host:21 (no-op; B-03)
+#     host:21                 + user -> host:21                (no scheme)
+#     ftp://host:21           + ""   -> ftp://host:21          (no-op)
+# ------------------------------------------------------------------------------
+rewrite_lftp_url() {
+  _rlu_server=$1
+  _rlu_user=$2
+  if [ -z "${_rlu_user}" ]; then
+    printf '%s\n' "${_rlu_server}"
+    return 0
+  fi
+  case "${_rlu_server}" in
+    *://*@*) printf '%s\n' "${_rlu_server}" ;;
+    *://*)   printf '%s\n' "${_rlu_server%%://*}://${_rlu_user}@${_rlu_server#*://}" ;;
+    *)       printf '%s\n' "${_rlu_server}" ;;
+  esac
+}
+
+# ------------------------------------------------------------------------------
+# run_lftp_once SERVER FTP_SETTINGS MIRROR LOCAL REMOTE LOG_FILE TIMEOUT KILL_AFTER LOCK_ACQUIRE LOCK_RELEASE USER
 #   Run a single lftp invocation with the given parameters, capturing
 #   combined stdout+stderr to LOG_FILE. The function returns lftp's
 #   exit code via the function-return convention. The caller is
@@ -703,22 +741,20 @@ run_lftp_once() {
                    # "scheme://user@host:port" so lftp's lookup against
                    # ~/.netrc (B-03) actually triggers. See
                    # tests/integration/scenarios/08-action-driven-upload.sh
-                   # and #124 (closes lftp-by-design workaround).
+                   # and #124 (closes lftp-by-design workaround). The
+                   # rewrite itself lives in rewrite_lftp_url (shared
+                   # with acquire_lock_with_recovery / release_lock_safely
+                   # to close the asymmetry tracked in #132).
 
   # v2.11.0: rewrite the URL when it has a scheme but no embedded user.
   # Without this, lftp 4.9.3 falls back to USER anonymous for
   # `ftp://host:port` URLs and never consults ~/.netrc — see #124 and
   # the upstream issue lavv17/lftp#372 (where lavv17 closed the
   # equivalent report as by-design). When the URL already has a user
-  # ("scheme://user@host:..."), leave it as-is.
-  _rlo_server_eff=${_rlo_server}
-  if [ -n "${_rlo_user}" ]; then
-    case ${_rlo_server_eff} in
-      *://*@*) ;;                                                    # user already present; no-op
-      *://*)   _rlo_server_eff="${_rlo_server_eff%%://*}://${_rlo_user}@${_rlo_server_eff#*://}" ;;
-      *)       ;;                                                    # no scheme; lftp's open code already covers netrc lookup
-    esac
-  fi
+  # ("scheme://user@host:..."), leave it as-is. The rewrite is
+  # delegated to rewrite_lftp_url so all three lftp invocations share
+  # the same URL semantics (#132).
+  _rlo_server_eff=$(rewrite_lftp_url "${_rlo_server}" "${_rlo_user}")
 
   # B-03: no -u USER,PASS — lftp reads the password from ${NETRC}.
   # The user embedded in the URL above is what triggers lftp's
@@ -733,7 +769,7 @@ run_lftp_once() {
 }
 
 # ------------------------------------------------------------------------------
-# acquire_lock_with_recovery SERVER LOCK_PATH TIMEOUT_SECS POLL_SECS
+# acquire_lock_with_recovery SERVER LOCK_PATH TIMEOUT_SECS POLL_SECS USER
 #   Acquire the server-side concurrency lock at LOCK_PATH on SERVER,
 #   polling up to TIMEOUT_SECS (with POLL_SECS between attempts).
 #   On a successful acquire, write a sentinel file at the FTP root
@@ -757,6 +793,12 @@ run_lftp_once() {
 #   intermediate lftp calls may legitimately fail (timeout=0 fast
 #   path, transient network errors).
 #
+#   USER: optional. When non-empty AND the URL has no embedded user,
+#   it is embedded into the URL via rewrite_lftp_url so lftp's
+#   .netrc lookup fires (same v2.11.0 fix as run_lftp_once, closes
+#   #132). When USER is empty or the URL already carries a user,
+#   the URL is passed to lftp unchanged.
+#
 #   Reads: nothing. Reads $HOME for netrc discovery.
 #   Writes: ACQUIRED_LOCK_SENTINEL global (on success).
 # ------------------------------------------------------------------------------
@@ -765,6 +807,16 @@ acquire_lock_with_recovery() {
   _alwr_path=$2
   _alwr_timeout=$3
   _alwr_poll=$4
+  _alwr_user=$5
+
+  # v2.11.x (#132): rewrite the URL when it has a scheme but no
+  # embedded user. Without this, lftp 4.9.3 falls back to USER
+  # anonymous against a bare `ftp://host:port` INPUT_SERVER, the FTP
+  # server rejects with 530, and this loop spins until TIMEOUT. The
+  # rewrite is the same one run_lftp_once applies to the mirror
+  # path, delegated to the shared rewrite_lftp_url helper so the
+  # two cannot drift again.
+  _alwr_server_eff=$(rewrite_lftp_url "${_alwr_server}" "${_alwr_user}")
 
   # Compute iteration count. timeout=0 means "no waiting, fail
   # immediately if the lock is held" -> count=1.
@@ -803,7 +855,7 @@ acquire_lock_with_recovery() {
     # `set +e` because MKD on a held lock returns 550, which is
     # the common case (not an error).
     set +e
-    timeout 30s lftp "${_alwr_server}" \
+    timeout 30s lftp "${_alwr_server_eff}" \
       -e "${_alwr_preamble} mkdir ${_alwr_path}; quit;" \
       >/dev/null 2>&1
     _alwr_mkd_rc=$?
@@ -821,7 +873,7 @@ acquire_lock_with_recovery() {
         printf 'host=%s\n' "$(hostname 2>/dev/null || echo unknown)"
       } > "${_alwr_sentinel_body}"
       set +e
-      timeout 30s lftp "${_alwr_server}" \
+      timeout 30s lftp "${_alwr_server_eff}" \
         -e "${_alwr_preamble} put ${_alwr_sentinel_body} -o ${_alwr_sentinel}; quit;" \
         >/dev/null 2>&1
       set -e
@@ -843,7 +895,7 @@ acquire_lock_with_recovery() {
     # PORT or PASV first` and we get an empty listing. `cls` opens
     # PASV automatically and returns a usable directory listing.
     set +e
-    _alwr_listing=$(timeout 10s lftp "${_alwr_server}" \
+    _alwr_listing=$(timeout 10s lftp "${_alwr_server_eff}" \
       -e "${_alwr_preamble} cls -la .; quit;" \
       2>/dev/null)
     set -e
@@ -884,11 +936,11 @@ acquire_lock_with_recovery() {
       # only thing on the critical path.
       set +e
       if [ -n "${_alwr_stale_file}" ]; then
-        timeout 10s lftp "${_alwr_server}" \
+        timeout 10s lftp "${_alwr_server_eff}" \
           -e "${_alwr_preamble} quote DELE ${_alwr_stale_file}; quit;" \
           >/dev/null 2>&1
       fi
-      timeout 10s lftp "${_alwr_server}" \
+      timeout 10s lftp "${_alwr_server_eff}" \
         -e "${_alwr_preamble} quote RMD ${_alwr_path}; quit;" \
         >/dev/null 2>&1
       set -e
@@ -903,7 +955,7 @@ acquire_lock_with_recovery() {
 }
 
 # ------------------------------------------------------------------------------
-# release_lock_safely SERVER LOCK_PATH [SENTINEL]
+# release_lock_safely SERVER LOCK_PATH [SENTINEL] [USER]
 #   Best-effort release of the server-side concurrency lock:
 #   DELE the sentinel file (if SENTINEL is provided or
 #   $ACQUIRED_LOCK_SENTINEL is set), then RMD the lock dir. All
@@ -918,6 +970,12 @@ acquire_lock_with_recovery() {
 #             we skip the DELE (the lock dir alone is still RMDed
 #             — covers the case where the previous holder died
 #             before writing the sentinel).
+#   USER: (optional, v2.11.x / #132) — when non-empty AND SERVER has
+#         a scheme but no embedded user, USER is embedded into the
+#         URL via rewrite_lftp_url so lftp's .netrc lookup fires.
+#         Same v2.11.0 fix as acquire_lock_with_recovery, so the
+#         EXIT trap's release path does not silently fail against
+#         a bare-host `ftp://host:port` INPUT_SERVER.
 #
 #   Always returns 0.
 # ------------------------------------------------------------------------------
@@ -925,10 +983,16 @@ release_lock_safely() {
   _rls_server=$1
   _rls_path=$2
   _rls_sentinel=${3:-${ACQUIRED_LOCK_SENTINEL:-}}
+  _rls_user=${4:-}
 
   if [ -z "${_rls_path}" ]; then
     return 0
   fi
+
+  # v2.11.x (#132): same URL rewrite as acquire_lock_with_recovery
+  # so the EXIT trap's release lftp call can authenticate against
+  # a bare-host INPUT_SERVER.
+  _rls_server_eff=$(rewrite_lftp_url "${_rls_server}" "${_rls_user}")
 
   # Same tightened reconnect preamble as acquire_lock_with_recovery:
   # a misconfigured server should not stall the EXIT trap for
@@ -937,11 +1001,11 @@ release_lock_safely() {
 
   set +e
   if [ -n "${_rls_sentinel}" ]; then
-    timeout 30s lftp "${_rls_server}" \
+    timeout 30s lftp "${_rls_server_eff}" \
       -e "${_rls_preamble} quote DELE ${_rls_sentinel}; quote RMD ${_rls_path}; quit;" \
       >/dev/null 2>&1
   else
-    timeout 30s lftp "${_rls_server}" \
+    timeout 30s lftp "${_rls_server_eff}" \
       -e "${_rls_preamble} quote RMD ${_rls_path}; quit;" \
       >/dev/null 2>&1
   fi
@@ -950,7 +1014,7 @@ release_lock_safely() {
 }
 
 # ------------------------------------------------------------------------------
-# run_lftp_lock_release SERVER NETRC_PATH LOCK_PATH [SENTINEL]
+# run_lftp_lock_release SERVER NETRC_PATH LOCK_PATH [SENTINEL] [USER]
 #   Backward-compatibility shim. Used by the EXIT trap in
 #   entrypoint.sh to release the server-side concurrency lock if
 #   the main pipeline was killed before reaching the explicit
@@ -959,7 +1023,8 @@ release_lock_safely() {
 #   When the lock is disabled (LOCK_PATH empty) or the netrc file
 #   is missing (the EXIT trap may run after the netrc was already
 #   removed), this function is a no-op. Otherwise it delegates to
-#   release_lock_safely with the optional SENTINEL argument.
+#   release_lock_safely with the optional SENTINEL and USER
+#   arguments.
 #
 #   Failures are silently swallowed because at this point the
 #   script is already on the way out; we do not want the cleanup
@@ -970,6 +1035,7 @@ run_lftp_lock_release() {
   _rlr_netrc=$2
   _rlr_lock_path=$3
   _rlr_sentinel=${4:-}
+  _rlr_user=${5:-}
 
   if [ -z "${_rlr_lock_path}" ]; then
     return 0
@@ -978,7 +1044,7 @@ run_lftp_lock_release() {
     return 0
   fi
 
-  release_lock_safely "${_rlr_server}" "${_rlr_lock_path}" "${_rlr_sentinel}"
+  release_lock_safely "${_rlr_server}" "${_rlr_lock_path}" "${_rlr_sentinel}" "${_rlr_user}"
 }
 
 # ------------------------------------------------------------------------------

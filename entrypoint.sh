@@ -207,7 +207,7 @@ write_netrc "${NETRC}" "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
 # run) so the trap can also DELE the sentinel file. We use the
 # empty string as the default — run_lftp_lock_release falls back
 # to $ACQUIRED_LOCK_SENTINEL, which is set by acquire_lock_with_recovery.
-trap 'run_lftp_lock_release "${INPUT_SERVER}" "${NETRC}" "${INPUT_CONCURRENCY_LOCK_PATH}" "${ACQUIRED_LOCK_SENTINEL:-}"; rm -f "${NETRC}"' EXIT
+trap 'run_lftp_lock_release "${INPUT_SERVER}" "${NETRC}" "${INPUT_CONCURRENCY_LOCK_PATH}" "${ACQUIRED_LOCK_SENTINEL:-}" "${INPUT_USER}"; rm -f "${NETRC}"' EXIT
 
 # ------------------------------------------------------------------------------
 # v2.9.0: acquire the server-side concurrency lock BEFORE the
@@ -232,7 +232,8 @@ if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
        "${INPUT_SERVER}" \
        "${INPUT_CONCURRENCY_LOCK_PATH}" \
        "${INPUT_CONCURRENCY_LOCK_TIMEOUT}" \
-       "${INPUT_CONCURRENCY_LOCK_POLL_INTERVAL}"; then
+       "${INPUT_CONCURRENCY_LOCK_POLL_INTERVAL}" \
+       "${INPUT_USER}"; then
     printf '::endgroup::\n'
     printf 'ERROR: could not acquire concurrency lock at %s within %s seconds\n' \
       "${INPUT_CONCURRENCY_LOCK_PATH}" "${INPUT_CONCURRENCY_LOCK_TIMEOUT}" >&2
