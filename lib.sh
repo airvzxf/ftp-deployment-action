@@ -292,29 +292,28 @@ print_inputs_dump() {
 #   per INPUT_*, in a fixed order. Each entry in the positional
 #   parameter list is a triple:
 #     <lftp-key>  <default-value>  <INPUT_var_name>
-#   The default applies when the INPUT is unset or empty. After the
-#   11 standard settings, the function injects:
+#   The default applies when the INPUT is unset or empty.
 #
-#     * `set mirror:exclude <value>;` if INPUT_EXCLUDE is non-empty
-#       (files matching these globs are not uploaded and not deleted).
-#     * `set mirror:exclude-file <value>;` if INPUT_EXCLUDE_DELETE is
-#       non-empty (files matching these globs are protected from
-#       `--delete` but are still uploaded).
-#     * the free-form lftp_settings input (already validated upstream
-#       by `validate_lftp_settings`) is appended verbatim with a
-#       trailing semicolon. lftp processes `set` directives in order,
-#       so the user can override the above via lftp_settings if
-#       needed.
+#   v2.11.2: INPUT_EXCLUDE / INPUT_EXCLUDE_DELETE are NO LONGER
+#   emitted here. The pre-fix code emitted `set mirror:exclude` /
+#   `set mirror:exclude-file` directives, but neither variable
+#   is actually queried by lftp 4.9.3's MirrorJob when the mirror
+#   command runs (MirrorJob::AddPattern only consults
+#   `mirror:exclude-regex` as a *default* when the user passes
+#   `mirror -x`; a bare `set mirror:exclude-file` is a silent
+#   no-op). The v2.11.2 fix moves the exclude values onto the
+#   mirror command line itself (see build_mirror_command below,
+#   which appends `-x <regex>` / `-X <glob>` based on the same
+#   inputs). The action's behaviour-preserving contract for the
+#   default case (both inputs empty -> no `set` or `-x`/`-X`
+#   emitted) is preserved. See #131, #167.
 #
-#   `set mirror:exclude-file <value>;` is NOT emitted as a plain
-#   directive: lftp 4.9.x hides that variable behind the `set -a`
-#   toggle (off by default; turns on "show all variables" so the
-#   plain `set mirror:exclude-file ...` form is recognised). Toggling
-#   `-a` on for the whole chain would also flip the auto-show for
-#   every other directive and produce surprising side effects, so we
-#   wrap the assignment in `set -a; ... ; set -a;` — on for the one
-#   write, off again so the rest of the chain behaves normally. See
-#   #131 (closes).
+#   The function still emits:
+#     * the 11 standard `set <lftp-key> <value>;` directives for
+#       ftp:* / ssl:* / net:* / dns:*
+#     * the free-form lftp_settings input (already validated
+#       upstream by `validate_lftp_settings`) is appended verbatim
+#       with a trailing semicolon.
 #
 #   The "Remove leading space" trick at the end of the function
 #   keeps the output clean when the first directive is preceded by
@@ -345,20 +344,9 @@ build_ftp_settings() {
     fi
     _bfs_settings="${_bfs_settings}set ${_bfs_key} ${_bfs_val};"
   done
-  # Pattern-exclusion inputs (exclude / exclude_delete). Only
-  # emitted when non-empty so the bit-by-bit diff vs. v2.5.0 with
-  # both inputs at default is a no-op.
-  _bfs_exclude=$(_indirection "INPUT_EXCLUDE")
-  if [ -n "${_bfs_exclude}" ]; then
-    _bfs_settings="${_bfs_settings} set mirror:exclude ${_bfs_exclude};"
-  fi
-  _bfs_exclude_delete=$(_indirection "INPUT_EXCLUDE_DELETE")
-  if [ -n "${_bfs_exclude_delete}" ]; then
-    # lftp 4.9.x hides `mirror:exclude-file` behind the `set -a`
-    # toggle. Toggle it on for this one write, then toggle it off so
-    # the rest of the chain behaves normally. See #131.
-    _bfs_settings="${_bfs_settings} set -a; set mirror:exclude-file ${_bfs_exclude_delete}; set -a;"
-  fi
+  # v2.11.2: INPUT_EXCLUDE / INPUT_EXCLUDE_DELETE removed from
+  # this function (no-op directives, see comment above). They are
+  # now applied via `mirror -x` / `mirror -X` in build_mirror_command.
   # Any manual settings (B-16, already validated).
   _bfs_extra=$(_indirection "INPUT_LFTP_SETTINGS")
   if [ -n "${_bfs_extra}" ]; then
@@ -403,6 +391,36 @@ build_mirror_command() {
   # Delete files not present at the source.
   if [ "$(_indirection INPUT_DELETE)" = "true" ]; then
     _bmc_command="${_bmc_command} --delete"
+  fi
+
+  # v2.11.2: INPUT_EXCLUDE / INPUT_EXCLUDE_DELETE. lftp's `mirror`
+  # command takes `-x <regex>` to exclude files matching a POSIX
+  # regex. The pre-fix code emitted `set mirror:exclude-regex ...`
+  # into FTP_SETTINGS, but that variable is only consulted by lftp
+  # when `mirror -x` is also given — a `set` alone is a silent
+  # no-op in lftp 4.9.3. So the action's INPUT_EXCLUDE /
+  # INPUT_EXCLUDE_DELETE inputs have been broken since v2.5.0.
+  # The fix moves the exclude values onto the mirror command line
+  # itself, which is what actually applies them. See #131, #167.
+  #
+  # INPUT_EXCLUDE -> `mirror -x <regex>` (POSIX ERE, NOT a shell
+  # glob). Users who currently pass `*.bak` etc. will need to
+  # convert to `.*\.bak` (documented in CHANGELOG and the
+  # action.yml input descriptions below).
+  _bmc_exclude=$(_indirection "INPUT_EXCLUDE")
+  if [ -n "${_bmc_exclude}" ]; then
+    _bmc_command="${_bmc_command} -x ${_bmc_exclude}"
+  fi
+
+  # INPUT_EXCLUDE_DELETE -> `mirror -X <glob>` (POSIX glob syntax,
+  # lftp's PatternSet::Glob). The action surface keeps the
+  # INPUT_EXCLUDE vs INPUT_EXCLUDE_DELETE naming for API stability,
+  # but lftp 4.9.3's `-X` flag applies the pattern to BOTH upload
+  # and delete operations (same as `-x`) — there is no separate
+  # delete-only-exclude variable in lftp 4.9.3.
+  _bmc_exclude_delete=$(_indirection "INPUT_EXCLUDE_DELETE")
+  if [ -n "${_bmc_exclude_delete}" ]; then
+    _bmc_command="${_bmc_command} -X ${_bmc_exclude_delete}"
   fi
 
   # Dry run: compute the mirror plan but do not transfer or delete

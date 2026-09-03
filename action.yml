@@ -86,11 +86,11 @@ inputs:
     required: false
     default: ''
   exclude:
-    description: 'Comma-separated glob patterns to exclude from the upload. Translated to `set mirror:exclude <value>;` in lftp. Files matching any pattern are neither uploaded nor deleted. Example: "*.map,node_modules/**,.git/**". Globs are case-sensitive (lftp native syntax).'
+    description: 'POSIX ERE pattern (e.g. `.*\.map`, `node_modules/.*`) passed to `mirror -x` (regex exclude). Files matching the pattern are neither uploaded nor deleted. v2.11.2: switched from the previous (silent-no-op) `set mirror:exclude` to `mirror -x`, which is what lftp 4.9.3 actually applies. See #131, #167.'
     required: false
     default: ''
   exclude_delete:
-    description: 'Comma-separated glob patterns to protect from deletion when `delete: true` is set. Translated to `set mirror:exclude-file <value>;` in lftp. Independent of `exclude`: files matching these patterns are still uploaded if present locally, but are not removed by `--delete`. Example: "*.log,uploads/**".'
+    description: 'Shell glob pattern (lftp PatternSet::Glob syntax, e.g. `*.log`, `uploads/**`) passed to `mirror -X` (glob exclude-delete). Independent of `exclude`: same `mirror -X` semantics as `mirror -x` (both apply to upload AND delete). v2.11.2: switched from the previous (silent-no-op) `set mirror:exclude-file` (no such variable in lftp 4.9.3) to `mirror -X`. See #131, #167.'
     required: false
     default: ''
   debug:

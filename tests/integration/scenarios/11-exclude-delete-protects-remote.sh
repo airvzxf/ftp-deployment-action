@@ -2,44 +2,54 @@
 # tests/integration/scenarios/11-exclude-delete-protects-remote.sh
 #
 # Scenario 11 — action-driven INPUT_EXCLUDE_DELETE end-to-end
-# (closes #131). Boots a real vsftpd, pre-seeds the FTP user's home
-# with TWO files that are NOT in the local fixture, then invokes the
-# ftp-deployment-action image with INPUT_DELETE=true AND
-# INPUT_EXCLUDE_DELETE='*.bak'. The action must:
+# (closes #131, post-#167 lftp 4.9.x reality). Boots a real
+# vsftpd, pre-seeds the FTP user's home with TWO files that are
+# NOT in the local fixture, then invokes the ftp-deployment-action
+# image with INPUT_DELETE=true AND INPUT_EXCLUDE_DELETE='*.bak'.
+# The action must:
 #
 #   1. Upload the three fixture entries (index.html, about.html,
 #      assets/). The fixture is the same sample-public-html/ used by
 #      scenarios 01, 02, 05, 08.
 #   2. Remove `stale.html` (NOT in fixture, does NOT match the
-#      exclude_delete pattern). Proves `mirror --delete` ran.
+#      exclude_delete glob `*.bak`). Proves `mirror --delete` ran.
 #   3. PRESERVE `important.bak` (NOT in fixture, MATCHES the
-#      exclude_delete pattern). Proves the new `set -a; set
-#      mirror:exclude-file ...; set -a;` directive from
-#      lib.sh::build_ftp_settings reaches lftp and lftp honours it
-#      (closes #131).
+#      exclude_delete glob `*.bak`). Proves the new
+#      `mirror -X <glob>` flag from lib.sh::build_mirror_command
+#      reaches lftp and lftp honours it (closes #131).
 #
 # Why this scenario exists:
 #
 #   Pre-fix (v2.11.0 and earlier), `lib.sh::build_ftp_settings`
-#   emitted a plain `set mirror:exclude-file <value>;` for
-#   INPUT_EXCLUDE_DELETE. lftp 4.9.3 (pinned in Dockerfile) hides
-#   that variable behind the `set -a` toggle — without the toggle
-#   on, lftp logs `mirror:exclude-file: no such variable. Use 'set
-#   -a' to look at all variables.` and silently ignores the
-#   directive. The action exits 0 with the success banner, the
-#   *.bak file is gone, and the user has silently lost data.
+#   emitted `set mirror:exclude <value>;` for INPUT_EXCLUDE and
+#   `set mirror:exclude-file <value>;` for INPUT_EXCLUDE_DELETE.
+#   Neither variable is queried by lftp 4.9.3's MirrorJob — both
+#   directives were silent no-ops since v2.5.0. Users who set
+#   INPUT_EXCLUDE_DELETE='*.bak' together with `delete: true`
+#   expected lftp to honour the glob; it didn't, every
+#   remote-only file was silently deleted by `mirror --delete`.
+#   The #131 issue claimed `mirror:exclude-file` exists in lftp
+#   4.9.3 and is gated behind `set -a`; that's wrong — the
+#   variable doesn't exist at all in 4.9.3. Reading MirrorJob.cc
+#   confirms `mirror:exclude-file` is not in the source. The only
+#   way to apply an exclude pattern from the action in lftp 4.9.3
+#   is the mirror command's `-x <regex>` / `-X <glob>` flags.
 #
-#   The fix (this scenario is part of the fix): `build_ftp_settings`
-#   now wraps the assignment in `set -a; set mirror:exclude-file
-#   <value>; set -a;` (toggle on for the one write, off again so
-#   the rest of the chain behaves normally). See #131.
+#   The fix (this scenario is part of the fix): both
+#   INPUT_EXCLUDE and INPUT_EXCLUDE_DELETE now translate into
+#   `mirror -x <regex>` / `mirror -X <glob>` flags via
+#   build_mirror_command. The action.yml docs are honest that
+#   INPUT_EXCLUDE's value is a POSIX ERE (`.*\.bak`-style) and
+#   INPUT_EXCLUDE_DELETE's value is a shell glob (`*.bak`-style,
+#   lftp's PatternSet::Glob). This scenario uses `*.bak` for the
+#   `-X` glob. See #131, #167.
 #
 #   This scenario is the regression guard: if a future change
-#   drops the `set -a; ...; set -a;` wrapping (or stops emitting
-#   the directive at all), the action runs lftp against a real
-#   vsftpd and the `important.bak` assertion below fires. Pre-fix
-#   the .bak file was deleted and assert_present failed; post-fix
-#   it is preserved and the scenario is green.
+#   drops the `-X <glob>` flag from build_mirror_command (or
+#   changes the flag form), the action runs lftp against a real
+#   vsftpd and the `important.bak` assertion below fires.
+#   Pre-fix the .bak file was deleted and assert_present failed;
+#   post-fix it is preserved and the scenario is green.
 
 set -eu
 
@@ -103,11 +113,11 @@ assert_present "${_ftp_home}" "important.bak"
 #                                 remote and would also remove
 #                                 important.bak without the next
 #                                 input.
-#   * INPUT_EXCLUDE_DELETE='*.bak' — globs the .bak file (and
-#                                 nothing else); the action must
-#                                 translate this into the new
-#                                 `set -a; set mirror:exclude-file
-#                                 *.bak; set -a;` directive and
+#   * INPUT_EXCLUDE_DELETE='*.bak' — lftp's PatternSet::Glob
+#                                 syntax (shell-glob style). The
+#                                 action must translate this into
+#                                 the new `mirror -X '*.bak'`
+#                                 flag in build_mirror_command and
 #                                 lftp must honour it.
 #
 # All other inputs are inherited from build_action_env_file's defaults
@@ -119,10 +129,6 @@ trap 'rm -f "${_env}"; stop_ftp_server' EXIT
 build_action_env_file "${_env}" "${IMAGE}" /data / \
   "INPUT_DELETE=true" \
   "INPUT_EXCLUDE_DELETE=*.bak"
-
-# DEBUG: dump the env-file to confirm what we hand to docker.
-log_info "DEBUG env-file contents ($(wc -l < "${_env}" 2>/dev/null) lines):"
-sed 's/^/    /' "${_env}"
 
 # --- Step 4: invoke the action image ----------------------------------------
 #
