@@ -15,17 +15,14 @@
 #     Subject: /CN=localhost. Format: combined PEM (key + cert
 #     concatenated) — this is what vsftpd's rsa_cert_file expects
 #     when rsa_private_key_file points at the same file. Mode
-#     0600. Idempotent: if the cached file already exists, it is
-#     reused as-is.
-#
-#     The spec (#117) calls out:
-#       "A self-signed cert is generated at runtime (no checked-in
-#        secrets). openssl req -x509 -newkey rsa:2048 -days 1 -nodes
-#        -subj '/CN=localhost' and is regenerated per scenario run."
-#     We regenerate per *first* run; subsequent scenario runs in
-#     the same checkout reuse the cached file. The cert is 1-day
-#     so a stale cached cert from a week-old run will still be
-#     well within validity for any single CI job.
+#     0600. Idempotent: if the cached file already exists AND is
+#     still valid for >= 24h (`openssl x509 -checkend 86400`),
+#     it is reused. Otherwise the cert is regenerated. The
+#     checkend is defensive: a -days 1 cert is invalid 24h after
+#     generation, so a persistent /tmp (self-hosted runners, local
+#     dev boxes) can hand the next scenario run a stale cert
+#     that fails the TLS handshake at runtime even though the
+#     scenarios disable cert / hostname verification.
 #
 #   start_ftps_server FTP_USER FTP_PASS DATA_DIR CERT_FILE MODE
 #     Boot a pre-baked vsftpd image with SSL/TLS enabled. MODE is
@@ -49,12 +46,13 @@
 #     The pre-baked image (tests/integration/Dockerfile.test-server,
 #     built by `make build-test-server-image`) eliminates the
 #     per-run network dependency: vsftpd is already installed,
-#     /var/log/vsftpd / /etc/pam.d/vsftpd_virtual / /home/vsftpd
-#     are already created. The scenario only does the user-specific
-#     work (adduser, the overlay vsftpd.conf, the alpine-vsftpd TLS
-#     variable rename, exec vsftpd). Note: the openssl CLI used to
-#     generate the per-run self-signed cert lives on the HOST (see
-#     generate_self_signed_cert), not in the server image.
+#     /var/log/vsftpd is pre-created, and
+#     /etc/pam.d/vsftpd_virtual is written. The scenario only does
+#     the user-specific work (adduser, the overlay vsftpd.conf,
+#     the alpine-vsftpd TLS variable rename, exec vsftpd). Note:
+#     the openssl CLI used to generate the per-run self-signed
+#     cert lives on the HOST (see generate_self_signed_cert), not
+#     in the server image.
 #
 #     Why alpine-based instead of docker.io/fauria/vsftpd
 #     (the image the plain-FTP scenarios use): fauria's
@@ -99,11 +97,35 @@ export FTP_INTEGRATION_CERT_DIR
 : "${FTP_TEST_SERVER_IMAGE:=${TEST_SERVER_IMAGE:-ftp-deployment-action-test-server:ci-integration}}"
 export FTP_TEST_SERVER_IMAGE
 
+# Implicit-FTPS host port (the port the container's vsftpd binds
+# under --network host). 2122 is unprivileged on the host (no
+# `ip_unprivileged_port_start=0` workaround needed on rootless
+# podman / docker-rootless setups). Explicit FTPS uses
+# $FTP_CONTROL_PORT (2121) from common.sh; implicit FTPS uses
+# this value. Exported so scenario 04 can build the
+# INPUT_SERVER=ftps://...:<port> URL from the same source of
+# truth instead of duplicating the literal here.
+FTP_IMPLICIT_PORT=${FTP_IMPLICIT_PORT:-2122}
+export FTP_IMPLICIT_PORT
+
 # ------------------------------------------------------------------------------
 # generate_self_signed_cert
 #   Print the absolute path to the cached self-signed cert PEM on
 #   stdout. Generates it on first call; reuses it on subsequent
-#   calls. Mode 0600 on the directory and the file.
+#   calls (when the cached cert is still valid for >= 24h). Mode
+#   0600 on the directory and the file.
+#
+#   Cached-cert validity check: the cert is generated with
+#   `openssl req -days 1`, so a cached cert from a previous run
+#   can become stale on a runner with persistent /tmp (self-
+#   hosted runners, local dev boxes). We re-issue when the cached
+#   cert is missing OR when `openssl x509 -checkend 86400` says
+#   it expires within 24h. The scenarios disable cert / hostname
+#   verification (INPUT_SSL_VERIFY_CERTIFICATE=false,
+#   INPUT_SSL_CHECK_HOSTNAME=false), so a stale cert is silent
+#   in CI today; the checkend is defensive against production
+#   users hitting the same path. See the docstring above for the
+#   full reasoning behind the 1-day lifetime.
 # ------------------------------------------------------------------------------
 generate_self_signed_cert() {
   _gssc_dir=${FTP_INTEGRATION_CERT_DIR}
@@ -112,29 +134,40 @@ generate_self_signed_cert() {
   mkdir -p "${_gssc_dir}"
   chmod 0700 "${_gssc_dir}"
 
-  if [ ! -f "${_gssc_pem}" ]; then
-    _gssc_tmp=$(mktemp -d -t gssc.XXXXXX) \
-      || { printf 'FAIL: mktemp failed\n' >&2; return 1; }
-    chmod 0700 "${_gssc_tmp}"
-
-    # -nodes: no passphrase on the private key (vsftpd cannot
-    # type one interactively; a passphrase-protected key would
-    # brick the boot).
-    if ! openssl req -x509 -newkey rsa:2048 -days 1 -nodes \
-        -keyout "${_gssc_tmp}/key.pem" \
-        -out    "${_gssc_tmp}/cert.pem" \
-        -subj "/CN=localhost" >/dev/null 2>&1; then
-      rm -rf "${_gssc_tmp}"
-      printf 'FAIL: openssl req failed\n' >&2
-      return 1
-    fi
-
-    # vsftpd reads rsa_cert_file for the cert AND rsa_private_key_file
-    # for the matching key; pointing both at the same file requires
-    # the key+cert to be concatenated in PEM order.
-    cat "${_gssc_tmp}/key.pem" "${_gssc_tmp}/cert.pem" > "${_gssc_pem}"
-    rm -rf "${_gssc_tmp}"
+  # If a cached cert exists and is valid for at least 24 more
+  # hours, reuse it. `-checkend 86400` exits 0 when the cert is
+  # still valid for >= 86400 seconds, 1 otherwise. We treat a
+  # checkend failure (corrupt / wrong-format PEM) the same as a
+  # missing cert and regenerate.
+  if [ -f "${_gssc_pem}" ] \
+      && openssl x509 -checkend 86400 -in "${_gssc_pem}" \
+            -noout >/dev/null 2>&1; then
+    chmod 0600 "${_gssc_pem}"
+    printf '%s\n' "${_gssc_pem}"
+    return 0
   fi
+
+  _gssc_tmp=$(mktemp -d -t gssc.XXXXXX) \
+    || { printf 'FAIL: mktemp failed\n' >&2; return 1; }
+  chmod 0700 "${_gssc_tmp}"
+
+  # -nodes: no passphrase on the private key (vsftpd cannot
+  # type one interactively; a passphrase-protected key would
+  # brick the boot).
+  if ! openssl req -x509 -newkey rsa:2048 -days 1 -nodes \
+      -keyout "${_gssc_tmp}/key.pem" \
+      -out    "${_gssc_tmp}/cert.pem" \
+      -subj "/CN=localhost" >/dev/null 2>&1; then
+    rm -rf "${_gssc_tmp}"
+    printf 'FAIL: openssl req failed\n' >&2
+    return 1
+  fi
+
+  # vsftpd reads rsa_cert_file for the cert AND rsa_private_key_file
+  # for the matching key; pointing both at the same file requires
+  # the key+cert to be concatenated in PEM order.
+  cat "${_gssc_tmp}/key.pem" "${_gssc_tmp}/cert.pem" > "${_gssc_pem}"
+  rm -rf "${_gssc_tmp}"
   chmod 0600 "${_gssc_pem}"
 
   printf '%s\n' "${_gssc_pem}"
@@ -259,13 +292,14 @@ _write_ftps_vsftpd_conf() {
 #   on rootless podman / docker-rootless setups).
 #
 #   The pre-baked image (closes #135): tests/integration/Dockerfile.
-#   test-server installs vsftpd and pre-creates /var/log/vsftpd,
-#   /etc/pam.d/vsftpd_virtual (delegating to pam_unix /
-#   /etc/shadow), and /home/vsftpd. The previous inline-`apk add`
-#   shape ran a network-dependent package install on every scenario
-#   start, which made the 20s wait_for_port race flaky in CI. The
-#   pre-baked image eliminates that race: `docker run` of an
-#   already-pulled image takes <1s and never races the apk index.
+#   test-server installs vsftpd, pre-creates /var/log/vsftpd
+#   (vsftpd's xferlog target), and writes /etc/pam.d/
+#   vsftpd_virtual (delegating to pam_unix / /etc/shadow). The
+#   previous inline-`apk add` shape ran a network-dependent
+#   package install on every scenario start, which made the 20s
+#   wait_for_port race flaky in CI. The pre-baked image eliminates
+#   that race: `docker run` of an already-pulled image takes <1s
+#   and never races the apk index.
 #
 #   Why alpine-based (vs fauria/vsftpd): fauria's
 #   /usr/sbin/run-vsftpd.sh wrapper has docker-in-docker quirks
@@ -337,8 +371,8 @@ start_ftps_server() {
       _sfs_implicit_flag=no
       ;;
     implicit)
-      _sfs_host_port=2122
-      _sfs_container_port=2122
+      _sfs_host_port=${FTP_IMPLICIT_PORT}
+      _sfs_container_port=${FTP_IMPLICIT_PORT}
       _sfs_implicit_flag=yes
       ;;
     *)
@@ -390,9 +424,9 @@ start_ftps_server() {
   # every scenario run. That step occasionally took >20s in CI and
   # even failed outright on transient network blips, surfacing as
   # flaky scenario failures. tests/integration/Dockerfile.test-server
-  # moves the apk install + the /var/log/vsftpd, /etc/pam.d/
-  # vsftpd_virtual, /home/vsftpd prep into the image so this
-  # payload is purely per-scenario work (no network).
+  # moves the apk install + the /var/log/vsftpd and /etc/pam.d/
+  # vsftpd_virtual prep into the image so this payload is purely
+  # per-scenario work (no network).
   #
   # Why no `--rm`: when the FTPS container died during boot (the
   # root cause of the #135 flake), `--rm` garbage-collected it
@@ -417,7 +451,13 @@ start_ftps_server() {
           set -eu
           cp /etc/vsftpd.conf /tmp/vsftpd.conf
           sed -i "s/^ssl_tlsv1_1=/ssl_tlsv11=/; s/^ssl_tlsv1_2=/ssl_tlsv12=/" /tmp/vsftpd.conf
-          adduser -D -h /home/vsftpd '"${_sfs_user}"' 2>/dev/null || true
+          if ! adduser -D -h /home/vsftpd '"${_sfs_user}"' 2>"/tmp/adduser.err"; then
+            case "$(cat /tmp/adduser.err)" in
+              *"already exists"*) : ;;
+              *) printf "FAIL: adduser failed: %s\n" "$(cat /tmp/adduser.err)" >&2; exit 1 ;;
+            esac
+          fi
+          rm -f /tmp/adduser.err
           echo '"${_sfs_user}"':'"${_sfs_pass}"' | chpasswd
           chmod 0777 /home/vsftpd/'"${_sfs_user}"'
           exec vsftpd /tmp/vsftpd.conf
@@ -430,6 +470,13 @@ start_ftps_server() {
   export FTP_CONTAINER_NAME
   FTP_DATA_DIR="${_sfs_data_dir}"
   export FTP_DATA_DIR
+  # Overlay vsftpd.conf bind-mounted into the container. Exported so
+  # the scenario-level EXIT trap can rm -f it on success paths
+  # (the container rm is handled by stop_ftp_server; the overlay
+  # conf is per-scenario helper state). Mirrors the FTP_CONTAINER_NAME
+  # / FTP_DATA_DIR pattern above.
+  FTP_VSFTPD_CONF="${_sfs_conf}"
+  export FTP_VSFTPD_CONF
 
   if ! wait_for_port 127.0.0.1 "${_sfs_host_port}" 20; then
     ${RUNTIME} logs "${FTP_CONTAINER_NAME}" >&2 || true
