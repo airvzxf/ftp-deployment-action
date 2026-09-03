@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.1] - 2026-09-03
+
+Pre-baked FTPS test server image (PR #139, closes #135): scenarios 03 (explicit) and 04 (implicit) no longer pay the per-run `apk add --no-cache` cost, eliminating the apk-index download race that intermittently failed CI.
+
+### Fixed
+
 - **Pre-baked FTPS test server image (closes #135)** — `tests/integration/Dockerfile.test-server` + `make build-test-server-image` + CI integration step. Scenarios 03 (explicit) and 04 (implicit) no longer pay the per-run `apk add --no-cache` cost, eliminating the apk-index download race that intermittently failed CI (closes #135). Run `make build-test-server-image TEST_SERVER_IMAGE=...` before `make integration`.
 
 ## [2.11.0] - 2026-09-02
