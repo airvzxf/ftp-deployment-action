@@ -165,6 +165,10 @@ validate_glob_pattern() {
       exit 2
       ;;
   esac
+  if printf '%s' "${_vgp_value}" | grep -qE '[[:cntrl:]]'; then
+    printf 'ERROR: %s contains control characters\n' "${_vgp_name}" >&2
+    exit 2
+  fi
   case "${_vgp_value}" in
     -*)
       printf 'ERROR: %s starts with a dash (would be misread as mirror option)\n' \
