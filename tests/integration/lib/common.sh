@@ -139,7 +139,14 @@ wait_for_port() {
   while [ "${_wfp_i}" -lt "${_wfp_deadline}" ]; do
     # Use the runtime's built-in port-check; `docker run --rm -i
     # alpine` is reliable and the alpine image is already cached.
-    if ${RUNTIME} run --rm --network host alpine:3.23.3 \
+    # v2.11.3 (#136): use the same TEST_SERVER_IMAGE (which now
+    # also has the lftp client pre-installed — the 3.23.3 vs 3.24
+    # alpine drift is gone since #135 pinned the FTPS image to
+    # 3.24, but the smoke / wait_for_port path was left on 3.23.3
+    # and re-introduces a fork: the FTPS server image is on 3.24
+    # while the port-check helper is on 3.23.3. Use the
+    # pre-baked image's nc binary to close the drift).
+    if ${RUNTIME} run --rm --network host "${FTP_TEST_SERVER_IMAGE:-${TEST_SERVER_IMAGE:-ftp-deployment-action-test-server:ci-integration}}" \
         nc -z "${_wfp_host}" "${_wfp_port}" >/dev/null 2>&1; then
       return 0
     fi
@@ -288,8 +295,8 @@ lftp_run_script() {
       --user root \
       -v "${_lrs_script}:/tmp/lftp-script.lftp:ro" \
       -v "${FIXTURES_DIR}:/data:ro" \
-      alpine:3.23.3 \
-      /bin/sh -c "apk add --no-cache lftp >/dev/null 2>&1 && lftp -c \"\$(cat /tmp/lftp-script.lftp)\"" \
+      "${FTP_TEST_SERVER_IMAGE:-${TEST_SERVER_IMAGE:-ftp-deployment-action-test-server:ci-integration}}" \
+      /bin/sh -c "lftp -c \"\$(cat /tmp/lftp-script.lftp)\"" \
       > "${_lrs_log}" 2>&1
   _lrs_rc=$?
   set -e
