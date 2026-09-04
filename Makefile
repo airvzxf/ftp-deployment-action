@@ -148,9 +148,35 @@ build:
 # the docker daemon — the rest of the repo (action source, fixtures,
 # etc.) is never visible to the build.
 # ----------------------------------------------------------------------------
+# build-test-server-image: build the pre-baked FTPS test server image
+# (tests/integration/Dockerfile.test-server) used by scenarios 03 and
+# 04. CI builds this before `make integration`; local developers can
+# run it standalone with `make build-test-server-image
+# TEST_SERVER_IMAGE=ftpint-test-server:local`. The Makefile variable
+# TEST_SERVER_IMAGE defaults to `ftp-deployment-action-test-server:
+# ci-integration`, matching the tag the CI workflow uses, so the
+# Makefile target is in lockstep with `make integration` without
+# needing a separate flag.
+#
+# `tests/integration` is the build context (not the repo root) so
+# only the Dockerfile.test-server and its adjacent files are sent to
+# the docker daemon — the rest of the repo (action source, fixtures,
+# etc.) is never visible to the build.
+#
+# v2.11.3 (#156): Dockerfile.test-server pins `# syntax=docker/
+# dockerfile:1.4` and uses a heredoc (`<<'EOF'`) for the pam.d
+# vsftpd_virtual config. Plain `docker build` defaults to the legacy
+# builder on Docker < 23.0 and rejects both, with a confusing parse
+# error pointing at the heredoc line. CI happens to work today only
+# because the GH Actions `ubuntu-latest` runner ships Docker 23+
+# (BuildKit default builder). Switch to `docker buildx build` to
+# match the canonical path used in `.github/workflows/release.yml`
+# (`docker/setup-buildx-action@v4.3.0`) and make the BuildKit
+# requirement load-bearing rather than incidental.
+# ----------------------------------------------------------------------------
 .PHONY: build-test-server-image
 build-test-server-image:
-	docker build -f tests/integration/Dockerfile.test-server \
+	docker buildx build -f tests/integration/Dockerfile.test-server \
 	    -t $(TEST_SERVER_IMAGE) tests/integration
 
 # ----------------------------------------------------------------------------
