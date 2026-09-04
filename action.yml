@@ -82,15 +82,15 @@ inputs:
     required: false
     default: '10s'
   lftp_settings:
-    description: 'Additional raw lftp settings, e.g. "set cache:cache-empty-listings true; set cmd:status-interval 1s;". Appended to the lftp `-e` command; rejected if it contains control characters, backtick, `$`, `!`, or more than 3 `;`-chained directives (see lib.sh::validate_lftp_settings). Same sanitization applies to `exclude` and `exclude_delete`.'
+    description: 'Additional raw lftp settings, e.g. "set cache:cache-empty-listings true; set cmd:status-interval 1s;". Appended to the lftp `-e` command; rejected if it contains control characters, backtick, `$`, `!`, or more than 3 `;`-chained directives (see lib.sh::validate_lftp_settings). `exclude` and `exclude_delete` use the lighter `validate_glob_pattern` instead (v2.11.3, #160) since they flow onto the `mirror` command line as a single argv slot, not into the `-e` script body.'
     required: false
     default: ''
   exclude:
-    description: 'POSIX ERE pattern (e.g. `.*\.map`, `node_modules/.*`) passed to `mirror -x` (regex exclude). Files matching the pattern are neither uploaded nor deleted. v2.11.2: switched from the previous (silent-no-op) `set mirror:exclude` to `mirror -x`, which is what lftp 4.9.3 actually applies. See #131, #167.'
+    description: 'POSIX ERE pattern (e.g. `.*\.map`, `node_modules/.*`) passed to `mirror -x` (regex exclude). Files matching the pattern are neither uploaded nor deleted. v2.11.2: switched from the previous (silent-no-op) `set mirror:exclude` to `mirror -x`, which is what lftp 4.9.3 actually applies. v2.11.3 (#160): validated by `validate_glob_pattern` (rejects control characters and leading dash; allows `!`, `;`, `$`, backtick — these are valid glob/regex metacharacters). See #131, #167.'
     required: false
     default: ''
   exclude_delete:
-    description: 'Shell glob pattern (lftp PatternSet::Glob syntax, e.g. `*.log`, `uploads/**`) passed to `mirror -X` (glob exclude-delete). Independent of `exclude`: same `mirror -X` semantics as `mirror -x` (both apply to upload AND delete). v2.11.2: switched from the previous (silent-no-op) `set mirror:exclude-file` (no such variable in lftp 4.9.3) to `mirror -X`. See #131, #167.'
+    description: 'Shell glob pattern (lftp PatternSet::Glob syntax, e.g. `*.log`, `uploads/**`) passed to `mirror -X` (glob exclude-delete). Independent of `exclude`: same `mirror -X` semantics as `mirror -x` (both apply to upload AND delete). v2.11.2: switched from the previous (silent-no-op) `set mirror:exclude-file` (no such variable in lftp 4.9.3) to `mirror -X`. v2.11.3 (#160): validated by `validate_glob_pattern` (same rules as `exclude`). See #131, #167.'
     required: false
     default: ''
   debug:

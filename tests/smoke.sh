@@ -443,18 +443,110 @@ fi
 pass "default FTP_SETTINGS contains no mirror:exclude directive (backward compatible)"
 
 # ----------------------------------------------------------------------------
-# Test 28: backtick in INPUT_EXCLUDE is rejected with exit 2
-# (sanitization applies to the new inputs too). Validation runs
-# before the lftp phase, so the script exits 2 quickly without
-# touching the network.
+# Test 28 (v2.11.3 #160): INPUT_EXCLUDE is now validated by
+# validate_glob_pattern (not validate_lftp_settings). Backtick /
+# dollar / `!` / semicolons are valid glob/regex metacharacters
+# for lftp's PatternSet and must NOT be rejected at validation
+# time. Control characters and leading dash are still rejected
+# (would break lftp argv parsing or be misread as -x / -X).
+# Validation must pass; the script will then fail at the lftp
+# connection (unreachable server) and exit 1.
 # ----------------------------------------------------------------------------
-backtick_val=$(printf 'set foo:bar %cuname' '`')
-out=$(run_init "INPUT_EXCLUDE=${backtick_val}" 10)
-echo "${out}" | grep -q "lftp_settings contains backtick" \
-  || fail "INPUT_EXCLUDE with backtick was not rejected; output was:\n${out}"
+backtick_val=$(printf 'foo%sbar' '`')
+out=$(run_init "INPUT_DRY_RUN=true" "INPUT_EXCLUDE=${backtick_val}" 30)
+# Backtick must NOT trigger validation rejection anymore.
+if echo "${out}" | grep -q "lftp_settings contains backtick"; then
+  fail "INPUT_EXCLUDE with backtick was rejected by old validator (v2.11.3 #160 regression); output was:\n${out}"
+fi
+# Backtick in exclude must NOT abort with any validation error.
+if echo "${out}" | grep -qE "ERROR:.*(control|metacharacter|dollar|lftp_settings)"; then
+  fail "INPUT_EXCLUDE with backtick triggered a validation error; output was:\n${out}"
+fi
+pass "INPUT_EXCLUDE with backtick passes validation (v2.11.3 #160 — glob-pattern validator)"
+
+# Test 28b (v2.11.3 #160): control characters in INPUT_EXCLUDE
+# ARE still rejected (validate_glob_pattern keeps the control-char
+# deny-list; only the lftp-`-e`-script-specific rejections were
+# dropped). Build the tab via printf because the smoke test runs
+# under /bin/sh (busybox ash in the alpine test container does
+# not expand `$'..'`).
+tab_env=$(printf 'INPUT_EXCLUDE=foo\tbar')
+out=$(run_init "${tab_env}" 10)
+echo "${out}" | grep -q "control characters" \
+  || fail "INPUT_EXCLUDE with tab was not rejected; output was:\n${out}"
 echo "${out}" | grep -q "^EXIT=2" \
-  || fail "INPUT_EXCLUDE with backtick did not exit 2; output was:\n${out}"
-pass "INPUT_EXCLUDE with backtick is rejected with exit 2"
+  || fail "INPUT_EXCLUDE with tab did not exit 2; output was:\n${out}"
+pass "INPUT_EXCLUDE with control character (tab) is still rejected (exit 2)"
+
+# Test 28c (v2.11.3 #160): leading dash in INPUT_EXCLUDE is
+# rejected (would be misread by lftp as a `mirror` option rather
+# than as the value of -x).
+out=$(run_init "INPUT_EXCLUDE=-rf" 10)
+echo "${out}" | grep -q "starts with a dash" \
+  || fail "INPUT_EXCLUDE=-rf was not rejected; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "INPUT_EXCLUDE=-rf did not exit 2; output was:\n${out}"
+pass "INPUT_EXCLUDE=-rf is rejected (would be misread as mirror option)"
+
+# Test 28d (v2.11.3 #160): the `!` (lftp shell escape) is now
+# accepted in INPUT_EXCLUDE — the previous validation was over-
+# rejecting this valid glob character.
+out=$(run_init "INPUT_DRY_RUN=true" 'INPUT_EXCLUDE=!important\.txt' 30)
+if echo "${out}" | grep -qE "ERROR:.*(lftp_settings|\"!\")"; then
+  fail "INPUT_EXCLUDE with '!' was rejected by old validator (v2.11.3 #160 over-rejection); output was:\n${out}"
+fi
+pass "INPUT_EXCLUDE with '!' (lftp shell escape) passes validation (v2.11.3 #160)"
+
+# ----------------------------------------------------------------------------
+# Test 28e (v2.11.3 #171): boolean inputs that flow into the
+# lftp `-e` script (via build_ftp_settings -> "set <key> <val>;")
+# must be validated as booleans. A malicious payload such as
+# "true; !cat /home/lftp/.netrc" must be rejected with exit 2
+# BEFORE lftp is invoked, blocking the RCE that #171 documented.
+# ----------------------------------------------------------------------------
+out=$(run_init 'INPUT_FTP_SSL_ALLOW=true; !cat /home/lftp/.netrc' 10)
+echo "${out}" | grep -q "ftp_ssl_allow must be a bool" \
+  || fail "INPUT_FTP_SSL_ALLOW with RCE payload was not rejected; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "INPUT_FTP_SSL_ALLOW with RCE payload did not exit 2; output was:\n${out}"
+pass "INPUT_FTP_SSL_ALLOW='true; !cat ...' is rejected (RCE payload, v2.11.3 #171)"
+
+# Test 28f (v2.11.3 #171): same RCE check for the duration inputs.
+out=$(run_init 'INPUT_NET_TIMEOUT=15s; !cat /home/lftp/.netrc' 10)
+echo "${out}" | grep -q "net_timeout must be a duration" \
+  || fail "INPUT_NET_TIMEOUT with RCE payload was not rejected; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "INPUT_NET_TIMEOUT with RCE payload did not exit 2; output was:\n${out}"
+pass "INPUT_NET_TIMEOUT='15s; !cat ...' is rejected (RCE payload, v2.11.3 #171)"
+
+# Test 28g (v2.11.3 #171): dns_fatal_timeout='never' must still be
+# accepted (the documented disable sentinel — the v2.11.2 audit
+# caught the regex of the proposed fix would break this).
+out=$(run_init "INPUT_DRY_RUN=true" 'INPUT_DNS_FATAL_TIMEOUT=never' 30)
+if echo "${out}" | grep -qE "ERROR: dns_fatal_timeout"; then
+  fail "INPUT_DNS_FATAL_TIMEOUT='never' was unexpectedly rejected (would regress documented sentinel); output was:\n${out}"
+fi
+pass "INPUT_DNS_FATAL_TIMEOUT='never' is accepted (documented sentinel, v2.11.3 #171)"
+
+# ----------------------------------------------------------------------------
+# Test 28h (v2.11.3 #172): paths with '!' or double-quote are
+# rejected by validate_path. Without this, INPUT_LOCAL_DIR like
+# '!cat /home/lftp/.netrc' would flow into the lftp -e script
+# and execute the shell-escape as the lftp user (RCE).
+# ----------------------------------------------------------------------------
+out=$(run_init 'INPUT_LOCAL_DIR=!cat /home/lftp/.netrc' 10)
+echo "${out}" | grep -q '"!"' \
+  || fail "INPUT_LOCAL_DIR with '!' was not rejected; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "INPUT_LOCAL_DIR with '!' did not exit 2; output was:\n${out}"
+pass "INPUT_LOCAL_DIR='!cat ...' is rejected (lftp shell escape, v2.11.3 #172)"
+
+out=$(run_init 'INPUT_REMOTE_DIR=foo"; cls; quit;' 10)
+echo "${out}" | grep -q "double-quote" \
+  || fail "INPUT_REMOTE_DIR with double-quote was not rejected; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "INPUT_REMOTE_DIR with double-quote did not exit 2; output was:\n${out}"
+pass 'INPUT_REMOTE_DIR with double-quote is rejected (lftp command injection, v2.11.3 #172)'
 
 # ----------------------------------------------------------------------------
 # Test 29: INPUT_UPLOAD_LOG_ON_FAILURE=false — the upload path is

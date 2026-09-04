@@ -116,12 +116,28 @@ validate_int "ftp_nop_interval"    "${INPUT_FTP_NOP_INTERVAL}"
 validate_int "net_max_retries"     "${INPUT_NET_MAX_RETRIES}"
 validate_int "net_persist_retries" "${INPUT_NET_PERSIST_RETRIES}"
 validate_int "dns_max_retries"     "${INPUT_DNS_MAX_RETRIES}"
+# v2.11.3 (#171): validate the 7 unvalidated INPUT_* that flow
+# verbatim into `lftp -e "set <key> <value>;"` via build_ftp_settings.
+# Without this guard, a workflow author could set
+# `ftp_ssl_allow: 'true; !cat /home/lftp/.netrc'` and read the
+# action's .netrc (written by write_netrc below) before the EXIT
+# trap fires. Five booleans + two durations, in the order they
+# appear in build_ftp_settings.
+validate_bool     "ftp_ssl_allow"          "${INPUT_FTP_SSL_ALLOW}"
+validate_bool     "ssl_verify_certificate" "${INPUT_SSL_VERIFY_CERTIFICATE}"
+validate_bool     "ssl_check_hostname"     "${INPUT_SSL_CHECK_HOSTNAME}"
+validate_bool     "ftp_passive_mode"       "${INPUT_FTP_PASSIVE_MODE}"
+validate_bool     "ftp_use_feat"           "${INPUT_FTP_USE_FEAT}"
+validate_duration "net_timeout"            "${INPUT_NET_TIMEOUT}"
+validate_duration "dns_fatal_timeout"      "${INPUT_DNS_FATAL_TIMEOUT}"
 # B-16: light sanitization of the free-form lftp_settings input.
 validate_lftp_settings "${INPUT_LFTP_SETTINGS}"
-# Pattern-exclusion inputs go into the lftp `-e` script the same
-# way `lftp_settings` does, so they share the same sanitization.
-validate_lftp_settings "${INPUT_EXCLUDE}"
-validate_lftp_settings "${INPUT_EXCLUDE_DELETE}"
+# v2.11.3 (#160): the exclude inputs flow onto the `mirror -x` /
+# `mirror -X` command line (not into the lftp `-e` script body,
+# since v2.11.2), so they need a lighter validator that allows
+# glob/regex metacharacters like `!`, `;`, `$`, backtick.
+validate_glob_pattern "exclude"        "${INPUT_EXCLUDE}"
+validate_glob_pattern "exclude_delete" "${INPUT_EXCLUDE_DELETE}"
 # Concurrency lock: validate path and integers only when enabled,
 # to keep the validation surface tight for the common case
 # (concurrency_lock=false). validate_int already rejects negatives
