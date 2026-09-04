@@ -550,9 +550,12 @@ pass "INPUT_EXCLUDE rejects ;, &, |, and \" (lftp -e parser injection, v2.11.3.1
 # Test 28d3 (v2.11.3.1 / post-release F2 audit): an embedded
 # newline must be rejected (grep's POSIX [:cntrl:] never matches
 # \n, so the v2.11.3 deny-list silently missed newlines).
-nl_env=$(printf 'INPUT_EXCLUDE=foo\\nbar')
+# Build via printf with the C-string newline escape. `\n` inside
+# single quotes is interpreted by printf as a real LF, regardless
+# of whether the parent shell is bash or busybox ash.
+nl_env=$(printf 'INPUT_EXCLUDE=foo\nbar')
 out=$(run_init "${nl_env}" 10)
-echo "${out}" | grep -q "newline\|control characters" \
+echo "${out}" | grep -q "newline" \
   || fail "INPUT_EXCLUDE with embedded newline was not rejected (v2.11.3.1 F2 audit); output was:\n${out}"
 echo "${out}" | grep -q "^EXIT=2" \
   || fail "INPUT_EXCLUDE with embedded newline did not exit 2; output was:\n${out}"
@@ -562,12 +565,13 @@ pass "INPUT_EXCLUDE with embedded newline is rejected (v2.11.3.1 F2 audit)"
 # line-anchored grep, so a value like "2\n!cmd" passed validation
 # on the first line. The new case-based validator rejects the
 # whole string. Verify with a numeric-with-newline payload.
-nl_int_env=$(printf 'INPUT_FTP_NOP_INTERVAL=2\\n!echo PWNED')
+# `\n` inside single quotes is interpreted by printf as a real LF.
+nl_int_env=$(printf 'INPUT_FTP_NOP_INTERVAL=2\n!echo PWNED')
 out=$(run_init "${nl_int_env}" 10)
 echo "${out}" | grep -q "ftp_nop_interval must be a non-negative integer" \
-  || fail "INPUT_FTP_NOP_INTERVAL='2\\n!cmd' was not rejected by the new case-based validator; output was:\n${out}"
+  || fail "INPUT_FTP_NOP_INTERVAL='2\n!cmd' was not rejected by the new case-based validator; output was:\n${out}"
 echo "${out}" | grep -q "^EXIT=2" \
-  || fail "INPUT_FTP_NOP_INTERVAL='2\\n!cmd' did not exit 2; output was:\n${out}"
+  || fail "INPUT_FTP_NOP_INTERVAL='2\n!cmd' did not exit 2; output was:\n${out}"
 pass "INPUT_FTP_NOP_INTERVAL with embedded newline is rejected (v2.11.3.1 F2 audit)"
 
 # ----------------------------------------------------------------------------
