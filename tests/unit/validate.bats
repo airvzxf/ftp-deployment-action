@@ -230,14 +230,37 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "validate_glob_pattern accepts a glob with backtick, dollar, semicolon" {
-  run validate_glob_pattern "exclude" 'foo$bar`baz;qux'
+@test "validate_glob_pattern accepts a glob with backtick, dollar, !, space" {
+  # v2.11.3.1 (post-release F2 audit): the v2.11.3 fix accepted `;`
+  # and `"` on the premise that the value is "a single argv slot
+  # to mirror, never parsed by a shell". That premise was wrong:
+  # build_mirror_command concatenates the value unquoted into the
+  # `lftp -e` script body, and lftp 4.9.3's parser treats `;`, `&`,
+  # `|`, and `"` as command separators / string delimiters even
+  # mid-token. So `;`, `&`, `|`, `"` are now rejected (alongside
+  # leading-dash and control chars); backtick, dollar, `!`, and
+  # space remain accepted as legitimate PatternSet / regex
+  # metacharacters.
+  run validate_glob_pattern "exclude" 'foo$bar`baz!qux and a space'
   [ "$status" -eq 0 ]
 }
 
-@test "validate_glob_pattern accepts a glob with double-quote" {
+@test "validate_glob_pattern rejects semicolon (lftp -e command separator)" {
+  run validate_glob_pattern "exclude" 'foo;echo X;quit'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"lftp command separator"* ]]
+}
+
+@test "validate_glob_pattern rejects ampersand and pipe" {
+  run validate_glob_pattern "exclude" 'foo&bar'
+  [ "$status" -eq 2 ]
+  run validate_glob_pattern "exclude" 'foo|bar'
+  [ "$status" -eq 2 ]
+}
+
+@test "validate_glob_pattern rejects double-quote (lftp string delimiter)" {
   run validate_glob_pattern "exclude_delete" '"X"'
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 2 ]
 }
 
 @test "validate_glob_pattern accepts an empty string" {
@@ -245,13 +268,13 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "validate_glob_pattern rejects control characters" {
-  # Tab (0x09). Newlines are not reliably matched by grep's POSIX
-  # [:cntrl:] across implementations; tab is the conventional choice
-  # and is consistent with validate_path's existing control-char test.
-  run validate_glob_pattern "exclude" $'foo\tbar'
+@test "validate_glob_pattern rejects newline" {
+  # v2.11.3.1: grep's POSIX [:cntrl:] never matches \n (grep
+  # splits on \n before matching), so the v2.11.3 implementation
+  # was incomplete. Add an explicit newline check via case.
+  run validate_glob_pattern "exclude" 'foo
+bar'
   [ "$status" -eq 2 ]
-  [[ "$output" == *"control characters"* ]]
 }
 
 @test "validate_glob_pattern rejects a leading dash (would be misread as mirror option)" {

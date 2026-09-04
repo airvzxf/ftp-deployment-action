@@ -530,6 +530,46 @@ if echo "${out}" | grep -qE "ERROR:.*(lftp_settings|\"!\")"; then
 fi
 pass "INPUT_EXCLUDE with '!' (lftp shell escape) passes validation (v2.11.3 #160)"
 
+# Test 28d2 (v2.11.3.1 / post-release F2 audit): the v2.11.3 #160
+# docstring claimed INPUT_EXCLUDE was "a single argv slot to
+# mirror, never parsed by a shell" — FALSE. The value is
+# concatenated unquoted into the `lftp -e` script body, and lftp
+# 4.9.3's parser treats `;`, `&`, `|` as command separators
+# even mid-token. Re-introduce the command-separator rejection.
+# `!`, backtick, `$`, space remain allowed as legitimate
+# PatternSet / regex metacharacters.
+for sep_val in 'foo;echo INJECTED' 'foo&echo INJECTED' 'foo|echo INJECTED' 'foo"X'; do
+  out=$(run_init "INPUT_DRY_RUN=true" "INPUT_EXCLUDE=${sep_val}" 10)
+  echo "${out}" | grep -q "lftp command separator\|double-quote" \
+    || fail "INPUT_EXCLUDE='${sep_val}' was not rejected (v2.11.3.1 F2 audit); output was:\n${out}"
+  echo "${out}" | grep -q "^EXIT=2" \
+    || fail "INPUT_EXCLUDE='${sep_val}' did not exit 2; output was:\n${out}"
+done
+pass "INPUT_EXCLUDE rejects ;, &, |, and \" (lftp -e parser injection, v2.11.3.1)"
+
+# Test 28d3 (v2.11.3.1 / post-release F2 audit): an embedded
+# newline must be rejected (grep's POSIX [:cntrl:] never matches
+# \n, so the v2.11.3 deny-list silently missed newlines).
+nl_env=$(printf 'INPUT_EXCLUDE=foo\\nbar')
+out=$(run_init "${nl_env}" 10)
+echo "${out}" | grep -q "newline\|control characters" \
+  || fail "INPUT_EXCLUDE with embedded newline was not rejected (v2.11.3.1 F2 audit); output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "INPUT_EXCLUDE with embedded newline did not exit 2; output was:\n${out}"
+pass "INPUT_EXCLUDE with embedded newline is rejected (v2.11.3.1 F2 audit)"
+
+# Test 28d4 (v2.11.3.1 / post-release F2 audit): validate_int was
+# line-anchored grep, so a value like "2\n!cmd" passed validation
+# on the first line. The new case-based validator rejects the
+# whole string. Verify with a numeric-with-newline payload.
+nl_int_env=$(printf 'INPUT_FTP_NOP_INTERVAL=2\\n!echo PWNED')
+out=$(run_init "${nl_int_env}" 10)
+echo "${out}" | grep -q "ftp_nop_interval must be a non-negative integer" \
+  || fail "INPUT_FTP_NOP_INTERVAL='2\\n!cmd' was not rejected by the new case-based validator; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "INPUT_FTP_NOP_INTERVAL='2\\n!cmd' did not exit 2; output was:\n${out}"
+pass "INPUT_FTP_NOP_INTERVAL with embedded newline is rejected (v2.11.3.1 F2 audit)"
+
 # ----------------------------------------------------------------------------
 # Test 28e (v2.11.3 #171): boolean inputs that flow into the
 # lftp `-e` script (via build_ftp_settings -> "set <key> <val>;")
