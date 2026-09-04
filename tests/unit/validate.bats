@@ -130,6 +130,136 @@ setup() {
   [[ "$output" == *"dollar"* ]]
 }
 
+@test "validate_path rejects '!' (lftp shell escape — v2.11.3 #172)" {
+  run validate_path "local_dir" 'foo!cat /home/lftp/.netrc'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"\"!\""* ]]
+}
+
+@test "validate_path rejects double-quote (lftp command parsing — v2.11.3 #172)" {
+  run validate_path "remote_dir" 'foo"; cls; quit;'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"double-quote"* ]]
+}
+
+# ----------------------------------------------------------------------------
+# validate_bool — v2.11.3 (#171)
+# ----------------------------------------------------------------------------
+
+@test "validate_bool accepts the documented canonical set" {
+  for v in true false yes no on off 0 1 ""; do
+    run validate_bool "ftp_ssl_allow" "$v"
+    [ "$status" -eq 0 ]
+  done
+}
+
+@test "validate_bool rejects a malicious payload containing '!' (RCE via lftp -e)" {
+  run validate_bool "ftp_ssl_allow" 'true; !cat /home/lftp/.netrc'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"ftp_ssl_allow must be a bool"* ]]
+}
+
+@test "validate_bool rejects a value with a leading semicolon" {
+  run validate_bool "ssl_check_hostname" '; !uname'
+  [ "$status" -eq 2 ]
+}
+
+@test "validate_bool rejects a capitalised value" {
+  run validate_bool "ssl_verify_certificate" "True"
+  [ "$status" -eq 2 ]
+}
+
+@test "validate_bool rejects a numeric string with a suffix" {
+  run validate_bool "ftp_use_feat" "1s"
+  [ "$status" -eq 2 ]
+}
+
+# ----------------------------------------------------------------------------
+# validate_duration — v2.11.3 (#171)
+# ----------------------------------------------------------------------------
+
+@test "validate_duration accepts the empty string (default applies)" {
+  run validate_duration "net_timeout" ""
+  [ "$status" -eq 0 ]
+}
+
+@test "validate_duration accepts 'never' (lftp's documented disable sentinel)" {
+  run validate_duration "dns_fatal_timeout" "never"
+  [ "$status" -eq 0 ]
+}
+
+@test "validate_duration accepts digits with s/m/h/d (case-insensitive)" {
+  for v in 15 15s 5m 1h 2d 30S 5M 1H 1D; do
+    run validate_duration "net_timeout" "$v"
+    [ "$status" -eq 0 ]
+  done
+}
+
+@test "validate_duration rejects a malicious payload containing '; !'" {
+  run validate_duration "net_timeout" '15s; !cat /home/lftp/.netrc'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"net_timeout must be a duration"* ]]
+}
+
+@test "validate_duration rejects a float" {
+  run validate_duration "dns_fatal_timeout" "1.5"
+  [ "$status" -eq 2 ]
+}
+
+@test "validate_duration rejects a value with embedded text" {
+  run validate_duration "net_timeout" "1abc"
+  [ "$status" -eq 2 ]
+}
+
+@test "validate_duration rejects a negative value" {
+  run validate_duration "net_timeout" "-1"
+  [ "$status" -eq 2 ]
+}
+
+# ----------------------------------------------------------------------------
+# validate_glob_pattern — v2.11.3 (#160)
+# ----------------------------------------------------------------------------
+
+@test "validate_glob_pattern accepts a simple glob" {
+  run validate_glob_pattern "exclude" "*.bak"
+  [ "$status" -eq 0 ]
+}
+
+@test "validate_glob_pattern accepts a regex with '!' (the over-rejection v2.11.3 fixes)" {
+  run validate_glob_pattern "exclude" '!important\.txt'
+  [ "$status" -eq 0 ]
+}
+
+@test "validate_glob_pattern accepts a glob with backtick, dollar, semicolon" {
+  run validate_glob_pattern "exclude" 'foo$bar`baz;qux'
+  [ "$status" -eq 0 ]
+}
+
+@test "validate_glob_pattern accepts a glob with double-quote" {
+  run validate_glob_pattern "exclude_delete" '"X"'
+  [ "$status" -eq 0 ]
+}
+
+@test "validate_glob_pattern accepts an empty string" {
+  run validate_glob_pattern "exclude_delete" ""
+  [ "$status" -eq 0 ]
+}
+
+@test "validate_glob_pattern rejects control characters" {
+  # Tab (0x09). Newlines are not reliably matched by grep's POSIX
+  # [:cntrl:] across implementations; tab is the conventional choice
+  # and is consistent with validate_path's existing control-char test.
+  run validate_glob_pattern "exclude" $'foo\tbar'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"control characters"* ]]
+}
+
+@test "validate_glob_pattern rejects a leading dash (would be misread as mirror option)" {
+  run validate_glob_pattern "exclude" "-rf"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"starts with a dash"* ]]
+}
+
 # ----------------------------------------------------------------------------
 # validate_lftp_settings
 # ----------------------------------------------------------------------------

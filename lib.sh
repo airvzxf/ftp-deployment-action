@@ -53,6 +53,108 @@ validate_int() {
 }
 
 # ------------------------------------------------------------------------------
+# validate_bool NAME VALUE
+#   Exit 2 if VALUE is not a recognised boolean. v2.11.3 (#171):
+#   the 7 boolean inputs (`ftp_ssl_allow`, `ssl_verify_certificate`,
+#   `ssl_check_hostname`, `ftp_passive_mode`, `ftp_use_feat`,
+#   plus the two duration inputs handled by validate_duration)
+#   flow verbatim into `build_ftp_settings` -> `lftp -e "set <key>
+#   <value>;"`. A malicious value containing `;` or `!` would let
+#   the workflow author escape into lftp's command parser and
+#   execute arbitrary commands as the `lftp` user (RCE — direct
+#   read of /home/lftp/.netrc before the cleanup trap fires).
+#
+#   Accepted values match lftp's own canonical set: true, false,
+#   yes, no, on, off, 1, 0, plus the empty string (the action.yml
+#   default applies when the input is unset/empty). Any other
+#   value exits 2 before lftp is reached.
+# ------------------------------------------------------------------------------
+validate_bool() {
+  _vb_name=$1
+  _vb_value=$2
+  case "${_vb_value}" in
+    true|false|yes|no|on|off|0|1|"") return 0 ;;
+    *)
+      printf 'ERROR: %s must be a bool (true|false|yes|no|on|off|0|1) (got: %s)\n' \
+        "${_vb_name}" "${_vb_value}" >&2
+      exit 2
+      ;;
+  esac
+}
+
+# ------------------------------------------------------------------------------
+# validate_duration NAME VALUE
+#   Exit 2 if VALUE is not a recognised lftp duration. v2.11.3
+#   (#171): `net_timeout` and `dns_fatal_timeout` flow verbatim
+#   into `build_ftp_settings` -> `lftp -e "set <key> <value>;"`.
+#
+#   Accepted shapes:
+#     * empty string — the action.yml default applies
+#     * "never"      — lftp's documented sentinel that disables
+#                       the timeout (see action.yml::dns_fatal_timeout)
+#     * a positive integer optionally followed by one of
+#       s|m|h|d|S|M|H|D (seconds, minutes, hours, days; case-
+#       insensitive to match lftp's own parser)
+#
+#   Examples accepted: 15, 15s, 5m, 1h, 2d, 30S, 5M, never
+#   Examples rejected: 15; !cmd, 1abc, 1.5, -1, true, 15s!cmd
+# ------------------------------------------------------------------------------
+validate_duration() {
+  _vd_name=$1
+  _vd_value=$2
+  case "${_vd_value}" in
+    "")
+      return 0
+      ;;
+    never)
+      return 0
+      ;;
+    *[!0-9smhdSMHD]*)
+      printf 'ERROR: %s must be a duration (digits or digits+[smhd], or "never") (got: %s)\n' \
+        "${_vd_name}" "${_vd_value}" >&2
+      exit 2
+      ;;
+  esac
+}
+
+# ------------------------------------------------------------------------------
+# validate_glob_pattern NAME VALUE
+#   Light validation for inputs that flow into lftp's `mirror -x`
+#   / `mirror -X` command line (the regex/glob exclude inputs). v2.11.3
+#   (#160): those inputs were being validated by validate_lftp_settings
+#   since v2.11.2, which rejects `!`, backtick, `$`, and limits `;` to
+#   3. But since v2.11.2 the values are no longer concatenated into
+#   the `lftp -e` script body — they are a single argv slot to
+#   `mirror`, never parsed by a shell, so the restrictions are
+#   over-rejecting legitimate glob/regex patterns (e.g. `!important\.txt`,
+#   `!**/node_modules/**`).
+#
+#   Accepts everything that validate_path accepts except for the
+#   lftp command-parsing concerns (which don't apply to a single
+#   argv slot on the mirror command line):
+#     * rejects control characters (would break lftp's argv parsing)
+#     * rejects leading dash (would be misread as `mirror` option)
+#     * does NOT reject `!`, backtick, `$`, `;`, `"` — all are
+#       valid glob/regex metacharacters that lftp's PatternSet
+#       handles natively.
+# ------------------------------------------------------------------------------
+validate_glob_pattern() {
+  _vgp_name=$1
+  _vgp_value=$2
+  if printf '%s' "${_vgp_value}" | grep -qE '[[:cntrl:]]'; then
+    printf 'ERROR: %s contains control characters\n' "${_vgp_name}" >&2
+    exit 2
+  fi
+  case "${_vgp_value}" in
+    -*)
+      printf 'ERROR: %s starts with a dash (would be misread as mirror option)\n' \
+        "${_vgp_name}" >&2
+      exit 2
+      ;;
+  esac
+}
+
+# ------------------------------------------------------------------------------
 # validate_path NAME VALUE
 #   Exit 2 if VALUE looks unsafe for a local or remote path passed to
 #   lftp. The function is a *deny-list*: it rejects a small set of
@@ -61,10 +163,32 @@ validate_int() {
 #   metacharacters). Anything else is allowed; if you need a stricter
 #   policy, build a `validate_path_strict` that allow-lists only
 #   `[A-Za-z0-9._/-]`.
+#
+#   v2.11.3 (#172): also reject double-quote and "!". The double-quote
+#   breaks lftp's `-e` command parser (the script is a single shell
+#   double-quoted argument to lftp; an embedded `"` closes the
+#   lftp-internal string delimiter, allowing an attacker to inject
+#   further lftp commands). The "!" is lftp's shell-escape (runs an
+#   arbitrary command inside the container as the lftp user — direct
+#   path to reading /home/lftp/.netrc before the cleanup trap fires).
+#   The previous deny-list omitted "!" (a regression from the pre-v2.5.0
+#   validator that the v2.11.2 audit surfaced).
 # ------------------------------------------------------------------------------
 validate_path() {
   _vp_name=$1
   _vp_value=$2
+  # v2.11.3 (#172): check for double-quote BEFORE the generic
+  # shell-metacharacter branch below, so the error message points
+  # at the actual problem. `"` is also a shell metacharacter
+  # but its exploit class (lftp `-e` parser injection) is distinct
+  # from `;|&``` (shell command chaining).
+  case "${_vp_value}" in
+    *'"'*)
+      printf 'ERROR: %s contains double-quote (breaks lftp command parsing): %s\n' \
+        "${_vp_name}" "${_vp_value}" >&2
+      exit 2
+      ;;
+  esac
   if printf '%s' "${_vp_value}" | grep -qE '(^|/)\.\.($|/)'; then
     printf 'ERROR: %s contains ".." path traversal: %s\n' \
       "${_vp_name}" "${_vp_value}" >&2
@@ -92,6 +216,16 @@ validate_path() {
       "${_vp_name}" "${_vp_value}" >&2
     exit 2
   fi
+  # v2.11.3 (#172): reject "!" (lftp shell escape). The double-quote
+  # branch is above (must run before the generic shell-metacharacter
+  # branch so the error message is precise).
+  case "${_vp_value}" in
+    *'!'*)
+      printf 'ERROR: %s contains "!" (lftp shell escape): %s\n' \
+        "${_vp_name}" "${_vp_value}" >&2
+      exit 2
+      ;;
+  esac
 }
 
 # ------------------------------------------------------------------------------
