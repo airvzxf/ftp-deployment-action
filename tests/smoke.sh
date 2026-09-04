@@ -547,32 +547,18 @@ for sep_val in 'foo;echo INJECTED' 'foo&echo INJECTED' 'foo|echo INJECTED' 'foo"
 done
 pass "INPUT_EXCLUDE rejects ;, &, |, and \" (lftp -e parser injection, v2.11.3.1)"
 
-# Test 28d3 (v2.11.3.1 / post-release F2 audit): an embedded
-# newline must be rejected (grep's POSIX [:cntrl:] never matches
-# \n, so the v2.11.3 deny-list silently missed newlines).
-# Build via printf with the C-string newline escape. `\n` inside
-# single quotes is interpreted by printf as a real LF, regardless
-# of whether the parent shell is bash or busybox ash.
-nl_env=$(printf 'INPUT_EXCLUDE=foo\nbar')
-out=$(run_init "${nl_env}" 10)
-echo "${out}" | grep -q "newline" \
-  || fail "INPUT_EXCLUDE with embedded newline was not rejected (v2.11.3.1 F2 audit); output was:\n${out}"
-echo "${out}" | grep -q "^EXIT=2" \
-  || fail "INPUT_EXCLUDE with embedded newline did not exit 2; output was:\n${out}"
-pass "INPUT_EXCLUDE with embedded newline is rejected (v2.11.3.1 F2 audit)"
-
-# Test 28d4 (v2.11.3.1 / post-release F2 audit): validate_int was
-# line-anchored grep, so a value like "2\n!cmd" passed validation
-# on the first line. The new case-based validator rejects the
-# whole string. Verify with a numeric-with-newline payload.
-# `\n` inside single quotes is interpreted by printf as a real LF.
-nl_int_env=$(printf 'INPUT_FTP_NOP_INTERVAL=2\n!echo PWNED')
-out=$(run_init "${nl_int_env}" 10)
-echo "${out}" | grep -q "ftp_nop_interval must be a non-negative integer" \
-  || fail "INPUT_FTP_NOP_INTERVAL='2\n!cmd' was not rejected by the new case-based validator; output was:\n${out}"
-echo "${out}" | grep -q "^EXIT=2" \
-  || fail "INPUT_FTP_NOP_INTERVAL='2\n!cmd' did not exit 2; output was:\n${out}"
-pass "INPUT_FTP_NOP_INTERVAL with embedded newline is rejected (v2.11.3.1 F2 audit)"
+# Test 28d3 (v2.11.3.1 / post-release F2 audit): the embedded-
+# newline case CANNOT be tested via the smoke harness's env-file
+# path — docker's --env-file reader treats LF as the line
+# separator, so a value with a literal newline is split into
+# two env vars (`INPUT_EXCLUDE=foo` and `bar`) before the
+# validator ever sees it. The case is covered at the unit
+# level in tests/unit/validate.bats (validate_glob_pattern
+# rejects newline, validate_int rejects newline). Documenting
+# here so a future maintainer doesn't add a smoke test that
+# can never fire.
+#
+# Test 28d4 (v2.11.3.1): same applies for validate_int — see 28d3.
 
 # ----------------------------------------------------------------------------
 # Test 28e (v2.11.3 #171): boolean inputs that flow into the
