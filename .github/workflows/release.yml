@@ -86,8 +86,22 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${RAW}"
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]] \
-            || { echo "ERROR: '$TAG' is not vX.Y.Z (optionally -suffix)"; exit 1; }
+          # v2.11.3 (#157): drop the bash-only `[[ =~ ]]` form
+          # for a POSIX-portable case pattern. The bash form is
+          # currently load-bearing only because GH Actions' default
+          # shell for ubuntu-latest is bash, but the project's
+          # AGENTS.md convention is `[ ]` over `[[ ]]` and the
+          # Makefile `shellcheck` target does not lint .github/
+          # workflows/*.yml, so a future maintainer who sets
+          # `defaults.run.shell: sh` for hermetic builds would
+          # silently break this step. The case form below accepts
+  # every shape the bash regex did (single- or multi-digit
+  # version components, optional dash-suffix like `-rc.1`),
+  # without the bash dependency.
+          case "${TAG}" in
+            v[0-9]*.[0-9]*.[0-9]*|"v[0-9]*.[0-9]*.[0-9]*-"*) ;;
+            *) echo "ERROR: '${TAG}' is not vX.Y.Z (optionally -suffix)"; exit 1 ;;
+          esac
           echo "TAG=${TAG}" >> "$GITHUB_OUTPUT"
 
   # Job 2: tag-reachability guard. Enforces AGENTS.md "tag the
@@ -313,7 +327,7 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
         run: |
-          set -eu
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             tag="${{ inputs.version }}"
           else
@@ -505,7 +519,7 @@ jobs:
         env:
           IMAGE: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
         run: |
-          set -e
+          set -euo pipefail
           tests/release-smoke.sh "${IMAGE}"
 
       - name: Generate SBOM (CycloneDX)
@@ -529,7 +543,7 @@ jobs:
           COSIGN_EXPERIMENTAL: '1'
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          set -eu
+          set -euo pipefail
           cosign sign --yes "${{ steps.meta.outputs.image }}@${DIGEST}"
           if [ "${{ steps.meta.outputs.dockerhub_enabled }}" = "true" ]; then
             cosign sign --yes "${{ steps.meta.outputs.dockerhub_image }}@${DIGEST}"
@@ -576,7 +590,7 @@ jobs:
       - name: Extract CHANGELOG notes for this version
         id: notes
         run: |
-          set -eu
+          set -euo pipefail
           version="${{ steps.meta.outputs.version }}"
           notes=$(awk -v v="${version}" '
               BEGIN {
