@@ -112,7 +112,13 @@ jobs:
       - name: Build the smoke-test image
         run: make build-smoke-image SMOKE_IMAGE=ftp-deployment-action-smoke:ci-integration
       - name: Run entrypoint.sh smoke tests
-        run: tests/smoke.sh
+        # `make smoke` (not `tests/smoke.sh` directly) so the
+        # Makefile's `export SMOKE_IMAGE` directive propagates the
+        # value set on the build step into the script's env.
+        # Without this, the script falls back to its hard-coded
+        # `ftp-deployment-action-smoke:local` default and fails
+        # the image-inspect preflight.
+        run: make smoke SMOKE_IMAGE=ftp-deployment-action-smoke:ci-integration
 
   # Integration tests (issue #117): boot a real vsftpd container
   # (docker.io/fauria/vsftpd) and exercise the action against it.
