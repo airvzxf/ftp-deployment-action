@@ -1133,9 +1133,16 @@ acquire_lock_with_recovery() {
 #   LOCK_PATH: the lock dir on the FTP server (e.g. .lftp-deployment.lock).
 #   SENTINEL: (optional) the sentinel filename to DELE first. Falls
 #             back to $ACQUIRED_LOCK_SENTINEL. If neither is set,
-#             we skip the DELE (the lock dir alone is still RMDed
-#             — covers the case where the previous holder died
-#             before writing the sentinel).
+#             the function is a no-op — we never acquired the lock
+#             in this run, and issuing `quote RMD <lock_path>` would
+#             race any concurrent holder's lock dir. The
+#             stale-holder-cleanup semantics the v2.5.0 docstring
+#             described ("RMD the lock dir even without a sentinel,
+#             covers the case where the previous holder died before
+#             writing the sentinel") were always speculative — the
+#             only call site is the one-shot EXIT trap, which only
+#             fires for the current process. v2.11.3 (#188) removes
+#             the unsafe RMD.
 #   USER: (optional, v2.11.x / #132) — when non-empty AND SERVER has
 #         a scheme but no embedded user, USER is embedded into the
 #         URL via rewrite_lftp_url so lftp's .netrc lookup fires.
@@ -1152,6 +1159,24 @@ release_lock_safely() {
   _rls_user=${4:-}
 
   if [ -z "${_rls_path}" ]; then
+    return 0
+  fi
+
+  # v2.11.3 (#188): if no sentinel is available (neither the explicit
+  # arg nor $ACQUIRED_LOCK_SENTINEL is set), this process never
+  # acquired the lock — the EXIT trap fired BEFORE acquire_lock_with_recovery
+  # set ACQUIRED_LOCK_SENTINEL, or during its polling loop. Issuing
+  # `quote RMD <lock_path>` in this state races a parallel runner
+  # that legitimately holds the lock: the trap would remove the
+  # live holder's lock dir, defeating the serialization
+  # concurrency_lock exists to provide. The trap's job is to release
+  # what THIS process acquired, not to clean up any lock it sees.
+  # The previous behaviour (always RMD when no sentinel) was a
+  # residual side-effect of the pre-v2.9.0 inline-lftp layout that
+  # kept leaking into subsequent versions; #188 surfaced it via the
+  # audit (the v2.11.2 issue body described the mechanism imprecisely
+  # — the actual harm is `quote RMD`, not sentinel DELE).
+  if [ -z "${_rls_sentinel}" ] && [ -z "${ACQUIRED_LOCK_SENTINEL:-}" ]; then
     return 0
   fi
 

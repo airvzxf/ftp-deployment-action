@@ -462,15 +462,18 @@ FAKE
   grep -q "ftp://ftptest@example.test" "${FAKE_LFTP_LOG}"
 }
 
-@test "release_lock_safely: only RMDs lock dir when no sentinel provided" {
+@test "release_lock_safely: no-op when no sentinel AND ACQUIRED_LOCK_SENTINEL empty (v2.11.3 #188)" {
+  # The v2.11.3 fix: if neither the explicit arg nor the global
+  # ACQUIRED_LOCK_SENTINEL is set, this process never acquired the
+  # lock — issuing `quote RMD <lock_path>` would race a parallel
+  # runner's live lock dir. The function must be a complete no-op.
   unset ACQUIRED_LOCK_SENTINEL
   rm -f "${FAKE_LFTP_LOG}"
   run release_lock_safely \
     "ftp://example.test" ".lftp-deployment.lock" "" "ftptest"
   [ "$status" -eq 0 ]
-  grep -q "quote RMD .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
-  if grep -q "quote DELE" "${FAKE_LFTP_LOG}"; then
-    echo "release_lock_safely should not DELE anything without a sentinel"
+  if [ -s "${FAKE_LFTP_LOG}" ]; then
+    echo "release_lock_safely must not invoke lftp when no sentinel is available (would race live holder); log was:"
     cat "${FAKE_LFTP_LOG}"
     false
   fi
@@ -483,6 +486,7 @@ FAKE
     "ftp://example.test" ".lftp-deployment.lock" "" "ftptest"
   [ "$status" -eq 0 ]
   grep -q "quote DELE .lftp-deployment.lock.20260707T080000Z.1234.info" "${FAKE_LFTP_LOG}"
+  grep -q "quote RMD .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
 }
 
 @test "release_lock_safely: no-op when lock_path is empty" {
