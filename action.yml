@@ -110,7 +110,7 @@ inputs:
     required: false
     default: 'true'
   concurrency_lock:
-    description: 'If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory before the mirror. Implementation: lftp issues `quote MKD <path>` before the mirror and `quote RMD <path>` after; while MKD returns 550 (lock held), the action polls up to `concurrency_lock_timeout` seconds. Uses RFC 959 MKD/RMD which every FTP server supports. The lock is released on any exit path (success, error, SIGINT, 5h timeout) by the cleanup trap. Default is "false" (no cross-runner serialization). For zero-config serialization, prefer the GitHub Actions `concurrency:` block in your workflow. Stale-lock auto-recovery (v2.9.0): if the previous holder died before RMD (runner OOM, SIGKILL, 6h job limit), a timestamp-encoded sentinel file is left at the FTP root; the next runner detects it as stale (older than `concurrency_lock_timeout`) and takes over automatically. See README "Concurrency / deployment lock" for details.'
+    description: 'If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory before the mirror. Implementation: lftp issues the high-level `mkdir <path>` (v2.11.0, closes #121) before the mirror and `quote RMD <path>` after; while mkdir returns 550 (lock held), the action polls up to `concurrency_lock_timeout` seconds. Uses RFC 959 MKD/RMD which every FTP server supports. The lock is released on any exit path (success, error, SIGINT, 5h timeout) by the cleanup trap. Default is "false" (no cross-runner serialization). For zero-config serialization, prefer the GitHub Actions `concurrency:` block in your workflow. Stale-lock auto-recovery (v2.9.0): if the previous holder died before RMD (runner OOM, SIGKILL, 6h job limit), a timestamp-encoded sentinel file is left at the FTP root; the next runner detects it as stale (older than `concurrency_lock_timeout`) and takes over automatically. See README "Concurrency / deployment lock" for details.'
     required: false
     default: 'false'
   concurrency_lock_path:
@@ -125,6 +125,16 @@ inputs:
     description: 'Seconds between lock acquisition attempts when `concurrency_lock` is "true". Default is 5, which gives 60 attempts over the default 300-second timeout. Lower values reduce the time-to-acquire after the holder releases; higher values reduce the number of MKD round-trips against the server.'
     required: false
     default: '5'
+# v2.11.3 (#197): declare the outputs that entrypoint.sh writes
+# to $GITHUB_OUTPUT. For Docker actions the runner surfaces the
+# keys regardless of whether they're declared here, but the
+# declaration (a) matches GitHub's "strongly recommended" metadata
+# guidance, (b) gives IDE autocomplete + typed-actions consumers a
+# schema, and (c) lets future contract tests catch drift between
+# action.yml outputs and the keys entrypoint.sh actually writes.
+outputs:
+  log_file:
+    description: 'Path inside the container to the captured lftp log file (e.g. /home/lftp/.lftp-logs/run-<UTC-timestamp>.log). Read it with a follow-up step that uses `actions/upload-artifact` to attach it to the run for debugging failed deployments.'
 runs:
   using: 'docker'
   image: 'Dockerfile'

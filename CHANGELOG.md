@@ -958,12 +958,22 @@ malformed input).
 Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 
 
+[2.11.2]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.1...v2.11.2
+[2.11.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.0...v2.11.1
+[2.11.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.10.0...v2.11.0
+[2.10.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.9.0...v2.10.0
+[2.9.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.8.0...v2.9.0
+[2.8.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.7.0...v2.8.0
+[2.7.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.6.0...v2.7.0
+[2.6.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.5.0...v2.6.0
+[2.5.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.4.1...v2.5.0
+[2.4.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.4.0...v2.4.1
+[2.4.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.3.1...v2.4.0
+[2.3.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.3.0...v2.3.1
+[2.3.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.2.0...v2.3.0
+[2.2.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.0.1...v2.1.0
+[2.0.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v1.5.0...v2.0.0
 [1.5.0]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.5.0
-[2.9.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.8.0...v2.9.0
-[2.10.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.9.0...v2.10.0
-[2.4.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.4.0...v2.4.1
 [1.3.3]: https://github.com/airvzxf/ftp-deployment-action/releases/tag/v1.3.3
-[2.0.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.0.0...v2.0.1
-[2.8.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.7.0...v2.8.0

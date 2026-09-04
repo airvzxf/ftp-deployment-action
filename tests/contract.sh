@@ -35,9 +35,13 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 ok()   { printf '  ok: %s\n' "$*"; }
 
 # 1. Inputs declared in action.yml (top-level keys under "inputs:").
+# v2.11.3 (#197): stop scanning when we hit either `runs:` or
+# `outputs:` (both are top-level siblings of `inputs:`; for Docker
+# actions, `outputs:` sits next to `runs:`, not inside it, so the
+# earlier parser picked up output keys like `log_file` as inputs).
 declared=$(awk '
   /^inputs:/ { in_inputs = 1; next }
-  in_inputs && /^runs:/ { in_inputs = 0; next }
+  in_inputs && (/^runs:/ || /^outputs:/) { in_inputs = 0; next }
   in_inputs && /^  [a-z][a-z0-9_]*:$/ {
     sub(/:$/, "")
     sub(/^  /, "")
