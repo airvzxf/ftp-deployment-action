@@ -112,6 +112,12 @@ trap 'rm -f "${_env}" "${FTP_VSFTPD_CONF:-}"; stop_ftp_server' EXIT
   # a silent plaintext fallback.
   printf 'INPUT_LFTP_SETTINGS=set ftp:ssl-force true;set net:persist-retries 0;\n'
 } > "${_env}"
+# v2.11.3 (#158): see scenario 03 — INPUT_PASSWORD in this tmpfile
+# must not be world-readable. mktemp on alpine busybox defaults to
+# mode 0644; chmod 0600 closes the gap (matches tests/integration/
+# lib/common.sh:406 for the scenarios that go through
+# lftp_build_open_script / build_action_env_file).
+chmod 0600 "${_env}"
 
 # --- Step 3: invoke the action ------------------------------------------------
 _log=$(mktemp -t actlog.XXXXXX) || log_fail "mktemp log file failed"

@@ -29,6 +29,21 @@ else
   skip "no docker/podman found"
 fi
 
+# v2.11.3 (#137): smoke tests run inside a pre-baked image that
+# already has lftp + ca-certificates installed (see
+# tests/Dockerfile.smoke). The previous flow did `apk add --no-cache`
+# inside every container, which (a) raced the apk index download
+# against the wait_for_port deadline in CI and (b) silently masked
+# apk failures behind the `>/dev/null 2>&1` so a network error
+# looked like an entrypoint.sh error. The pre-baked image is built
+# once via `make build-smoke-image` and is pinned to the same
+# alpine digest + lftp version as the production image (see
+# tests/Dockerfile.smoke for the rationale).
+SMOKE_IMAGE="${SMOKE_IMAGE:-ftp-deployment-action-smoke:local}"
+if ! ${RUNTIME} image inspect "${SMOKE_IMAGE}" >/dev/null 2>&1; then
+  fail "smoke image ${SMOKE_IMAGE} not found; run: make build-smoke-image"
+fi
+
 # Build the base env that all tests use. The dummy server refuses
 # connections on port 1, so lftp fails immediately.
 common_env() {
@@ -77,8 +92,8 @@ run_init() {
     -v "${ROOT}:/app:ro" \
     -w /app \
     --env-file "${_env_file}" \
-    alpine:3.23.3 \
-    /bin/sh -c "apk add --no-cache lftp ca-certificates >/dev/null 2>&1 && timeout ${_t} sh ${INIT_REL} 2>&1; echo EXIT=\$?" \
+    "${SMOKE_IMAGE}" \
+    /bin/sh -c "timeout ${_t} sh ${INIT_REL} 2>&1; echo EXIT=\$?" \
     2>&1
   rm -f "${_env_file}"
 }
@@ -221,14 +236,32 @@ pass 'lftp_settings with "!" (lftp shell escape) is rejected (exit 2)'
 # ----------------------------------------------------------------------------
 # We can't actually connect to [::1] in the test container, but the
 # host extraction should at least not error out on the URL form.
-out=$(run_init 'INPUT_SERVER=ftp://[::1]:21 INPUT_PASSWORD=foo' 30)
+#
+# v2.11.3 (#159): the previous version passed a single quoted string
+# `'INPUT_SERVER=ftp://[::1]:21 INPUT_PASSWORD=foo'`, which POSIX sh
+# parses as ONE argument — the space inside the single-quoted block
+# is not a word separator. run_init then wrote it verbatim as a
+# single env-file line, so `INPUT_PASSWORD=foo` was silently
+# conflated into `INPUT_SERVER` (the container saw
+# `INPUT_SERVER=ftp://[::1]:21 INPUT_PASSWORD=foo` as one var and
+# left `INPUT_PASSWORD` at its `common_env` value `p`). The test
+# passed only because lftp then fails on the malformed URL. Fix:
+# pass the two env values as two separately-quoted arguments so
+# they land in the env file on separate lines.
+out=$(run_init 'INPUT_SERVER=ftp://[::1]:21' 'INPUT_PASSWORD=foo' 30)
 # If the script runs at all (vs. aborting with a parse error), the
 # IPv6 host extraction is functional.
 echo "${out}" | grep -qE "ERROR: (max_retries|local_dir|remote_dir|lftp_settings)" \
   && fail "IPv6 host triggered a validation error; output was:\n${out}"
 echo "${out}" | grep -q "^EXIT=1" \
   || fail "IPv6 host test did not exit 1 (expected connection failure); output was:\n${out}"
-pass "bracketed IPv6 host does not break the script"
+# v2.11.3 (#159): also assert the password actually reached the
+# container, so a future regression in run_init's arg parsing or in
+# --env-file's line-splitting fails loud instead of silently keeping
+# the common_env default.
+echo "${out}" | grep -qF "::add-mask::foo" \
+  || fail "INPUT_PASSWORD=foo did not reach the container; output was:\n${out}"
+pass "bracketed IPv6 host does not break the script (and INPUT_PASSWORD=foo reaches the container)"
 
 # ----------------------------------------------------------------------------
 # Test 12: B-16 — documented lftp_settings (3 ';' chained) is accepted

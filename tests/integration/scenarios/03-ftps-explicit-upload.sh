@@ -107,6 +107,17 @@ trap 'rm -f "${_env}" "${FTP_VSFTPD_CONF:-}"; stop_ftp_server' EXIT
   printf 'INPUT_SSL_CHECK_HOSTNAME=false\n'
   printf 'INPUT_LFTP_SETTINGS=set ftp:ssl-force true;set net:persist-retries 0;\n'
 } > "${_env}"
+# v2.11.3 (#158): mktemp on alpine busybox creates files with mode
+# 0644, not 0600. INPUT_PASSWORD lives in this file (Docker's
+# --env-file reader is the standard `getline` split, not a keyring),
+# so without the chmod the credential is world-readable for the
+# lifetime of the container. Scenarios 01/02/05/07–12 already go
+# through `lftp_build_open_script` or `build_action_env_file`, which
+# call chmod 0600; 03/04 inlined the write because they need to
+# embed FTP_USER into INPUT_SERVER (see the rewrite_lftp_url /
+# .netrc path), and missed the chmod. Same pattern as #133's fix
+# at tests/integration/lib/common.sh:406.
+chmod 0600 "${_env}"
 
 # --- Step 3: invoke the action ------------------------------------------------
 #

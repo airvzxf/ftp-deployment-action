@@ -25,6 +25,17 @@ IMAGE            ?= ftp-deployment-action:local
 # race.
 TEST_SERVER_IMAGE ?= ftp-deployment-action-test-server:ci-integration
 
+# Pre-baked smoke-test image (tests/Dockerfile.smoke). Used by
+# tests/smoke.sh (45 invocations across the suite). Closed #137:
+# the previous inline `apk add --no-cache lftp ca-certificates` on
+# every smoke container raced the apk index download and silently
+# masked apk failures behind `>/dev/null 2>&1`. The pre-baked image
+# is built once via `make build-smoke-image` and pinned to the
+# same alpine digest + lftp version as the production image
+# (Dockerfile:18-21), so the smoke suite exercises the same
+# runtime the user gets.
+SMOKE_IMAGE ?= ftp-deployment-action-smoke:local
+
 # Container runtime detection (matches the runtime-detection logic in
 # tests/integration/lib/common.sh: docker first, podman fallback).
 # Used by `clean` so a rootless-podman-only developer gets their
@@ -52,6 +63,7 @@ RUNTIME          := $(shell command -v docker 2>/dev/null || command -v podman 2
 # command line; this only affects the local-dev override path.
 export IMAGE
 export TEST_SERVER_IMAGE
+export SMOKE_IMAGE
 
 # ----------------------------------------------------------------------------
 # Lint: shellcheck on all .sh files, actionlint on action.yml, hadolint
@@ -89,8 +101,12 @@ hadolint:
 	# Both the action Dockerfile and the pre-baked FTPS test server
 	# Dockerfile (closes #135). The previous target only covered
 	# `Dockerfile`, which left Dockerfile.test-server unlinted in CI.
+	# v2.11.3 (#137): also lint the pre-baked smoke-test image so
+	# hadolint's DL3018 (pin apk versions) and DL3006 (pin base) cover
+	# it from the first CI run.
 	hadolint --failure-threshold error Dockerfile
 	hadolint --failure-threshold error tests/integration/Dockerfile.test-server
+	hadolint --failure-threshold error tests/Dockerfile.smoke
 
 # ----------------------------------------------------------------------------
 # Test: the contract test (action.yml <-> entrypoint.sh/lib.sh consistency)
@@ -148,10 +164,58 @@ build:
 # the docker daemon — the rest of the repo (action source, fixtures,
 # etc.) is never visible to the build.
 # ----------------------------------------------------------------------------
+# build-test-server-image: build the pre-baked FTPS test server image
+# (tests/integration/Dockerfile.test-server) used by scenarios 03 and
+# 04. CI builds this before `make integration`; local developers can
+# run it standalone with `make build-test-server-image
+# TEST_SERVER_IMAGE=ftpint-test-server:local`. The Makefile variable
+# TEST_SERVER_IMAGE defaults to `ftp-deployment-action-test-server:
+# ci-integration`, matching the tag the CI workflow uses, so the
+# Makefile target is in lockstep with `make integration` without
+# needing a separate flag.
+#
+# `tests/integration` is the build context (not the repo root) so
+# only the Dockerfile.test-server and its adjacent files are sent to
+# the docker daemon — the rest of the repo (action source, fixtures,
+# etc.) is never visible to the build.
+#
+# v2.11.3 (#156): Dockerfile.test-server pins `# syntax=docker/
+# dockerfile:1.4` and uses a heredoc (`<<'EOF'`) for the pam.d
+# vsftpd_virtual config. Plain `docker build` defaults to the legacy
+# builder on Docker < 23.0 and rejects both, with a confusing parse
+# error pointing at the heredoc line. CI happens to work today only
+# because the GH Actions `ubuntu-latest` runner ships Docker 23+
+# (BuildKit default builder). Switch to `docker buildx build` to
+# match the canonical path used in `.github/workflows/release.yml`
+# (`docker/setup-buildx-action@v4.3.0`) and make the BuildKit
+# requirement load-bearing rather than incidental.
+# ----------------------------------------------------------------------------
 .PHONY: build-test-server-image
 build-test-server-image:
-	docker build -f tests/integration/Dockerfile.test-server \
+	docker buildx build -f tests/integration/Dockerfile.test-server \
 	    -t $(TEST_SERVER_IMAGE) tests/integration
+
+# ----------------------------------------------------------------------------
+# build-smoke-image: build the pre-baked smoke-test image
+# (tests/Dockerfile.smoke) used by tests/smoke.sh. CI builds this
+# before `make smoke`; local developers can run it standalone with
+# `make build-smoke-image SMOKE_IMAGE=ftpint-smoke:local`. The
+# Makefile variable SMOKE_IMAGE defaults to `ftp-deployment-action-
+# smoke:local`, matching the tag tests/smoke.sh expects (overridable
+# for the `make smoke` target above).
+#
+# `tests` is the build context (not the repo root) so only the
+# Dockerfile.smoke is sent to the docker daemon — the rest of the
+# repo (action source, fixtures, scenarios, etc.) is never visible
+# to the build. Same `docker buildx build` switch as
+# `build-test-server-image` (closes #156): the syntax directive and
+# any future heredoc syntax would otherwise fail under legacy
+# `docker build` on Docker < 23.0.
+# ----------------------------------------------------------------------------
+.PHONY: build-smoke-image
+build-smoke-image:
+	docker buildx build -f tests/Dockerfile.smoke \
+	    -t $(SMOKE_IMAGE) tests
 
 # ----------------------------------------------------------------------------
 # Integration: boot a real vsftpd container (docker.io/fauria/vsftpd) and
@@ -225,3 +289,4 @@ release:
 clean:
 	-$(RUNTIME) rmi -f $(IMAGE) 2>/dev/null
 	-$(RUNTIME) rmi -f $(TEST_SERVER_IMAGE) 2>/dev/null
+	-$(RUNTIME) rmi -f $(SMOKE_IMAGE) 2>/dev/null

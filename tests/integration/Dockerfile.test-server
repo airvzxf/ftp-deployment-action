@@ -51,6 +51,16 @@
 #                container. Keeping the server image openssl-free
 #                drops ~5 MB and one piece of unused attack
 #                surface.
+#   * lftp + ca-certificates (v2.11.3 / #136) — the lftp client
+#                used by lftp_run_script (tests/integration/lib/
+#                common.sh:286). Pre-baking them eliminates the
+#                apk-index race the inline `apk add --no-cache lftp`
+#                inside every integration container was hitting
+#                (same class as #135 for the FTPS server, same class
+#                as #137 for the smoke suite). Versions pinned to
+#                match the action Dockerfile (4.9.3-r0 /
+#                20260611-r0) so the integration scenarios exercise
+#                the same lftp the user gets.
 #
 # Filesystem prep (moved out of the per-scenario -c payload into
 # the image, because they are CONSTANT across every scenario run):
@@ -95,6 +105,8 @@ FROM alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943
 
 RUN apk add --no-cache \
       vsftpd=3.0.5-r3 \
+      lftp=4.9.3-r0 \
+      ca-certificates=20260611-r0 \
  && mkdir -p /etc/pam.d /var/log/vsftpd \
  && cat > /etc/pam.d/vsftpd_virtual <<'EOF'
 auth required pam_unix.so

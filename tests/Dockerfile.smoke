@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1.4
+#
+# tests/Dockerfile.smoke
+#
+# Pre-baked smoke-test image for tests/smoke.sh. The smoke tests
+# spawn an alpine container per test, run entrypoint.sh inside it,
+# and assert the validation/lftp-failure paths without a real FTP
+# server. The previous flow did `apk add --no-cache lftp ca-certificates`
+# inside every container (tests/smoke.sh:80-81), which:
+#   * downloaded the package index on every one of the 45 smoke
+#     test invocations — wasted CI minutes and re-introduced the
+#     same apk-index race that #135 closed for the FTPS server.
+#   * silently swallowed apk's stderr (`>/dev/null 2>&1`), so a
+#     network failure surfaced as a misleading "unreachable server
+#     did not produce lftp exit code message" instead of an apk
+#     error, making the actual problem hard to diagnose.
+#   * pulled alpine:3.23.3 + un-pinned lftp, drifting from the
+#     action image's pinned alpine@sha256:28bd5… + lftp=4.9.3-r0
+#     so the smoke tests validated entrypoint.sh against a
+#     different runtime than the production image.
+#
+# Build with:
+#   make build-smoke-image SMOKE_IMAGE=ftp-deployment-action-smoke:ci
+#
+# The smoke container no longer needs root or apk; it only runs
+# /bin/sh on a single test invocation, and the entrypoint is
+# bind-mounted from the repo root (so the smoke image always
+# exercises the latest source, no rebuild on code change).
+#
+# Base image: same digest as the action Dockerfile (3.24), so the
+# CI lint and runtime parity stays trivial.
+#
+# v2.11.3 (#137).
+
+FROM alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+
+RUN apk add --no-cache \
+      lftp=4.9.3-r0 \
+      ca-certificates=20260611-r0

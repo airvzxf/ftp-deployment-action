@@ -101,8 +101,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Run entrypoint.sh smoke tests in alpine
-        run: tests/smoke.sh
+      # v2.11.3 (#137): build the pre-baked smoke-test image
+      # (tests/Dockerfile.smoke) once, then run the suite against
+      # it. The previous inline `apk add --no-cache lftp ca-certificates`
+      # inside every container raced the apk index download and
+      # silently masked apk failures behind `>/dev/null 2>&1`. The
+      # pre-baked image is pinned to the same alpine digest + lftp
+      # version as the production image, so the smoke suite
+      # exercises the same runtime the user gets.
+      - name: Build the smoke-test image
+        run: make build-smoke-image SMOKE_IMAGE=ftp-deployment-action-smoke:ci-integration
+      - name: Run entrypoint.sh smoke tests
+        # `make smoke` (not `tests/smoke.sh` directly) so the
+        # Makefile's `export SMOKE_IMAGE` directive propagates the
+        # value set on the build step into the script's env.
+        # Without this, the script falls back to its hard-coded
+        # `ftp-deployment-action-smoke:local` default and fails
+        # the image-inspect preflight.
+        run: make smoke SMOKE_IMAGE=ftp-deployment-action-smoke:ci-integration
 
   # Integration tests (issue #117): boot a real vsftpd container
   # (docker.io/fauria/vsftpd) and exercise the action against it.
