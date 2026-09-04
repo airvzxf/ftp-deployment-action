@@ -41,15 +41,28 @@ _indirection() {
 # ------------------------------------------------------------------------------
 # validate_int NAME VALUE
 #   Exit 2 with a clear error if VALUE is not a non-negative integer.
+#
+#   v2.11.3.1 (post-release F2 audit): the previous implementation
+#   piped through `grep -qE '^[0-9]+$'`, which matches per LINE —
+#   a value like `"2\n!cmd"` satisfied `^[0-9]+$` on the first line
+#   and slipped past validation. Since every validate_int input
+#   flows verbatim into the `lftp -e` script body (via
+#   build_ftp_settings' `set <key> <value>;` and build_mirror_command's
+#   `--verbose=`), a newline would start a new lftp command line and
+#   `!` would invoke the lftp shell-escape. Same RCE class as
+#   #171 / #172. Use a POSIX case-pattern instead so the entire
+#   string is checked, including any embedded newlines.
 # ------------------------------------------------------------------------------
 validate_int() {
   _vi_name=$1
   _vi_value=$2
-  printf '%s' "${_vi_value}" | grep -qE '^[0-9]+$' || {
-    printf 'ERROR: %s must be a non-negative integer (got: %s)\n' \
-      "${_vi_name}" "${_vi_value}" >&2
-    exit 2
-  }
+  case "${_vi_value}" in
+    ''|*[!0-9]*)
+      printf 'ERROR: %s must be a non-negative integer (got: %s)\n' \
+        "${_vi_name}" "${_vi_value}" >&2
+      exit 2
+      ;;
+  esac
 }
 
 # ------------------------------------------------------------------------------
@@ -123,24 +136,35 @@ validate_duration() {
 #   / `mirror -X` command line (the regex/glob exclude inputs). v2.11.3
 #   (#160): those inputs were being validated by validate_lftp_settings
 #   since v2.11.2, which rejects `!`, backtick, `$`, and limits `;` to
-#   3. But since v2.11.2 the values are no longer concatenated into
-#   the `lftp -e` script body — they are a single argv slot to
-#   `mirror`, never parsed by a shell, so the restrictions are
-#   over-rejecting legitimate glob/regex patterns (e.g. `!important\.txt`,
-#   `!**/node_modules/**`).
+#   3. v2.11.3 closed #160 by switching to a lighter validator.
 #
-#   Accepts everything that validate_path accepts except for the
-#   lftp command-parsing concerns (which don't apply to a single
-#   argv slot on the mirror command line):
-#     * rejects control characters (would break lftp's argv parsing)
-#     * rejects leading dash (would be misread as `mirror` option)
-#     * does NOT reject `!`, backtick, `$`, `;`, `"` — all are
-#       valid glob/regex metacharacters that lftp's PatternSet
-#       handles natively.
+#   v2.11.3.1 (post-release F2 audit): the original #160 docstring
+#   claimed the value is "a single argv slot to `mirror`, never
+#   parsed by a shell". That premise is FALSE — `build_mirror_command`
+#   concatenates the value unquoted into MIRROR_COMMAND (lib.sh:546,
+#   lib.sh:557), and `run_lftp_once` then concatenates MIRROR_COMMAND
+#   into the `lftp -e` script body (lib.sh:919). lftp 4.9.3's `-e`
+#   parser treats `;`, `&`, `|` as command separators even when they
+#   appear mid-token (verified with `lftp -e '... -x foo;echo X;...'`).
+#   Re-introduce the command-separator rejection. `!`, backtick, `$`,
+#   `"` remain allowed because they are valid PatternSet / regex
+#   metacharacters that lftp's glob / regex parser handles without
+#   command-separator semantics.
 # ------------------------------------------------------------------------------
 validate_glob_pattern() {
   _vgp_name=$1
   _vgp_value=$2
+  # Newline check via case (grep [[:cntrl:]] never matches \n).
+  # The case pattern below embeds a literal LF; this is portable
+  # POSIX and avoids the shellcheck SC3003 (bash-only $'\n')
+  # warning that the runtime (busybox ash) does not understand.
+  case "${_vgp_value}" in
+    *"
+"*)
+      printf 'ERROR: %s contains newline: %s\n' "${_vgp_name}" "${_vgp_value}" >&2
+      exit 2
+      ;;
+  esac
   if printf '%s' "${_vgp_value}" | grep -qE '[[:cntrl:]]'; then
     printf 'ERROR: %s contains control characters\n' "${_vgp_name}" >&2
     exit 2
@@ -149,6 +173,11 @@ validate_glob_pattern() {
     -*)
       printf 'ERROR: %s starts with a dash (would be misread as mirror option)\n' \
         "${_vgp_name}" >&2
+      exit 2
+      ;;
+    *';'*|*'&'*|*'|'*|*'"'*)
+      printf 'ERROR: %s contains lftp command separator (; & |) or double-quote: %s\n' \
+        "${_vgp_name}" "${_vgp_value}" >&2
       exit 2
       ;;
   esac
@@ -201,6 +230,18 @@ validate_path() {
       exit 2
       ;;
   esac
+  # v2.11.3.1 (post-release F2 audit): grep's POSIX [[:cntrl:]]
+  # never matches \n (grep splits on \n before matching), so an
+  # embedded newline bypassed the deny-list. Use a case pattern
+  # with an embedded literal LF (POSIX-portable; busybox ash
+  # handles this fine and shellcheck flags $'\n' as a bashism).
+  case "${_vp_value}" in
+    *"
+"*)
+      printf 'ERROR: %s contains newline: %s\n' "${_vp_name}" "${_vp_value}" >&2
+      exit 2
+      ;;
+  esac
   if printf '%s' "${_vp_value}" | grep -qE '[[:cntrl:]]'; then
     printf 'ERROR: %s contains control characters: %s\n' \
       "${_vp_name}" "${_vp_value}" >&2
@@ -239,6 +280,15 @@ validate_path() {
 # ------------------------------------------------------------------------------
 validate_lftp_settings() {
   _vls_value=$1
+  # v2.11.3.1: newline check before the grep-based ctrl check
+  # (grep [[:cntrl:]] does not match \n).
+  case "${_vls_value}" in
+    *"
+"*)
+      printf 'ERROR: lftp_settings contains newline\n' >&2
+      exit 2
+      ;;
+  esac
   if printf '%s' "${_vls_value}" | grep -qE '[[:cntrl:]]'; then
     printf 'ERROR: lftp_settings contains control characters\n' >&2
     exit 2
