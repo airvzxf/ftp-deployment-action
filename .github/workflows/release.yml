@@ -95,9 +95,9 @@ jobs:
           # workflows/*.yml, so a future maintainer who sets
           # `defaults.run.shell: sh` for hermetic builds would
           # silently break this step. The case form below accepts
-  # every shape the bash regex did (single- or multi-digit
-  # version components, optional dash-suffix like `-rc.1`),
-  # without the bash dependency.
+          # every shape the bash regex did (single- or multi-digit
+          # version components, optional dash-suffix like `-rc.1`),
+          # without the bash dependency.
           case "${TAG}" in
             v[0-9]*.[0-9]*.[0-9]*|"v[0-9]*.[0-9]*.[0-9]*-"*) ;;
             *) echo "ERROR: '${TAG}' is not vX.Y.Z (optionally -suffix)"; exit 1 ;;
