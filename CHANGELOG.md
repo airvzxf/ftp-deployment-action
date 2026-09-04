@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.3] - 2026-09-04
+
+### Security
+
+- **Hardened input validation against `lftp -e` parser injection (closes #160, #171, #172)** — three related audit findings on the validator surface in `lib.sh`. PR #242:
+  * **#171 (CRITICAL, RCE)** — five boolean (`ftp_ssl_allow`, `ssl_verify_certificate`, `ssl_check_hostname`, `ftp_passive_mode`, `ftp_use_feat`) and two duration (`net_timeout`, `dns_fatal_timeout`) inputs were not content-validated before flowing into `build_ftp_settings` → `lftp -e "set <key> <value>;"`. A workflow could set `ftp_ssl_allow: 'true; !cat /home/lftp/.netrc'` and the lftp shell-escape would exfiltrate the action's `.netrc` password before the cleanup trap fires. Added `validate_bool` (canonical lftp set: `true|false|yes|no|on|off|0|1|""`) and `validate_duration` (digits / digits+`[smhdSMHD]` / documented `"never"` sentinel).
+  * **#172 (HIGH)** — `validate_path` rejected `;|&`` and `$` but not `!` (lftp shell escape) and `"` (lftp `-e` parser injection). Added both denials with explicit error messages; placed the `"` check before the generic shell-metacharacter check so the message is precise.
+  * **#160 (HIGH)** — `INPUT_EXCLUDE` / `INPUT_EXCLUDE_DELETE` were routed through `validate_lftp_settings` since v2.11.2, which over-rejects legitimate glob/regex metacharacters (`!`, `;`, `$`, backtick). Added `validate_glob_pattern` that allows those (they are valid PatternSet / regex metacharacters) while still rejecting control chars and leading dash. `#172` tightened the path validator; `#160` was the docs-driven counterpart for the exclude inputs.
+- **Hardened validators against newline bypass + `validate_int` grep bypass (F2 audit round, PR #246)** — the F2 audit round found that the v2.11.3 fixes left two related CRITICAL RCEs unclosed:
+  * `validate_int` piped through `grep -qE '^[0-9]+$'`, which matches per LINE; a value like `2\n!cmd` satisfied the regex on the first line and slipped past validation. Replaced with a POSIX `case` pattern so the entire string (including any embedded newline) is checked.
+  * `validate_path`, `validate_lftp_settings`, `validate_glob_pattern` all used `grep [[:cntrl:]]` to reject control chars, but `grep` never matches `\n` (it splits on `\n` before matching). An embedded newline bypassed the deny-list in all three. Added explicit `case`-based newline checks before the `grep` checks.
+  * The `validate_glob_pattern` docstring claimed the value is "a single argv slot to `mirror`, never parsed by a shell" — FALSE. `build_mirror_command` concatenates the value **unquoted** into MIRROR_COMMAND, and `run_lftp_once` concatenates MIRROR_COMMAND into the `lftp -e` script body; `lftp` 4.9.3's parser treats `;`, `&`, `|`, `"` as command separators even mid-token. Re-introduce the command-separator rejection. `!`, backtick, `$`, and space remain allowed (legitimate PatternSet / regex metacharacters).
+
+### Fixed
+
+- **`release_lock_safely` no-ops when no sentinel is held (closes #188)** — the v2.11.2 EXIT trap on the lock-release branch was armed BEFORE `acquire_lock_with_recovery` had a chance to set `ACQUIRED_LOCK_SENTINEL`. If the script exited in the window (acquire timeout, signal, OOM), the trap fired with an empty sentinel and `release_lock_safely`'s else-branch issued `quote RMD .lftp-deployment.lock` against the FTP server — racing any parallel runner legitimately holding the lock. Guard `release_lock_safely` with an early return when neither the explicit `SENTINEL` arg nor `$ACQUIRED_LOCK_SENTINEL` is set. PR #243.
+- **Test harness hardening (closes #136, #137, #156, #158, #159)** — five infra-debt findings, addressed together because the fix paths share the test-server / smoke image surfaces. PR #244:
+  * **#156** — switch `make build-test-server-image` to `docker buildx build` (matches `release.yml`). The Dockerfile.test-server pins `# syntax=docker/dockerfile:1.4` and uses a heredoc; CI happened to pass only because the GH Actions runner ships Docker 23+ where BuildKit is the default.
+  * **#158** — `chmod 0600` the env-file in scenarios 03 and 04 (mirrors the #133 fix at `tests/integration/lib/common.sh:406`). `INPUT_PASSWORD` was world-readable for the lifetime of the container.
+  * **#159** — fix smoke test 11c arg parsing (was a single quoted argument conflating `INPUT_PASSWORD=foo` into `INPUT_SERVER`). Two separately-quoted args + assertion that `INPUT_PASSWORD=foo` reaches the container.
+  * **#136** — pre-bake `lftp=4.9.3-r0` and `ca-certificates=20260611-r0` into `tests/integration/Dockerfile.test-server`; `lftp_run_script` and `wait_for_port` now use the pre-baked image instead of ephemeral `alpine:3.23.3` per call.
+  * **#137** — new `tests/Dockerfile.smoke` pre-baked alpine-3.24 + lftp + ca-certificates (same pins as production). `tests/smoke.sh` inspects the image up-front and fails fast if missing. New `SMOKE_IMAGE` Makefile variable + `build-smoke-image` target. CI builds the image before `make smoke`.
+- **CI / docs polish (closes #157, #162, #164, #197, #235)** — five small housekeeping fixes, addressed together because they share no code surface but all ship in the same batch. PR #245:
+  * **#157** — drop the bash-only `[[ =~ ]]` tag-shape check in `release.yml::validate-tag-input` for a POSIX-portable `case` pattern.
+  * **#162** — normalise four `set -e` / `set -eu` blocks in `release.yml` to `set -euo pipefail` to match the other nine steps in the same file.
+  * **#197** — declare `outputs.log_file` in `action.yml`. `entrypoint.sh` was writing the key to `$GITHUB_OUTPUT` but `action.yml` never declared it. For Docker actions the runner surfaces the key regardless, so the output has been technically reachable; declaring gives typed-actions consumers + IDE autocomplete a schema, and matches GitHub's "strongly recommended" metadata guidance. `tests/contract.sh` updated so the input-scraping awk stops at `^outputs:` as well as `^runs:` (both are top-level siblings of `inputs:` for Docker actions).
+  * **#164** — fix the doc drift in `action.yml:113` concurrency_lock description: it said lftp issues `quote MKD <path>` before the mirror, but since v2.11.0 (#121) it issues the high-level `mkdir <path>`. The release path still uses raw `quote RMD` (locks the in-place unit test suite), so the doc fix is scoped to MKD only.
+  * **#235** — add missing CHANGELOG link-references for `v2.11.0`, `v2.11.1`, `v2.11.2` (the issue only mentioned two of the three); reorder the bottom footer to descending version order.
+
 ## [2.11.2] - 2026-09-03
 
 ### Added
