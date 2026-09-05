@@ -64,8 +64,10 @@ body:
       description: 'Which version of the action did you test the idea against? Latest tag is `@v2`; if you tried a specific version, list it. Anchored to the "Supported versions" table in SECURITY.md.'
       options:
         - "@v2 (latest, current line)"
-        - "specific v2.x tag (e.g. @v2.10.0)"
+        - "specific v2.x tag (e.g. @v2.11.3)"
         - "v1.x (1.4 — 1.9, supported legacy)"
         - "v1.x (1.3 or older, EOL)"
         - "@main / @master (development branch)"
         - local dev build
+    validations:
+      required: true

@@ -115,7 +115,7 @@ hadolint:
 # skip with a notice, mirroring the smoke.sh behaviour.
 # ----------------------------------------------------------------------------
 .PHONY: test
-test: contract smoke
+test: contract unit smoke
 
 .PHONY: contract
 contract:

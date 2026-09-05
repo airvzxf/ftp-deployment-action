@@ -53,9 +53,9 @@ body:
     id: tried
     attributes:
       label: What you tried
-      description: Inputs you set, command or workflow you ran, and the observed output. Include the action tag (e.g. `@v2` or `@v2.10.0`) and the full exit code (`0`, `1`, or `2`).
+      description: Inputs you set, command or workflow you ran, and the observed output. Include the action tag (e.g. `@v2` or `@v2.11.3`) and the full exit code (`0`, `1`, or `2`).
       placeholder: |
-        Action tag used: @v2.10.0
+        Action tag used: @v2.11.3
         Relevant inputs:
           server: ftps://ftp.example.com
           user: ${{ secrets.FTP_USER }}

