@@ -20,23 +20,19 @@ RUN apk add --no-cache \
       ca-certificates=20260611-r0 \
       curl=8.22.0-r0 \
  && addgroup -S lftp \
- && adduser -S lftp -G lftp -h /home/lftp \
- && mkdir -p /home/lftp \
- && chown -R lftp:lftp /home/lftp
+ && adduser -S lftp -G lftp -h /home/lftp
 
 WORKDIR /app
 
 COPY entrypoint.sh lib.sh /app/
-COPY LICENSE README.md /app/
 
 # Bake the image version into /app/VERSION so the deprecation warning
 # in entrypoint.sh can print the actual version even on local builds.
 # `release.yml` passes --build-arg VERSION=<tag>; local `docker build`
 # gets the default "dev".
 ARG VERSION=dev
-RUN echo "$VERSION" > /app/VERSION
-
-RUN ["/bin/chmod", "+x", "/app/entrypoint.sh"]
+RUN echo "$VERSION" > /app/VERSION \
+ && /bin/chmod +x /app/entrypoint.sh
 
 # B-03 / B-14: the script writes the .netrc file at $HOME/.netrc, so
 # HOME must point at the lftp user's writable home. Without this ENV

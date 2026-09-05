@@ -146,7 +146,7 @@ unit:
 # ----------------------------------------------------------------------------
 .PHONY: build
 build:
-	docker build -t $(IMAGE) --build-arg VERSION=$(VERSION) .
+	docker build -t "$(IMAGE)" --build-arg "VERSION=$(VERSION)" "$(ROOT)"
 
 # ----------------------------------------------------------------------------
 # build-test-server-image: build the pre-baked FTPS test server image
@@ -192,8 +192,8 @@ build:
 # ----------------------------------------------------------------------------
 .PHONY: build-test-server-image
 build-test-server-image:
-	docker buildx build -f tests/integration/Dockerfile.test-server \
-	    -t $(TEST_SERVER_IMAGE) tests/integration
+	docker buildx build -f "$(ROOT)/tests/integration/Dockerfile.test-server" \
+	    -t "$(TEST_SERVER_IMAGE)" "$(ROOT)/tests/integration"
 
 # ----------------------------------------------------------------------------
 # build-smoke-image: build the pre-baked smoke-test image
@@ -214,8 +214,8 @@ build-test-server-image:
 # ----------------------------------------------------------------------------
 .PHONY: build-smoke-image
 build-smoke-image:
-	docker buildx build -f tests/Dockerfile.smoke \
-	    -t $(SMOKE_IMAGE) tests
+	docker buildx build -f "$(ROOT)/tests/Dockerfile.smoke" \
+	    -t "$(SMOKE_IMAGE)" "$(ROOT)/tests"
 
 # ----------------------------------------------------------------------------
 # Integration: boot a real vsftpd container (docker.io/fauria/vsftpd) and
@@ -253,7 +253,7 @@ run: build
 	chmod 0600 "$${tmp}"; \
 	docker run --rm -it \
 	    --env-file "$${tmp}" \
-	    -v "$(PWD)":/data:ro \
+	    -v "$(ROOT)":/data:ro \
 	    $(IMAGE)
 
 # ----------------------------------------------------------------------------

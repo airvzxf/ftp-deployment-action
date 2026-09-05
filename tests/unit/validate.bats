@@ -31,6 +31,24 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "validate_int rejects 00 (leading zeros would break retry-forever sentinel)" {
+  run validate_int "max_retries" "00"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"without leading zeros"* ]]
+}
+
+@test "validate_int rejects 007 (leading zeros on positive integer)" {
+  run validate_int "max_retries" "007"
+  [ "$status" -eq 2 ]
+}
+
+@test "validate_int rejects 08 / 09 (would be parsed as invalid octal in \$((...)))" {
+  run validate_int "concurrency_lock_poll_interval" "08"
+  [ "$status" -eq 2 ]
+  run validate_int "concurrency_lock_poll_interval" "09"
+  [ "$status" -eq 2 ]
+}
+
 @test "validate_int rejects a non-numeric value with exit 2" {
   run validate_int "max_retries" "abc"
   [ "$status" -eq 2 ]
@@ -171,6 +189,36 @@ setup() {
 
 @test "validate_bool rejects a numeric string with a suffix" {
   run validate_bool "ftp_use_feat" "1s"
+  [ "$status" -eq 2 ]
+}
+
+# ----------------------------------------------------------------------------
+# normalize_bool — v2.11.7 (#252)
+# ----------------------------------------------------------------------------
+
+@test "normalize_bool canonicalises truthy aliases to 'true'" {
+  for v in true yes on 1; do
+    run normalize_bool "concurrency_lock" "$v"
+    [ "$status" -eq 0 ]
+    [ "$output" = "true" ]
+  done
+}
+
+@test "normalize_bool canonicalises falsy aliases to 'false'" {
+  for v in false no off 0 ""; do
+    run normalize_bool "delete" "$v"
+    [ "$status" -eq 0 ]
+    [ "$output" = "false" ]
+  done
+}
+
+@test "normalize_bool rejects a capitalised value (validate_bool layer)" {
+  run normalize_bool "dry_run" "True"
+  [ "$status" -eq 2 ]
+}
+
+@test "normalize_bool rejects an RCE payload" {
+  run normalize_bool "concurrency_lock" 'true; !cat /home/lftp/.netrc'
   [ "$status" -eq 2 ]
 }
 
