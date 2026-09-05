@@ -111,6 +111,61 @@ setup() {
 }
 
 # ----------------------------------------------------------------------------
+# print_resolved_config
+# ----------------------------------------------------------------------------
+
+@test "print_resolved_config: emits resolved values inside group markers" {
+  INPUT_LOCAL_DIR="${BATS_TEST_DIRNAME}/../integration/fixtures/sample-public-html"
+  INPUT_REMOTE_DIR="/remote/"
+  FTP_SETTINGS="set ftp:ssl-allow false;"
+  MIRROR_COMMAND="mirror --reverse --verbose=1"
+  INPUT_MAX_RETRIES="5"
+
+  run print_resolved_config
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"::group::Resolved configuration"* ]]
+  [[ "$output" == *"::endgroup::"* ]]
+  [[ "$output" == *"=== Directories ==="* ]]
+  [[ "$output" == *"INPUT_LOCAL_DIR: ${INPUT_LOCAL_DIR}"* ]]
+  [[ "$output" == *"INPUT_REMOTE_DIR: ${INPUT_REMOTE_DIR}"* ]]
+  [[ "$output" == *"=== List local directory ==="* ]]
+  [[ "$output" == *"=== LFTP Settings ==="* ]]
+  [[ "$output" == *"FTP_SETTINGS"* ]]
+  [[ "$output" == *"-> ${FTP_SETTINGS}"* ]]
+  [[ "$output" == *"MIRROR_COMMAND"* ]]
+  [[ "$output" == *"${MIRROR_COMMAND}"* ]]
+  [[ "$output" == *"INPUT_MAX_RETRIES -> 5"* ]]
+}
+
+@test "print_resolved_config: includes the local directory listing" {
+  INPUT_LOCAL_DIR="${BATS_TEST_DIRNAME}/../integration/fixtures/sample-public-html"
+  INPUT_REMOTE_DIR="/"
+
+  unset FTP_SETTINGS MIRROR_COMMAND INPUT_MAX_RETRIES
+  run print_resolved_config
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"${INPUT_LOCAL_DIR}"* ]]
+  [[ "$output" == *"index.html"* ]]
+  [[ "$output" == *"about.html"* ]]
+}
+
+@test "print_resolved_config: prints empty resolved settings explicitly" {
+  INPUT_LOCAL_DIR="${BATS_TEST_DIRNAME}/../integration/fixtures/sample-public-html"
+  INPUT_REMOTE_DIR="/"
+
+  unset FTP_SETTINGS MIRROR_COMMAND INPUT_MAX_RETRIES
+  run print_resolved_config
+
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -Eq '^ FTP_SETTINGS +-> *$'
+  printf '%s\n' "$output" | grep -Eq '^ MIRROR_COMMAND +-> *$'
+  printf '%s\n' "$output" | grep -Eq '^ INPUT_MAX_RETRIES +-> *$'
+  [[ "$output" == *"::endgroup::"* ]]
+}
+
+# ----------------------------------------------------------------------------
 # print_success_banner
 # ----------------------------------------------------------------------------
 
