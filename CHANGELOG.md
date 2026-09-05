@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.5] - 2026-09-05
+
+### Security
+
+- **Pre-release GitHub Releases no longer become Latest (closes #249)** — release candidates and other version tags with a suffix are explicitly marked as pre-releases and excluded from the repository's stable Latest release.
+
+### Fixed
+
+- **Integration test-server builds now fail fast and pass hadolint (closes #256 #263)** — package installation uses explicit `set -eu` handling and a parser-compatible configuration writer, preventing hidden package failures and hadolint parse errors.
+
 ## [2.11.4] - 2026-09-05
 
 ### Security
@@ -1010,6 +1020,7 @@ malformed input).
 Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 
 
+[2.11.5]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.4...v2.11.5
 [2.11.4]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.3...v2.11.4
 [2.11.2]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.1...v2.11.2
 [2.11.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.0...v2.11.1
