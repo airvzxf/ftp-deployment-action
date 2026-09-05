@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * **`README.md` parallel updates (#271)** — `lftp-4.9.2` → `lftp-4.9.3` (line 265, the actual Dockerfile pin); Settings table row for `concurrency_lock_path` (line 297) and the Exit-codes table row for `2` (line 688) carry the same deny-list refresh.
 - **`make test` now includes `bats unit` (closes #270)** — `Makefile:118` was `test: contract smoke`, which omitted the bats unit target and silently violated the AGENTS.md T1 contract (`contract + bats unit + smoke`). Changed to `test: contract unit smoke`; the unit target already no-ops when bats is missing, so the CI cold-start path stays unchanged.
 
+### Fixed
+
+- **`body_path` ternary in `release.yml:680` collapses to a constant (closes #267)** — the `&&` / `||` triple on the `Create GitHub Release` step collapsed both branches to `'release/CHANGELOG.body.md'` because GitHub Actions evaluates `&&` / `||` with JavaScript-style truthiness and `''` is falsy. The intent (empty `body_path` when no CHANGELOG section was extracted; `'release/CHANGELOG.body.md'` otherwise) was structurally unreachable. Replaced with the canonical `!= 'true' && '...' || ''` pattern that swaps the test and the branches so the operands are non-empty. Today the broken intent is masked by `softprops/action-gh-release@v3.0.2`'s graceful fallback to `generate_release_notes: true`, but a future bump that surfaces ENOENT would have started failing on the documented path. One-line change.
+
 ## [2.11.3] - 2026-09-04
 
 ### Security
