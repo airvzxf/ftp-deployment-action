@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documentation
+
+- **Docs hardening batch 2 (closes #270 #271)** — refresh stale description strings and one Makefile target:
+  * **`action.yml` deny-list drift (#271)** — `lftp_settings` (#85), `exclude` (#89), `exclude_delete` (#93), and `concurrency_lock_path` (#117) descriptions drifted from the actual validator behaviour after #160 (#246 follow-up) and #172 hardened `validate_glob_pattern` and `validate_path`. Refreshed each to match the implemented deny list: `lftp_settings` now mentions `newline`; `exclude`/`exclude_delete` now state that `;`, `&`, `|`, `"` are rejected as lftp command separators; `concurrency_lock_path` now lists `!` and `"` explicitly.
+  * **`README.md` parallel updates (#271)** — `lftp-4.9.2` → `lftp-4.9.3` (line 265, the actual Dockerfile pin); Settings table row for `concurrency_lock_path` (line 297) and the Exit-codes table row for `2` (line 688) carry the same deny-list refresh.
+- **`make test` now includes `bats unit` (closes #270)** — `Makefile:118` was `test: contract smoke`, which omitted the bats unit target and silently violated the AGENTS.md T1 contract (`contract + bats unit + smoke`). Changed to `test: contract unit smoke`; the unit target already no-ops when bats is missing, so the CI cold-start path stays unchanged.
+
 ## [2.11.3] - 2026-09-04
 
 ### Security

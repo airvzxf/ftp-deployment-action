@@ -262,7 +262,7 @@ have secrets configured. The ghcr.io path is unaffected.
 
 ## Settings
 
-Usually the zero values mean unlimited or infinite. This table is based on the default values on `lftp-4.9.2`.
+Usually the zero values mean unlimited or infinite. This table is based on the default values on `lftp-4.9.3`.
 
 | Option                 | Description                                                                           | Required | Default | Example                                                                                           |
 |------------------------|---------------------------------------------------------------------------------------|----------|---------|---------------------------------------------------------------------------------------------------|
@@ -294,7 +294,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | dry_run                | If "true", compute the mirror plan but do not transfer or delete any file.           | No       | false   | N/A                                                                                               |
 | upload_log_on_failure  | If "true" (default), on exit 1 upload the captured lftp log to the workflow run as an artifact (90-day retention). Requires `env: GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` on the step. | No       | true    | N/A                                                                                               |
 | concurrency_lock       | If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory. See "Concurrency / deployment lock" below. | No       | false   | N/A                                                                                               |
-| concurrency_lock_path  | Path of the sentinel directory used by `concurrency_lock`. Must be a valid FTP path (no `..`, no shell metacharacters, no leading dash). | No       | .lftp-deployment.lock | N/A                                                                                |
+| concurrency_lock_path  | Path of the sentinel directory used by `concurrency_lock`. Must be a valid FTP path (no `..`, no shell metacharacters, no leading dash, no `!`, no `"`). | No       | .lftp-deployment.lock | N/A                                                                                |
 | concurrency_lock_timeout | Maximum seconds to wait for the lock when `concurrency_lock` is "true" and another run is currently holding it. `0` means fail immediately when held. | No | 300  | N/A                                                                                               |
 | concurrency_lock_poll_interval | Seconds between lock acquisition attempts.                                                  | No       | 5       | N/A                                                                                               |
 
@@ -685,7 +685,7 @@ non-buildable image) **before** a tag is pushed.
 |------|---------|
 | `0`  | Upload finished successfully. |
 | `1`  | Upload failed after all retries; the last lftp error is printed above. |
-| `2`  | Invalid input. This includes: a non-integer numeric option (e.g. `max_retries`); a `local_dir` / `remote_dir` that fails the path-traversal or shell-metacharacter guard; an `lftp_settings` value that contains control characters, a backtick, a dollar sign, or more than three `;`-chained directives. |
+| `2`  | Invalid input. This includes: a non-integer numeric option (e.g. `max_retries`); a `local_dir` / `remote_dir` that fails the path-traversal or shell-metacharacter guard; an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives. |
 
 When the global 5-hour timeout is reached the lftp process is killed and the
 action exits with `1` (the most recent lftp exit code is also printed to the
