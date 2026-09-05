@@ -195,6 +195,14 @@ setup() {
   done
 }
 
+@test "validate_duration rejects unit-only and repeated-unit values" {
+  for v in s mhd 5s5m dd 15ss; do
+    run validate_duration "net_timeout" "$v"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"net_timeout must be a duration"* ]]
+  done
+}
+
 @test "validate_duration rejects a malicious payload containing '; !'" {
   run validate_duration "net_timeout" '15s; !cat /home/lftp/.netrc'
   [ "$status" -eq 2 ]
