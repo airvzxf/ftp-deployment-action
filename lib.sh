@@ -718,6 +718,16 @@ _lock_age_seconds() {
       t_h = substr(then, 10, 2); t_mn = substr(then, 12, 2); t_s  = substr(then, 14, 2)
       n = mktime(n_y " " n_m " " n_d " " n_h " " n_mn " " n_s)
       t = mktime(t_y " " t_m " " t_d " " t_h " " t_mn " " t_s)
+      # POSIX mawk/gawk mktime returns -1 on parse failure (e.g.
+      # sentinel file with a syntactically-valid but calendrically-
+      # invalid timestamp like month=13). Without this check, the
+      # caller would see `int(n - t) = -1` and treat the sentinel
+      # as "infinitely old" -> take over the lock on stale data.
+      # Exit 1 lets the caller classify the age as "indeterminate"
+      # and treat the lock as held (F2 audit, NEW).
+      if (n == -1 || t == -1) {
+        exit 1
+      }
       print int(n - t)
     }
   '
@@ -726,23 +736,25 @@ _lock_age_seconds() {
 # ------------------------------------------------------------------------------
 # _lock_parse_sentinel_listing LISTING_TEXT
 #   Given the captured stdout of `lftp ... -e 'cls -la .; quit;'`,
-#   extract the FIRST filename matching the sentinel pattern
-#   `.lftp-deployment.lock.<digits>.info`. Echoes the matching
-#   filename (e.g. `.lftp-deployment.lock.20260707T080000Z.1234.info`)
-#   on stdout, or empty if no sentinel exists.
+#   extract every filename matching the sentinel pattern
+#   `.lftp-deployment.lock.<digits>.info`. Echoes one name per
+#   line on stdout, sorted ascending by stamp (so the OLDEST
+#   sentinel is the first line), or empty if no sentinel exists.
 #
 #   Uses grep -E anchored to the line end so unrelated files (the
-#   lock dir itself, user files) are ignored. The `head -1` keeps
-#   the parser deterministic in the (rare) case where multiple
-#   orphan sentinels exist on disk.
+#   lock dir itself, user files) are ignored. F2 audit (#173):
+#   the previous `head -1` discarded every orphan past the first
+#   and let stale sentinels accumulate on the FTP server. The
+#   recovery branch in acquire_lock_with_recovery now iterates
+#   every emitted name and DELEs each one.
 #
-#   Pure: no IO, no FTP. Echoes the matched filename or "".
+#   Pure: no IO, no FTP. Echoes the matched filenames or "".
 # ------------------------------------------------------------------------------
 _lock_parse_sentinel_listing() {
   _lpsl_listing=$1
   printf '%s\n' "${_lpsl_listing}" \
     | grep -oE '\.lftp-deployment\.lock\.[0-9]{8}T[0-9]{6}Z\.[0-9]+\.info' \
-    | head -1
+    | sort
 }
 
 # ------------------------------------------------------------------------------
@@ -998,20 +1010,39 @@ run_lftp_once() {
 #   `release_lock_safely` (and the EXIT trap) can clean it up.
 #
 #   Stale-lock recovery: on every MKD failure (550, lock held), the
-#   function does a `quote LIST -la .` to look for a sentinel file
-#   at the FTP root. If a sentinel exists and its embedded
-#   timestamp is older than TIMEOUT_SECS, the function assumes the
-#   previous holder died (OOM, SIGKILL, 6h job limit) and takes
-#   over: DELE the stale sentinel + RMD the lock dir, then
-#   immediately retry MKD (no sleep). If the sentinel is recent or
-#   missing, the function sleeps POLL_SECS and tries again.
+#   function does a `cls -la .` (lftp's high-level ls) to look for
+#   sentinel files at the FTP root. If the OLDEST sentinel exists
+#   and its embedded timestamp is older than TIMEOUT_SECS, the
+#   function assumes the previous holder died (OOM, SIGKILL, 6h job
+#   limit) and takes over: it runs ONE lftp invocation that lists
+#   the directory AND DELEs every parsed sentinel AND RMDs the
+#   lock dir, then immediately retries MKD (no sleep). If the
+#   sentinel is recent or missing, the function sleeps POLL_SECS
+#   and tries again.
+#
+#   F2 audit hardening (closes #173, #176, #178, #184, #251, #268):
+#     * #173 — every parsed sentinel is DELE'd in one lftp
+#       invocation, so orphan sentinels no longer accumulate.
+#     * #176 — the LIST+DELE+RMD runs in a single TCP control
+#       session, so a concurrent holder's PUT-in-progress is
+#       preserved across our recovery.
+#     * #178 + #184 — the mktemp fallback for the sentinel body
+#       uses /dev/urandom entropy and chmod 0600.
+#     * #251 — when TIMEOUT_SECS=0 (fail-fast mode) the function
+#       returns 1 immediately after a MKD fail; no LIST, no DELE,
+#       no RMD, so a healthy holder's lock dir is never vandalised.
+#     * #268 — a transient LIST failure (TCP reset, FTP 421, 10s
+#       timeout) is detected via the captured exit code and
+#       treated as "lock held, back off"; we never DELE/RMD on
+#       an empty listing we cannot distinguish from a failure.
 #
 #   Returns 0 on a successful acquire, 1 if the timeout is
-#   exhausted. The caller MUST have a writable ${NETRC} at $HOME
-#   and MUST have `set -e` disabled around the call to this
-#   function (or check the return value explicitly), because
-#   intermediate lftp calls may legitimately fail (timeout=0 fast
-#   path, transient network errors).
+#   exhausted or the lock is held and timeout=0. The caller MUST
+#   have a writable ${NETRC} at $HOME and MUST have `set -e`
+#   disabled around the call to this function (or check the
+#   return value explicitly), because intermediate lftp calls may
+#   legitimately fail (timeout=0 fast path, transient network
+#   errors).
 #
 #   USER: optional. When non-empty AND the URL has no embedded user,
 #   it is embedded into the URL via rewrite_lftp_url so lftp's
@@ -1086,7 +1117,15 @@ acquire_lock_with_recovery() {
       # tell whether we died mid-mirror. The sentinel content is
       # not parsed (we use the FILENAME timestamp); we keep the
       # body for human debugging via FTP `cat`.
-      _alwr_sentinel_body=$(mktemp 2>/dev/null) || _alwr_sentinel_body="/tmp/.lftp-lock-body.$$"
+      # F2 audit (#178 + #184): mktemp's success path is fine
+      # (busybox gives a random name and mode 0600). Only the
+      # fallback needs hardening: PID-predictable name +
+      # umask-inherited mode. Mix in entropy from /dev/urandom
+      # and chmod 0600 unconditionally so the body file never
+      # lands at 0644 on the fallback branch.
+      _alwr_sentinel_body=$(mktemp 2>/dev/null) \
+        || _alwr_sentinel_body="/tmp/.lftp-lock-body.$$-$(date +%s)-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+      chmod 600 "${_alwr_sentinel_body}" 2>/dev/null || true
       {
         printf 'pid=%s\n' "${_alwr_pid}"
         printf 'started_at=%s\n' "${_alwr_stamp}"
@@ -1119,6 +1158,17 @@ acquire_lock_with_recovery() {
     fi
 
     # Step 2: MKD failed (550 = held, or connection refused).
+    # F2 audit (#251): when timeout=0 the caller has explicitly
+    # opted out of lock-orchestration ("fail immediately when
+    # held"). Skip the stale-recovery path entirely: any
+    # recovery attempt would race a healthy holder's sentinel /
+    # lock dir, defeating the serialization concurrency_lock
+    # exists to provide. Return 1 so the caller surfaces a
+    # clean "lock held" error to the workflow.
+    if [ "${_alwr_timeout}" = "0" ]; then
+      return 1
+    fi
+
     # Probe for a stale sentinel. We list the FTP root and grep
     # for the sentinel pattern; if the timestamp in the filename
     # is older than TIMEOUT_SECS, we take over.
@@ -1132,27 +1182,58 @@ acquire_lock_with_recovery() {
     _alwr_listing=$(timeout 10s lftp "${_alwr_server_eff}" \
       -e "${_alwr_preamble} cls -la .; quit;" \
       2>/dev/null)
+    _alwr_listing_rc=$?
     set -e
+    # F2 audit (#268): a transient LIST failure (TCP reset, FTP
+    # 421, 10s timeout, refused connection) cannot be
+    # distinguished from "no sentinel" without the exit code;
+    # respect the lock and back off instead of triggering an
+    # unwanted DELE/RMD against a live holder's lock dir.
+    if [ "${_alwr_listing_rc}" -ne 0 ]; then
+      sleep "${_alwr_poll}"
+      continue
+    fi
 
-    _alwr_stale_file=$(_lock_parse_sentinel_listing "${_alwr_listing}")
+    _alwr_stale_files=$(_lock_parse_sentinel_listing "${_alwr_listing}") || _alwr_stale_files=""
     _alwr_took_over=1
-    if [ -n "${_alwr_stale_file}" ]; then
-      _alwr_stale_stamp=$(printf '%s' "${_alwr_stale_file}" \
-        | sed -nE 's|^\.lftp-deployment\.lock\.([0-9TZ]+)\..*\.info$|\1|p')
+    if [ -n "${_alwr_stale_files}" ]; then
+      # F2 audit (#173): _lock_parse_sentinel_listing now returns
+      # EVERY parsed sentinel (one per line, sorted ascending by
+      # stamp). For the staleness check we consult the OLDEST
+      # sentinel — if even the oldest is recent, the holder is
+      # healthy and we must respect the lock. The recovery branch
+      # below DELEs every parsed name.
+      _alwr_oldest=$(printf '%s\n' "${_alwr_stale_files}" | head -n 1)
+      # The parser restricts the input to the documented sentinel
+      # pattern, so sed's regex matches on every line — `|| _stamp=""`
+      # is purely defensive against a future parser loosening.
+      _alwr_stale_stamp=$(printf '%s' "${_alwr_oldest}" \
+        | sed -nE 's|^\.lftp-deployment\.lock\.([0-9TZ]+)\..*\.info$|\1|p') \
+        || _alwr_stale_stamp=""
       if [ -n "${_alwr_stale_stamp}" ]; then
         _alwr_now=$(date -u +%Y%m%dT%H%M%SZ)
+        # F2 audit NEW: mktime parse failure (e.g., corrupted
+        # sentinel with non-numeric components) returns -1 and
+        # would otherwise be propagated as a garbage age. Capture
+        # the exit code and treat a parse failure as "lock held,
+        # back off" — the same semantic as a recent sentinel —
+        # so a malformed sentinel never triggers takeover.
+        set +e
         _alwr_age=$(_lock_age_seconds "${_alwr_now}" "${_alwr_stale_stamp}")
-        # `<= timeout` (not `<`) — the timeout represents the maximum
-        # age at which we still consider the sentinel recent, so a
-        # sentinel whose age is exactly `timeout` is at the boundary
-        # and must still be respected. Using `<` here would make
-        # the comparison racy when `_alwr_now` and the sentinel's
-        # timestamp straddle a second boundary (test #19 catches
-        # this: a sentinel stamped at "now" but observed one
-        # second later would have age=1 vs timeout=1 and be
-        # mis-classified as stale, triggering an unwanted DELE/RMD).
-        if [ "${_alwr_age}" -le "${_alwr_timeout}" ]; then
-          # Recent — legitimate holder, do not touch it.
+        _alwr_age_rc=$?
+        set -e
+        if [ "${_alwr_age_rc}" -ne 0 ]; then
+          _alwr_took_over=0
+        elif [ "${_alwr_age}" -le "${_alwr_timeout}" ]; then
+          # `<= timeout` (not `<`) — the timeout represents the maximum
+          # age at which we still consider the sentinel recent, so a
+          # sentinel whose age is exactly `timeout` is at the boundary
+          # and must still be respected. Using `<` here would make
+          # the comparison racy when `_alwr_now` and the sentinel's
+          # timestamp straddle a second boundary (test #19 catches
+          # this: a sentinel stamped at "now" but observed one
+          # second later would have age=1 vs timeout=1 and be
+          # mis-classified as stale, triggering an unwanted DELE/RMD).
           _alwr_took_over=0
         fi
       fi
@@ -1162,20 +1243,30 @@ acquire_lock_with_recovery() {
     # where the previous holder died between MKD and PUT.
 
     if [ "${_alwr_took_over}" -eq 1 ]; then
-      # Stale (or empty). Take over: DELE the stale sentinel
-      # (best-effort, may not exist), RMD the lock dir, and
-      # IMMEDIATELY retry MKD without sleeping. We do not count
-      # this retry against the timeout because we've already
-      # waited; the next MKD attempt's MKD delay (if any) is the
-      # only thing on the critical path.
-      set +e
-      if [ -n "${_alwr_stale_file}" ]; then
-        timeout 10s lftp "${_alwr_server_eff}" \
-          -e "${_alwr_preamble} quote DELE ${_alwr_stale_file}; quit;" \
-          >/dev/null 2>&1
+      # F2 audit (#173 + #176): take over with ONE lftp script
+      # that lists the directory and DELEs every parsed sentinel
+      # in the same control connection. The single-invocation
+      # shape makes the snapshot atomic against the FTP server's
+      # view: any sentinel PUT that arrives between our `cls` and
+      # our first `quote DELE` survives the loop, which is the
+      # desired behaviour — that sentinel belongs to a live
+      # concurrent runner and we must not touch it. RMD fires
+      # unconditionally when we have decided to takeover (covers
+      # the PUT-failed-previous-holder case where the lock dir
+      # exists but no sentinel does).
+      _alwr_recover_script="${_alwr_preamble} cls -la .;"
+      if [ -n "${_alwr_stale_files}" ]; then
+        while IFS= read -r _alwr_name; do
+          [ -z "${_alwr_name}" ] && continue
+          _alwr_recover_script="${_alwr_recover_script} quote DELE ${_alwr_name};"
+        done <<EOF
+${_alwr_stale_files}
+EOF
       fi
+      _alwr_recover_script="${_alwr_recover_script} quote RMD ${_alwr_path}; quit;"
+      set +e
       timeout 10s lftp "${_alwr_server_eff}" \
-        -e "${_alwr_preamble} quote RMD ${_alwr_path}; quit;" \
+        -e "${_alwr_recover_script}" \
         >/dev/null 2>&1
       set -e
       continue

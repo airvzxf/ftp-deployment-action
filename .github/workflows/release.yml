@@ -358,15 +358,35 @@ jobs:
             echo "image=${image}"
           } >> "$GITHUB_OUTPUT"
 
+          # F2 audit (#275): detect pre-release tags (anything with
+          # a `-suffix` after the X.Y.Z root) and SKIP the `:latest`
+          # Docker alias for them. The validator accepts tags like
+          # v2.12.0-rc.1, v2.12.0-alpha.1, v2.12.0-beta.1, and
+          # without this guard those tags would silently overwrite
+          # the stable `:latest` image. PR #276 (commit d1888e4)
+          # already fixed the GitHub Release page side; this is the
+          # Docker-push counterpart. Stable tags (no `-suffix`)
+          # still get `:latest` as before.
+          pre_release=false
+          case "${version}" in
+            *-*) pre_release=true ;;
+          esac
+
           # ghcr.io is always published (GITHUB_TOKEN is automatic).
-          tags="${image}:${version}"$'\n'"${image}:${tag}"$'\n'"${image}:latest"
+          tags="${image}:${version}"$'\n'"${image}:${tag}"
+          if [ "${pre_release}" = false ]; then
+            tags="${tags}"$'\n'"${image}:latest"
+          fi
 
           dockerhub_image=""
           ecr_image=""
 
           if [ -n "${DOCKERHUB_USERNAME}" ] && [ -n "${DOCKERHUB_TOKEN}" ]; then
             dockerhub_image="docker.io/airvzxf/ftp-deployment-action"
-            tags="${tags}"$'\n'"${dockerhub_image}:${version}"$'\n'"${dockerhub_image}:${tag}"$'\n'"${dockerhub_image}:latest"
+            tags="${tags}"$'\n'"${dockerhub_image}:${version}"$'\n'"${dockerhub_image}:${tag}"
+            if [ "${pre_release}" = false ]; then
+              tags="${tags}"$'\n'"${dockerhub_image}:latest"
+            fi
             {
               echo "dockerhub_image=${dockerhub_image}"
               echo "dockerhub_enabled=true"
@@ -407,7 +427,10 @@ jobs:
           # this step.
           if [ -n "${ECR_DISABLED_FORCE:-}" ] && [ -n "${AWS_ROLE_TO_ASSUME}" ]; then
             ecr_image="public.ecr.aws/m2z1h0m9/ftp-deployment-action"
-            tags="${tags}"$'\n'"${ecr_image}:${version}"$'\n'"${ecr_image}:${tag}"$'\n'"${ecr_image}:latest"
+            tags="${tags}"$'\n'"${ecr_image}:${version}"$'\n'"${ecr_image}:${tag}"
+            if [ "${pre_release}" = false ]; then
+              tags="${tags}"$'\n'"${ecr_image}:latest"
+            fi
             {
               echo "ecr_image=${ecr_image}"
               echo "ecr_enabled=true"
@@ -430,19 +453,34 @@ jobs:
             echo "all_tags<<EOF"
             echo "${image}:${version}"
             echo "${image}:${tag}"
-            echo "${image}:latest"
+            if [ "${pre_release}" = false ]; then
+              echo "${image}:latest"
+            fi
             if [ -n "${dockerhub_image}" ]; then
               echo "${dockerhub_image}:${version}"
               echo "${dockerhub_image}:${tag}"
-              echo "${dockerhub_image}:latest"
+              if [ "${pre_release}" = false ]; then
+                echo "${dockerhub_image}:latest"
+              fi
             fi
             if [ -n "${ecr_image}" ]; then
               echo "${ecr_image}:${version}"
               echo "${ecr_image}:${tag}"
-              echo "${ecr_image}:latest"
+              if [ "${pre_release}" = false ]; then
+                echo "${ecr_image}:latest"
+              fi
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+
+          # F2 audit (#275): defense-in-depth — refuse to publish a
+          # pre-release tag with a :latest alias anywhere. The
+          # all_tags heredoc above is what docker/build-push-action
+          # consumes via steps.meta.outputs.all_tags.
+          if [ "${pre_release}" = true ] && grep -Fq ':latest' "$GITHUB_OUTPUT"; then
+            echo "::error::Pre-release tag ${tag} must not publish a :latest alias"
+            exit 1
+          fi
 
           echo "Resolved tag=${tag}, version=${version}"
           echo "Tags to push:"
