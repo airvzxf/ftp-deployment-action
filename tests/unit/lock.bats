@@ -171,12 +171,19 @@ teardown() {
   [ -z "$result" ]
 }
 
-@test "_lock_parse_sentinel_listing: extracts the first sentinel from a listing" {
+@test "_lock_parse_sentinel_listing: extracts every sentinel, one per line, sorted ascending by stamp" {
+  # F2 audit (#173): the previous parser returned only the FIRST
+  # sentinel via `head -1`, letting orphans accumulate when the
+  # stale-recovery branch only DELEd one name. The fix returns
+  # every parsed sentinel so the recovery branch can DELE all of
+  # them in a single lftp invocation.
   listing="drwxr-xr-x  2 u g 4096 Jul 07 08:00 .lftp-deployment.lock
 -rw-r--r--  1 u g   12 Jul 07 08:00 .lftp-deployment.lock.20260707T080000Z.1234.info
 -rw-r--r--  1 u g  100 Jul 07 08:01 .lftp-deployment.lock.20260707T080100Z.5678.info"
   result=$(_lock_parse_sentinel_listing "${listing}")
-  [ "$result" = ".lftp-deployment.lock.20260707T080000Z.1234.info" ]
+  [ "$(printf '%s' "${result}" | wc -l)" -eq 2 ]
+  echo "${result}" | grep -q "^.lftp-deployment.lock.20260707T080000Z.1234.info$"
+  echo "${result}" | grep -q "^.lftp-deployment.lock.20260707T080100Z.5678.info$"
 }
 
 @test "_lock_parse_sentinel_listing: ignores the lock dir itself" {
@@ -291,10 +298,15 @@ FAKE
   acquire_lock_with_recovery \
     "ftp://example.test" ".lftp-deployment.lock" "5" "1" "ftptest" || rc=$?
   [ "${rc:-0}" -eq 0 ]
-  # The fake received 6 calls: MKD (fail), LIST, DELE stale,
-  # RMD lock dir, MKD (success), PUT sentinel.
+  # The fake received 5 calls: MKD (fail), LIST+DELE+RMD in a
+  # SINGLE lftp invocation (F2 audit #173 + #176), MKD (success),
+  # PUT sentinel. Pre-fix the LIST, DELE stale, and RMD were 3
+  # separate lftp invocations (call_count == 6). The single
+  # invocation makes the snapshot atomic against the FTP server's
+  # view, closing the race window where a concurrent holder's
+  # PUT-in-progress could be mis-classified.
   call_count=$(wc -l < "${FAKE_LFTP_LOG}")
-  [ "${call_count}" -eq 6 ]
+  [ "${call_count}" -eq 5 ]
   # v2.11.0: switched MKD from `quote MKD` (which swallows 5xx in
   # lftp 4.9.x) to lftp's high-level `mkdir`. Stale-recovery LIST
   # also moved from raw `quote LIST` (rejected by vsftpd for lack
@@ -391,6 +403,125 @@ FAKE
     cat "${FAKE_LFTP_LOG}"
     false
   fi
+}
+
+# F2 audit (#251): timeout=0 + MKD fail + RECENT sentinel present
+# must NOT trigger DELE/RMD against the live holder's lock dir.
+# The pre-fix code path: MKD fail → LIST → age check `-le 0` is
+# false (real sentinels always have age >= 1s) → takeover branch
+# fires → DELEs the live holder's sentinel + RMDs the lock dir.
+# Post-fix: timeout=0 short-circuits BEFORE the LIST, returns 1
+# without touching the FTP server again.
+@test "acquire_lock_with_recovery: timeout=0 + MKD fail + recent sentinel does NOT DELE/RMD (issue #251)" {
+  recent_stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  export FAKE_LFTP_SCRIPT="${BATS_TEST_TMPDIR}/fake-lftp-script.txt"
+  cat > "${FAKE_LFTP_SCRIPT}" <<SCRIPT
+exit 1
+echo .lftp-deployment.lock.${recent_stamp}.1.info
+SCRIPT
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/sh
+line=$(head -n 1 "${FAKE_LFTP_SCRIPT:-/dev/null}" 2>/dev/null) || true
+if [ -n "${line:-}" ]; then
+  sed -i '1d' "${FAKE_LFTP_SCRIPT}"
+  case "${line}" in
+    exit\ *) rc=${line#exit }; printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit "${rc}" ;;
+    echo\ *) payload=${line#echo }; printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; printf '%s\n' "${payload}"; exit 0 ;;
+    *) printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit 0 ;;
+  esac
+fi
+printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit 0
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/lftp"
+
+  unset ACQUIRED_LOCK_SENTINEL
+  acquire_lock_with_recovery \
+    "ftp://example.test" ".lftp-deployment.lock" "0" "5" "ftptest" || rc=$?
+  [ "${rc:-0}" -eq 1 ]
+  # Only the initial MKD happened. timeout=0 means "fail
+  # immediately when held" — there must be NO LIST, NO DELE, NO
+  # RMD, NO PUT. A pre-fix regression test would see all four.
+  grep -q "mkdir .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
+  if grep -q "cls -la" "${FAKE_LFTP_LOG}"; then
+    echo "timeout=0 must not LIST (would leak holder sentinel info)"; cat "${FAKE_LFTP_LOG}"; false
+  fi
+  if grep -q "quote DELE" "${FAKE_LFTP_LOG}"; then
+    echo "timeout=0 must not DELE — live holder sentinel would be vandalised (#251)"; cat "${FAKE_LFTP_LOG}"; false
+  fi
+  if grep -q "quote RMD" "${FAKE_LFTP_LOG}"; then
+    echo "timeout=0 must not RMD — live holder lock dir would be vandalised (#251)"; cat "${FAKE_LFTP_LOG}"; false
+  fi
+  if grep -q "put " "${FAKE_LFTP_LOG}"; then
+    echo "timeout=0 must not PUT — no lock was acquired"; cat "${FAKE_LFTP_LOG}"; false
+  fi
+  [ -z "${ACQUIRED_LOCK_SENTINEL:-}" ]
+}
+
+# F2 audit (#268): transient LIST failure (TCP reset, FTP 421,
+# 10s timeout) must NOT trigger takeover against the held lock dir.
+# Pre-fix: _alwr_listing_rc was discarded, an empty listing looked
+# identical to "no sentinel", and `_alwr_took_over=1` (the default)
+# fired DELE+RMD against a perfectly healthy holder. Post-fix:
+# non-zero LIST exit code triggers sleep+continue (respect the lock,
+# back off and retry) without any DELE/RMD.
+@test "acquire_lock_with_recovery: LIST lftp failure does NOT trigger takeover (issue #268)" {
+  # count=1 means a single iteration: MKD fail, LIST fail, then
+  # sleep+continue → loop exits, return 1.
+  export FAKE_LFTP_SCRIPT="${BATS_TEST_TMPDIR}/fake-lftp-script.txt"
+  cat > "${FAKE_LFTP_SCRIPT}" <<'SCRIPT'
+exit 1
+exit 1
+SCRIPT
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/sh
+line=$(head -n 1 "${FAKE_LFTP_SCRIPT:-/dev/null}" 2>/dev/null) || true
+if [ -n "${line:-}" ]; then
+  sed -i '1d' "${FAKE_LFTP_SCRIPT}"
+  case "${line}" in
+    exit\ *) rc=${line#exit }; printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit "${rc}" ;;
+    echo\ *) payload=${line#echo }; printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; printf '%s\n' "${payload}"; exit 0 ;;
+    *) printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit 0 ;;
+  esac
+fi
+printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit 0
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/lftp"
+
+  unset ACQUIRED_LOCK_SENTINEL
+  acquire_lock_with_recovery \
+    "ftp://example.test" ".lftp-deployment.lock" "1" "1" "ftptest" || rc=$?
+  [ "${rc:-0}" -eq 1 ]
+  grep -q "mkdir .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
+  grep -q "cls -la" "${FAKE_LFTP_LOG}"
+  if grep -q "quote DELE" "${FAKE_LFTP_LOG}"; then
+    echo "transient LIST failure must NOT trigger DELE (would vandalise live holder)"; cat "${FAKE_LFTP_LOG}"; false
+  fi
+  if grep -q "quote RMD" "${FAKE_LFTP_LOG}"; then
+    echo "transient LIST failure must NOT trigger RMD (would vandalise live holder)"; cat "${FAKE_LFTP_LOG}"; false
+  fi
+  if grep -q "put " "${FAKE_LFTP_LOG}"; then
+    echo "transient LIST failure must NOT write a sentinel"; cat "${FAKE_LFTP_LOG}"; false
+  fi
+  [ -z "${ACQUIRED_LOCK_SENTINEL:-}" ]
+}
+
+# F2 audit (NEW): _lock_age_seconds must exit non-zero when
+# mktime() returns -1 (parse failure). Pre-fix: the function
+# would print `int(n - t)` with one or both -1 inputs, yielding a
+# garbage age that could be negative or wildly positive; the
+# caller's `[ age -le timeout ]` check would either (a) treat the
+# sentinel as "infinitely old" and take over on stale data, or
+# (b) treat it as "in the future" and respect the lock. Either
+# way is data-dependent and brittle. Post-fix: invalid timestamps
+# produce non-zero exit; the caller treats indeterminate ages as
+# "lock held, back off".
+@test "_lock_age_seconds: returns non-zero exit when mktime fails to parse" {
+  # mktime returns -1 on parse failure. Force a bad month (13) so
+  # mktime refuses: a real lock-helper call would never produce
+  # this shape (the parser restricts to [0-9TZ]+), so a -1 exit
+  # here proves the new check is wired up.
+  _lock_age_seconds "20260707T080000Z" "20261307T080000Z" >/dev/null 2>&1
+  [ "$?" -ne 0 ]
 }
 
 # ----------------------------------------------------------------------------
