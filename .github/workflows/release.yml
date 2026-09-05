@@ -373,10 +373,22 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             echo "Docker Hub publishing ENABLED (${dockerhub_image})"
           else
+            # v2.11.4 (#217): always emit the `dockerhub_*` outputs
+            # (even on the disabled branch) so downstream cosign /
+            # SBOM guards can rely on the invariant
+            # "enabled=true ⇒ image is set; otherwise both are empty".
+            # Pre-fix, a downstream step reading an unset
+            # `steps.meta.outputs.dockerhub_image` on the disabled
+            # branch could silently produce an empty string and a
+            # confusing cosign error.
+            {
+              echo "dockerhub_image="
+              echo "dockerhub_enabled=false"
+            } >> "$GITHUB_OUTPUT"
             echo "::notice::Docker Hub secrets (DOCKERHUB_USERNAME, DOCKERHUB_TOKEN) not set; skipping docker.io publish"
           fi
 
-          # ECR Public publishing is temporarily disabled. The
+          # ECR Public publishing is intentionally disabled. The
           # AWS_ROLE_TO_ASSUME secret exists in the repo but the
           # IAM role's OIDC trust policy is not configured to
           # allow this repo, which makes `Configure AWS
@@ -384,11 +396,16 @@ jobs:
           # `Not authorized to perform sts:AssumeRoleWithWebIdentity`.
           # The maintainer does not currently have access to the
           # AWS account, so we cannot fix the trust policy from
-          # the repo side. To re-enable: replace `false` with
-          # `[ -n "${AWS_ROLE_TO_ASSUME}" ]` and uncomment the
-          # two ECR Public steps in the `Build · release image`
-          # job below.
-          if false; then
+          # the repo side. We keep the conditional block (instead
+          # of deleting it) so the re-enable diff is trivial, but
+          # emit empty `ecr_*` outputs so downstream guards
+          # always see a defined value (v2.11.4, #217). The
+          # `ECR_DISABLED_FORCE` opt-in switch is intentionally
+          # unset in CI today; setting it (e.g. for a one-off
+          # test run) combined with `AWS_ROLE_TO_ASSUME` is
+          # enough to enable the publish path without rewriting
+          # this step.
+          if [ -n "${ECR_DISABLED_FORCE:-}" ] && [ -n "${AWS_ROLE_TO_ASSUME}" ]; then
             ecr_image="public.ecr.aws/m2z1h0m9/ftp-deployment-action"
             tags="${tags}"$'\n'"${ecr_image}:${version}"$'\n'"${ecr_image}:${tag}"$'\n'"${ecr_image}:latest"
             {
@@ -397,6 +414,10 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             echo "ECR Public publishing ENABLED (${ecr_image})"
           else
+            {
+              echo "ecr_image="
+              echo "ecr_enabled=false"
+            } >> "$GITHUB_OUTPUT"
             echo "::notice::ECR Public publishing disabled in release.yml (AWS IAM trust policy needs update); skipping public.ecr.aws publish"
           fi
 
