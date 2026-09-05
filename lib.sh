@@ -57,8 +57,8 @@ validate_int() {
   _vi_name=$1
   _vi_value=$2
   case "${_vi_value}" in
-    ''|*[!0-9]*)
-      printf 'ERROR: %s must be a non-negative integer (got: %s)\n' \
+    ''|*[!0-9]*|0[0-9]*)
+      printf 'ERROR: %s must be a non-negative integer without leading zeros (got: %s)\n' \
         "${_vi_name}" "${_vi_value}" >&2
       exit 2
       ;;
@@ -92,6 +92,40 @@ validate_bool() {
         "${_vb_name}" "${_vb_value}" >&2
       exit 2
       ;;
+  esac
+}
+
+# ------------------------------------------------------------------------------
+# normalize_bool NAME VALUE
+#   Echo the canonical lftp-style "true" or "false" for VALUE, after
+#   validating it through `validate_bool`. Used for the GATE inputs
+#   (`delete`, `no_symlinks`, `dry_run`, `upload_log_on_failure`,
+#   `concurrency_lock`, plus `debug` and `fail_on_deprecated`) which
+#   the script compares with a literal `[ ... = "true" ]` to decide
+#   whether to append a flag / take a branch.
+#
+#   Without this, a workflow author who writes `concurrency_lock: yes`
+#   or `dry_run: True` is silently off — the gate falls through to the
+#   "false" branch because `= "true"` rejects every alias. With this,
+#   the aliases map to "true" / "false" the same way lftp's own
+#   toggle parser would, and the literal compare keeps working.
+#
+#   Empty string maps to "false" so the action.yml default applies
+#   even when entrypoint.sh is invoked outside GH Actions
+#   (smoke tests, manual docker run). Matches the documented
+#   default of every gate input that defaults to "false".
+#
+#   Calls validate_bool NAME VALUE first, so any value outside the
+#   canonical lftp set (RCE payload, typo, capitalised variant)
+#   exits 2 BEFORE the gate fires.
+# ------------------------------------------------------------------------------
+normalize_bool() {
+  _nb_name=$1
+  _nb_value=$2
+  validate_bool "${_nb_name}" "${_nb_value}"
+  case "${_nb_value}" in
+    true|yes|on|1) printf '%s' "true" ;;
+    *)             printf '%s' "false" ;;
   esac
 }
 
