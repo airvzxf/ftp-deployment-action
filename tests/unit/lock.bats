@@ -175,15 +175,19 @@ teardown() {
   # F2 audit (#173): the previous parser returned only the FIRST
   # sentinel via `head -1`, letting orphans accumulate when the
   # stale-recovery branch only DELEd one name. The fix returns
-  # every parsed sentinel so the recovery branch can DELE all of
-  # them in a single lftp invocation.
+  # every parsed sentinel (sorted ascending by stamp so the
+  # OLDEST is the first line) so the recovery branch can DELE
+  # all of them in a single lftp invocation.
   listing="drwxr-xr-x  2 u g 4096 Jul 07 08:00 .lftp-deployment.lock
 -rw-r--r--  1 u g   12 Jul 07 08:00 .lftp-deployment.lock.20260707T080000Z.1234.info
 -rw-r--r--  1 u g  100 Jul 07 08:01 .lftp-deployment.lock.20260707T080100Z.5678.info"
   result=$(_lock_parse_sentinel_listing "${listing}")
-  [ "$(printf '%s' "${result}" | wc -l)" -eq 2 ]
-  echo "${result}" | grep -q "^.lftp-deployment.lock.20260707T080000Z.1234.info$"
-  echo "${result}" | grep -q "^.lftp-deployment.lock.20260707T080100Z.5678.info$"
+  # Command substitution strips trailing newlines, so the captured
+  # string ends in `.info` (no newline). `grep -c .` counts the
+  # non-empty lines (matches) regardless of trailing newlines.
+  [ "$(printf '%s\n' "${result}" | grep -c .)" -eq 2 ]
+  printf '%s\n' "${result}" | grep -q "^.lftp-deployment.lock.20260707T080000Z.1234.info$"
+  printf '%s\n' "${result}" | grep -q "^.lftp-deployment.lock.20260707T080100Z.5678.info$"
 }
 
 @test "_lock_parse_sentinel_listing: ignores the lock dir itself" {
@@ -515,13 +519,76 @@ FAKE
 # way is data-dependent and brittle. Post-fix: invalid timestamps
 # produce non-zero exit; the caller treats indeterminate ages as
 # "lock held, back off".
+#
+# Note on input: mktime() returns -1 only on SYNTACTICALLY invalid
+# input. A real lock-helper call could never produce this shape
+# because the parser restricts the stamp to [0-9TZ]+, but a
+# corrupted sentinel on the FTP server could escape that check.
+# month=13 does NOT trigger -1 (mktime rolls over to month=1 of
+# the following year); a non-numeric substring DOES. We use a
+# non-numeric "now" stamp here to exercise the defensive branch.
 @test "_lock_age_seconds: returns non-zero exit when mktime fails to parse" {
-  # mktime returns -1 on parse failure. Force a bad month (13) so
-  # mktime refuses: a real lock-helper call would never produce
-  # this shape (the parser restricts to [0-9TZ]+), so a -1 exit
-  # here proves the new check is wired up.
-  _lock_age_seconds "20260707T080000Z" "20261307T080000Z" >/dev/null 2>&1
+  # Non-numeric substring in 'now' forces mktime() to return -1
+  # (verified empirically on both gawk and busybox awk).
+  _lock_age_seconds "2026ab07T080000Z" "20260707T080000Z" >/dev/null 2>&1
   [ "$?" -ne 0 ]
+}
+
+# F2 audit (#268 + #173, paired): when LIST returns an EMPTY
+# listing (no sentinels, no other files), the recovery branch
+# must STILL RMD the lock dir and take over (the
+# "previous-holder-died-between-MKD-and-PUT" race). This is the
+# regression guard for the `|| _alwr_stale_files=""` fallback
+# at lib.sh:1196: without it, grep's exit 1 (no match in an
+# empty listing) propagates through `set -o pipefail` and `set
+# -e` and aborts the function before recovery can run.
+@test "acquire_lock_with_recovery: MKD 550 + empty listing -> RMDs lock dir (no sentinel to DELE), takes over" {
+  # Scripted fake-lftp sequence:
+  #   1) MKD  -> exit 1 (held)
+  #   2) LIST -> echo '' (empty listing: the lock dir exists but
+  #               the previous holder died between MKD and PUT)
+  #   3) combined recovery -> exit 0 (cls+empty DELEs+RMD in one
+  #               lftp invocation; #173 + #176 fix)
+  #   4) MKD  -> exit 0 (retry succeeds)
+  #   5) PUT  -> exit 0 (sentinel written)
+  export FAKE_LFTP_SCRIPT="${BATS_TEST_TMPDIR}/fake-lftp-script.txt"
+  cat > "${FAKE_LFTP_SCRIPT}" <<'SCRIPT'
+exit 1
+echo
+exit 0
+exit 0
+exit 0
+SCRIPT
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/sh
+line=$(head -n 1 "${FAKE_LFTP_SCRIPT:-/dev/null}" 2>/dev/null) || true
+if [ -n "${line:-}" ]; then
+  sed -i '1d' "${FAKE_LFTP_SCRIPT}"
+  case "${line}" in
+    exit\ *) rc=${line#exit }; printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit "${rc}" ;;
+    echo\ *) payload=${line#echo }; printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; printf '%s\n' "${payload}"; exit 0 ;;
+    *) printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit 0 ;;
+  esac
+fi
+printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit 0
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/lftp"
+
+  unset ACQUIRED_LOCK_SENTINEL
+  acquire_lock_with_recovery \
+    "ftp://example.test" ".lftp-deployment.lock" "5" "1" "ftptest" || rc=$?
+  [ "${rc:-0}" -eq 0 ]
+  # call_count == 5: MKD fail + LIST + combined recovery +
+  # MKD retry + PUT.
+  call_count=$(wc -l < "${FAKE_LFTP_LOG}")
+  [ "${call_count}" -eq 5 ]
+  # No DELE in the combined recovery (no sentinel to DELE) but RMD
+  # must still fire.
+  if grep -q "quote DELE" "${FAKE_LFTP_LOG}"; then
+    echo "empty listing must not emit any DELE"; cat "${FAKE_LFTP_LOG}"; false
+  fi
+  grep -q "quote RMD .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
+  [ -n "${ACQUIRED_LOCK_SENTINEL:-}" ]
 }
 
 # ----------------------------------------------------------------------------

@@ -753,7 +753,8 @@ _lock_age_seconds() {
 _lock_parse_sentinel_listing() {
   _lpsl_listing=$1
   printf '%s\n' "${_lpsl_listing}" \
-    | grep -oE '\.lftp-deployment\.lock\.[0-9]{8}T[0-9]{6}Z\.[0-9]+\.info'
+    | grep -oE '\.lftp-deployment\.lock\.[0-9]{8}T[0-9]{6}Z\.[0-9]+\.info' \
+    | sort
 }
 
 # ------------------------------------------------------------------------------
@@ -1193,7 +1194,7 @@ acquire_lock_with_recovery() {
       continue
     fi
 
-    _alwr_stale_files=$(_lock_parse_sentinel_listing "${_alwr_listing}")
+    _alwr_stale_files=$(_lock_parse_sentinel_listing "${_alwr_listing}") || _alwr_stale_files=""
     _alwr_took_over=1
     if [ -n "${_alwr_stale_files}" ]; then
       # F2 audit (#173): _lock_parse_sentinel_listing now returns
@@ -1202,23 +1203,37 @@ acquire_lock_with_recovery() {
       # sentinel — if even the oldest is recent, the holder is
       # healthy and we must respect the lock. The recovery branch
       # below DELEs every parsed name.
-      _alwr_oldest=$(printf '%s' "${_alwr_stale_files}" | head -n 1)
+      _alwr_oldest=$(printf '%s\n' "${_alwr_stale_files}" | head -n 1)
+      # The parser restricts the input to the documented sentinel
+      # pattern, so sed's regex matches on every line — `|| _stamp=""`
+      # is purely defensive against a future parser loosening.
       _alwr_stale_stamp=$(printf '%s' "${_alwr_oldest}" \
-        | sed -nE 's|^\.lftp-deployment\.lock\.([0-9TZ]+)\..*\.info$|\1|p')
+        | sed -nE 's|^\.lftp-deployment\.lock\.([0-9TZ]+)\..*\.info$|\1|p') \
+        || _alwr_stale_stamp=""
       if [ -n "${_alwr_stale_stamp}" ]; then
         _alwr_now=$(date -u +%Y%m%dT%H%M%SZ)
+        # F2 audit NEW: mktime parse failure (e.g., corrupted
+        # sentinel with non-numeric components) returns -1 and
+        # would otherwise be propagated as a garbage age. Capture
+        # the exit code and treat a parse failure as "lock held,
+        # back off" — the same semantic as a recent sentinel —
+        # so a malformed sentinel never triggers takeover.
+        set +e
         _alwr_age=$(_lock_age_seconds "${_alwr_now}" "${_alwr_stale_stamp}")
-        # `<= timeout` (not `<`) — the timeout represents the maximum
-        # age at which we still consider the sentinel recent, so a
-        # sentinel whose age is exactly `timeout` is at the boundary
-        # and must still be respected. Using `<` here would make
-        # the comparison racy when `_alwr_now` and the sentinel's
-        # timestamp straddle a second boundary (test #19 catches
-        # this: a sentinel stamped at "now" but observed one
-        # second later would have age=1 vs timeout=1 and be
-        # mis-classified as stale, triggering an unwanted DELE/RMD).
-        if [ "${_alwr_age}" -le "${_alwr_timeout}" ]; then
-          # Recent — legitimate holder, do not touch it.
+        _alwr_age_rc=$?
+        set -e
+        if [ "${_alwr_age_rc}" -ne 0 ]; then
+          _alwr_took_over=0
+        elif [ "${_alwr_age}" -le "${_alwr_timeout}" ]; then
+          # `<= timeout` (not `<`) — the timeout represents the maximum
+          # age at which we still consider the sentinel recent, so a
+          # sentinel whose age is exactly `timeout` is at the boundary
+          # and must still be respected. Using `<` here would make
+          # the comparison racy when `_alwr_now` and the sentinel's
+          # timestamp straddle a second boundary (test #19 catches
+          # this: a sentinel stamped at "now" but observed one
+          # second later would have age=1 vs timeout=1 and be
+          # mis-classified as stale, triggering an unwanted DELE/RMD).
           _alwr_took_over=0
         fi
       fi
