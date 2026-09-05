@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.6] - 2026-09-05
+
+### Security
+
+- **`acquire_lock_with_recovery` no longer vandalises a healthy holder's lock dir under concurrency_lock** (closes #173 #176 #178 #184 #251 #268) — six related F2-audit findings share the same blast radius: a parallel runner DELEing or RMDing the live holder's sentinel / lock dir. The fix has three parts:
+  * **Atomic recovery snapshot (#173, #176)** — the parser now returns every parsed sentinel, sorted ascending by stamp; the recovery branch builds ONE `lftp` script that lists the directory, DELEs every parsed sentinel, and RMDs the lock dir in the same control connection. A concurrent holder's PUT-in-progress that arrives between our `cls` and our first `quote DELE` survives — the desired behaviour, since that sentinel belongs to a live runner.
+  * **Fail-fast timeout (#251)** — `concurrency_lock_timeout=0` short-circuits BEFORE the recovery branch; a MKD failure now returns 1 without LIST / DELE / RMD against the held lock dir.
+  * **Respects transient LIST failures (#268)** — the LIST exit code is captured; on TCP reset / FTP 421 / 10s timeout the function backs off and retries instead of treating an empty listing as "no sentinel" and triggering takeover.
+  * **Hardened tempfile (#178, #184)** — the `mktemp` fallback for the sentinel body now mixes in `/dev/urandom` entropy and `chmod 0600` unconditionally, so a busybox-without-mktemp runner can no longer leak a predictable, world-readable local path.
+  * **Deterministic mktime-failure handling** — `_lock_age_seconds` now exits non-zero on POSIX `awk mktime` parse failure (corrupted sentinel with non-numeric components); the caller treats indeterminate ages as "lock held, back off" instead of producing a garbage age that could spuriously take over or respect the lock. Pre-fix this was data-dependent; post-fix the workflow either waits or fails fast deterministically.
+
+### Fixed
+
+- **Pre-release Docker tags no longer overwrite `:latest` (closes #275)** — `release.yml`'s "Resolve tag, version and enabled registries" step now detects a `-suffix` after the X.Y.Z root via `case "${version}" in *-*)` and conditionally skips the `:latest` alias for GHCR, Docker Hub (when secrets are set), and ECR Public (when enabled), plus the `all_tags` heredoc consumed by `docker/build-push-action`. A defense-in-depth assertion (`grep -Fq ':latest' "$GITHUB_OUTPUT"` followed by `::error:: + exit 1`) catches any future regression that re-introduces the alias. PR #276 already fixed the GitHub Release page side; this is the Docker-push counterpart. Stable tags (no `-suffix`) keep the `:latest` alias unchanged.
+
 ## [2.11.5] - 2026-09-05
 
 ### Security
@@ -1020,6 +1035,7 @@ malformed input).
 Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 
 
+[2.11.6]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.5...v2.11.6
 [2.11.5]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.4...v2.11.5
 [2.11.4]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.3...v2.11.4
 [2.11.2]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.1...v2.11.2
