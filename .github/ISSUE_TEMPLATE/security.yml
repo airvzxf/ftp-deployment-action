@@ -49,13 +49,13 @@ body:
       required: true
 
   - type: dropdown
-    id: affected-version
+    id: action-version
     attributes:
-      label: Affected version
+      label: Affected action version
       description: 'Tag, commit SHA, or ref you reproduced against. Anchored to the "Supported versions" table in SECURITY.md.'
       options:
         - "@v2 (latest, current line)"
-        - "specific v2.x tag (e.g. @v2.10.0)"
+        - "specific v2.x tag (e.g. @v2.11.3)"
         - "v1.x (1.4 — 1.9, supported legacy)"
         - "v1.x (1.3 or older, EOL)"
         - "@main / @master (development branch)"

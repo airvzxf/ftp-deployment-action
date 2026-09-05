@@ -29,13 +29,13 @@ body:
         If the feature is already on the roadmap or has been discussed, link to the existing issue below and add only the new context. Do **not** paste credentials, your real `server` hostname, or any `password:` value into any field on this form, even inside example workflow YAML. Redact the password as `<REDACTED>` and the server as `<your.ftp.host>` if you need to show a snippet.
 
   - type: dropdown
-    id: action-version-affected
+    id: action-version
     attributes:
-      label: "Action version this request targets"
+      label: "Action version"
       description: 'Pin the version you are using today so we can scope docs, CHANGELOG wording, and any backport decision. Anchored to the "Supported versions" table in SECURITY.md.'
       options:
         - "@v2 (latest, current line)"
-        - "specific v2.x tag (e.g. @v2.10.0)"
+        - "specific v2.x tag (e.g. @v2.11.3)"
         - "v1.x (1.4 — 1.9, supported legacy)"
         - "v1.x (1.3 or older, EOL)"
         - "@main / @master (development branch)"

