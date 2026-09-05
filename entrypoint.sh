@@ -82,6 +82,19 @@ set -o pipefail
 : "${INPUT_CONCURRENCY_LOCK_PATH:=.lftp-deployment.lock}"
 : "${INPUT_CONCURRENCY_LOCK_TIMEOUT:=300}"
 : "${INPUT_CONCURRENCY_LOCK_POLL_INTERVAL:=5}"
+# v2.11.7 (#252): validate and canonicalise the 7 gate bool inputs so
+# non-canonical aliases (yes/no/on/off/0/1/...) flow into the gate
+# checks the documented way. Pre-fix the gates used a literal
+# `[ ... = "true" ]` compare, so `concurrency_lock: yes` was silently
+# disabled. normalize_bool calls validate_bool, which rejects RCE
+# payloads and capitalised variants (e.g. `True`) with exit 2.
+INPUT_DELETE=$(normalize_bool                  "delete"                "${INPUT_DELETE}")
+INPUT_NO_SYMLINKS=$(normalize_bool             "no_symlinks"           "${INPUT_NO_SYMLINKS}")
+INPUT_DRY_RUN=$(normalize_bool                 "dry_run"               "${INPUT_DRY_RUN}")
+INPUT_UPLOAD_LOG_ON_FAILURE=$(normalize_bool   "upload_log_on_failure" "${INPUT_UPLOAD_LOG_ON_FAILURE}")
+INPUT_CONCURRENCY_LOCK=$(normalize_bool        "concurrency_lock"      "${INPUT_CONCURRENCY_LOCK}")
+INPUT_DEBUG=$(normalize_bool                   "debug"                 "${INPUT_DEBUG}")
+INPUT_FAIL_ON_DEPRECATED=$(normalize_bool      "fail_on_deprecated"    "${INPUT_FAIL_ON_DEPRECATED}")
 
 # ------------------------------------------------------------------------------
 # Emit deprecation / EOL warning based on the ref the user pinned
