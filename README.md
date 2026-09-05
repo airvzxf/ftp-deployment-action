@@ -287,8 +287,8 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | dns_max_retries        | DNS - 0 no limit trying to lookup an address otherwise try only this number of times. | No       | 8       | N/A                                                                                               |
 | dns_fatal_timeout      | DNS - Time for DNS queries.<br> Set to "never" to disable.                            | No       | 10s     | N/A                                                                                               |
 | lftp_settings          | Any other settings that you find in the MAN pages for the LFTP package.               | No       | ""      | "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';" |
-| exclude                | Comma-separated globs to exclude from the upload. Translated to `set mirror:exclude`.  | No       | ""      | "*.map,node_modules/**,.git/**"                                                                  |
-| exclude_delete         | Comma-separated globs to protect from `--delete`. Translated to `set mirror:exclude-file`. | No       | ""      | "*.log,uploads/**"                                                                               |
+| exclude                | POSIX ERE pattern passed to `mirror -x`. Matching files are **not uploaded** and **not deleted**. | No       | ""      | `.*\.map\|node_modules/.*\|\.git/.*` |
+| exclude_delete         | lftp `PatternSet::Glob` pattern passed to `mirror -X`. Matching files are **not uploaded** and **not deleted**. | No       | ""      | "*.log"                                                                                          |
 | debug                  | If "true", print resolved input values to the log.                                    | No       | false   | N/A                                                                                               |
 | fail_on_deprecated     | If "true", exit 1 when the pinned ref is end-of-life (v1.x).                         | No       | false   | N/A                                                                                               |
 | dry_run                | If "true", compute the mirror plan but do not transfer or delete any file.           | No       | false   | N/A                                                                                               |
@@ -350,7 +350,7 @@ jobs:
       dns_max_retries: "17"
       dns_fatal_timeout: "never"
       lftp_settings: "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';"
-      exclude: "*.map,node_modules/**,.git/**"
+      exclude: ".*\\.map|node_modules/.*|\\.git/.*"
       exclude_delete: "*.log"
       dry_run: "false"
       upload_log_on_failure: "true"
@@ -358,30 +358,35 @@ jobs:
 
 ### Pattern exclusions
 
-Two inputs control which files participate in the upload and which
-ones are protected from `--delete`. They map directly to lftp's
-`mirror:exclude` and `mirror:exclude-file` settings (see the
-[lftp manual](https://lftp.yar.ru/lftp-man.html) for the exact glob
-syntax — globs are case-sensitive and follow fnmatch, not shell).
+Two inputs control which files participate in the mirror. `exclude`
+is passed to lftp as `mirror -x <regex>` and uses POSIX ERE syntax.
+`exclude_delete` is passed as `mirror -X <glob>` and uses lftp's
+`PatternSet::Glob` syntax. In lftp 4.9.3, both options apply to
+uploads and deletions; there is no separate delete-only exclusion.
+See the [lftp manual](https://lftp.yar.ru/lftp-man.html) for the
+exact pattern syntax.
 
 | Input | Effect |
 |---|---|
-| `exclude` | Files matching any pattern are **not uploaded** and **not deleted**. Use this for `node_modules/`, `.git/`, `*.map`, `*.bak`, etc. |
-| `exclude_delete` | Files matching any pattern are protected from `--delete` but are still uploaded if they exist locally. Use this for `*.log` (you want fresh logs uploaded, but old ones on the server preserved). |
+| `exclude` | POSIX ERE passed to `mirror -x`. Matching files are **not uploaded** and **not deleted**. Use this for patterns such as `node_modules/.*`, `\.git/.*`, `.*\.map`, or `.*\.bak`. |
+| `exclude_delete` | lftp `PatternSet::Glob` pattern passed to `mirror -X`. Matching files are **not uploaded** and **not deleted**. Use this for patterns such as `*.log` or `uploads/**`. |
 
-Both inputs default to empty (no exclusion). The two lists are
-independent — a file can be excluded from upload but still be
-protected from deletion, or vice versa. The order of precedence
-inside the action is:
+Both inputs default to empty (no exclusion). The inputs are
+independent: both patterns may be supplied, and a file must match the
+corresponding `mirror -x` or `mirror -X` pattern to be excluded.
 
-1. The 11 standard `set <key> <value>;` directives (FTP / NET / DNS).
-2. `set mirror:exclude <value>;` if `exclude` is non-empty.
-3. `set mirror:exclude-file <value>;` if `exclude_delete` is non-empty.
-4. The free-form `lftp_settings` extension (can override any of the above).
+The action builds the mirror command as follows:
 
-Both inputs go through the same sanitization as `lftp_settings`
-(reject control chars, backtick, `$`, `!`, more than 3 `;`), so
-they're safe to pass user-supplied glob patterns.
+1. It adds the standard lftp settings.
+2. It appends `-x <regex>` when `exclude` is non-empty.
+3. It appends `-X <glob>` when `exclude_delete` is non-empty.
+4. It appends the local and remote directories to the mirror command.
+
+Both inputs are validated by the action's `validate_glob_pattern`
+validator. It rejects control characters, newlines, a leading dash,
+and lftp command-separator characters (`;`, `&`, `|`, and `"`)
+while allowing pattern metacharacters such as `!`, backticks, and
+`$` where they are valid in the selected regex or glob syntax.
 
 ## Workflow artifacts (auto-upload on failure)
 
@@ -484,18 +489,19 @@ to share a group name), opt in to the server-side lock:
     concurrency_lock: "true"
 ```
 
-**What it does.** Before the mirror, lftp issues
-`quote MKD <path>` to create a sentinel directory on the
-FTP server. If the server replies `257` (created), the
-deployment holds the lock and proceeds. If the server
-replies `550` (already exists), another run is in flight;
-the action polls up to `concurrency_lock_timeout` seconds
-(retrying every `concurrency_lock_poll_interval` seconds)
-and then fails with a clear error. After the mirror
-completes (or on any exit path — success, error, SIGINT,
-5h timeout, signal), the action issues `quote RMD <path>`
-to release the lock, both in the same lftp invocation
-and via the EXIT trap as a fallback.
+**What it does.** Before the mirror, lftp issues the
+high-level `mkdir <path>` command to create a sentinel
+directory on the FTP server. If the server replies `257`
+(created), the deployment holds the lock and proceeds.
+If the server replies `550` (already exists), another run
+is in flight; the action polls up to
+`concurrency_lock_timeout` seconds (retrying every
+`concurrency_lock_poll_interval` seconds) and then fails
+with a clear error. After the mirror completes (or on
+any exit path — success, error, SIGINT, 5h timeout, or
+signal), the action issues `quote RMD <path>` to release
+the lock, both in the mirror invocation and via the EXIT
+trap as a fallback.
 
 **Why MKD/RMD and not a "lock" command.** lftp does not
 ship a server-side `lock` primitive — it only has
@@ -518,7 +524,8 @@ starting the mirror. The next runner sees the lock held,
 
 - If the sentinel is **older** than `concurrency_lock_timeout`
   seconds: treats the lock as stale, `DELE`s the sentinel,
-  `RMD`s the lock dir, and retries MKD immediately.
+  `RMD`s the lock dir, and retries the high-level `mkdir`
+  command immediately.
 - If the sentinel is **recent** (legitimate holder): polls
   normally up to `concurrency_lock_timeout` and then fails.
 - If the lock dir exists but **no sentinel** is present
@@ -592,7 +599,7 @@ remote directory), give each its own lock path:
 |  entrypoint.sh starts    |
 |  (sources /app/lib.sh)   |
 |                          |
-|  1. Deprecation check    |--- EOL / @latest / @master  -->  ::warning::
+|  1. Deprecation check    |--- EOL / @latest / @main    -->  ::warning::
 |     (emit_deprecation_   |                                (::error:: + exit 1
 |      warning, reads       |                                 if fail_on_deprecated)
 |      GITHUB_ACTION_REF +  |
@@ -615,8 +622,9 @@ remote directory), give each its own lock path:
 |     (write_netrc)        |
 |                          |
 |  5b. Acquire server lock  |--- only if concurrency_lock=true
-|      (build_lock_acquire, |   `quote MKD <path>` in a `repeat --until-ok`
-|       inline in -e)      |   loop; polls up to concurrency_lock_timeout s
+|      (acquire_lock_with_  |   high-level `mkdir <path>`; checks for
+|       recovery)           |   stale sentinels and polls up to
+|                          |   concurrency_lock_timeout s
 |                          |   then fails with exit 1
 |                          |
 |  6. lftp -e "..."        |--- +global 5h timeout
@@ -774,12 +782,19 @@ the GitHub Actions runner log.
 
 `local_dir` and `remote_dir` are validated against `..` path-traversal
 components, leading dashes (which `lftp` would misread as options),
-control characters, and shell metacharacters (`;`, `&`, `|`, backtick,
-dollar). `lftp_settings` is lightly sanitised: control characters,
-backtick, dollar, and more than three `;`-chained directives are
-rejected. The action exits with code `2` and a clear error on any
-of these. The same sanitization applies to the `exclude` and
-`exclude_delete` inputs (v2.6.0+).
+control characters, newlines, double quotes, shell metacharacters
+(`;`, `&`, `|`, backtick, and dollar), and `!` (lftp's shell escape).
+`lftp_settings` is lightly sanitised: control characters, newlines,
+backtick, dollar, and `!` are rejected, and no more than three
+semicolon-chained directives are allowed.
+
+The `exclude` and `exclude_delete` inputs use a separate
+`validate_glob_pattern` validator because their values are passed to
+the lftp `mirror` command. It rejects control characters, newlines, a
+leading dash, and command-separator characters (`;`, `&`, `|`, and
+`"`), while allowing valid regex/glob metacharacters such as `!`,
+backticks, and `$`. The action exits with code `2` and a clear error
+when validation fails.
 
 When the auto-upload feature is enabled (`upload_log_on_failure`
 is `true` and the step exposes `GITHUB_TOKEN`), the token is

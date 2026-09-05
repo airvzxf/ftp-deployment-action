@@ -1038,6 +1038,7 @@ Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 [2.11.6]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.5...v2.11.6
 [2.11.5]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.4...v2.11.5
 [2.11.4]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.3...v2.11.4
+[2.11.3]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.2...v2.11.3
 [2.11.2]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.1...v2.11.2
 [2.11.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.0...v2.11.1
 [2.11.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.10.0...v2.11.0
