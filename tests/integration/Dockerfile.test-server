@@ -70,12 +70,11 @@
 #                                 hook creates /etc/pam.d/vsftpd but
 #                                 we are using the vsftpd `pre-install`
 #                                 trigger path that does NOT create
-#                                 the dir; the heredoc below needs
-#                                 it to exist. (Pre-fix #149 removed
-#                                 this mkdir as a "no-op"; CI
-#                                 caught the breakage: the heredoc
-#                                 runs `cat > /etc/pam.d/vsftpd_virtual`
-#                                 and fails with "nonexistent
+#                                 the dir; the printf redirection below
+#                                 needs it to exist. (Pre-fix #149
+#                                 removed this mkdir as a "no-op"; CI
+#                                 caught the breakage: the configuration
+#                                 write failed with "nonexistent
 #                                 directory". Restored.)
 #   * /var/log/vsftpd           — vsftpd's xferlog target
 #                                 (xferlog_file=/var/log/vsftpd/
@@ -93,23 +92,19 @@
 # SSL/PASV settings, exec vsftpd). See start_ftps_server in
 # tests/integration/lib/self-signed-cert.sh.
 #
-# Why # syntax=docker/dockerfile:1.4: the RUN step uses a heredoc
-# (`cat > /etc/pam.d/vsftpd_virtual <<EOF`) which requires BuildKit's
-# Dockerfile frontend (>= 1.4). Without the directive, classic
-# `docker build` (no BuildKit) parses this file with a confusing
-# error and a successful `docker buildx build` still emits a
-# deprecation notice. Pinning the frontend here makes the parser
-# unambiguous on every docker version the repo supports.
+# Why # syntax=docker/dockerfile:1.4: this file is built with the
+# BuildKit Dockerfile frontend used by the Makefile. Pinning the frontend
+# keeps parsing unambiguous on every supported Docker version.
 
 FROM alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
-RUN apk add --no-cache \
+RUN set -eu; apk add --no-cache \
       vsftpd=3.0.5-r3 \
       lftp=4.9.3-r0 \
       ca-certificates=20260611-r0 \
  && mkdir -p /etc/pam.d /var/log/vsftpd \
- && cat > /etc/pam.d/vsftpd_virtual <<'EOF'
-auth required pam_unix.so
-account required pam_unix.so
-session required pam_unix.so
-EOF
+ && printf '%s\n' \
+      'auth required pam_unix.so' \
+      'account required pam_unix.so' \
+      'session required pam_unix.so' \
+      > /etc/pam.d/vsftpd_virtual
