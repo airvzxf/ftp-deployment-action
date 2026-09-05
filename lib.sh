@@ -115,6 +115,7 @@ validate_bool() {
 validate_duration() {
   _vd_name=$1
   _vd_value=$2
+  _vd_invalid=0
   case "${_vd_value}" in
     "")
       return 0
@@ -123,11 +124,28 @@ validate_duration() {
       return 0
       ;;
     *[!0-9smhdSMHD]*)
-      printf 'ERROR: %s must be a duration (digits or digits+[smhd], or "never") (got: %s)\n' \
-        "${_vd_name}" "${_vd_value}" >&2
-      exit 2
+      _vd_invalid=1
       ;;
   esac
+
+  # The allow-list above is necessary but not sufficient: it also admits
+  # unit-only and repeated-unit values such as "s", "mhd", and "5s5m".
+  # Strip one optional suffix, then require the remainder to be digits.
+  if [ "${_vd_invalid}" -eq 0 ]; then
+    case "${_vd_value}" in
+      *[smhdSMHD]) _vd_digits=${_vd_value%?} ;;
+      *) _vd_digits=${_vd_value} ;;
+    esac
+    case "${_vd_digits}" in
+      ''|*[!0-9]*) _vd_invalid=1 ;;
+    esac
+  fi
+
+  if [ "${_vd_invalid}" -ne 0 ]; then
+    printf 'ERROR: %s must be a duration (digits or digits+[smhd], or "never") (got: %s)\n' \
+      "${_vd_name}" "${_vd_value}" >&2
+    exit 2
+  fi
 }
 
 # ------------------------------------------------------------------------------
