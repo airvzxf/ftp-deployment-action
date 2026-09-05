@@ -9,6 +9,16 @@ on:
 permissions:
   contents: read
 
+# Serialize per-ref so a burst of pushes does not spawn N
+# parallel runs. cancel-in-progress is conditional on the
+# event type: PR runs cancel so a re-pushed branch never
+# queues a stale full-suite run; main / tag / manual runs do
+# NOT cancel so the Actions tab keeps the red run visible
+# while a fix lands.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   shellcheck:
     name: shellcheck
