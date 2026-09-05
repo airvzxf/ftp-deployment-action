@@ -312,6 +312,12 @@ lftp_run_script() {
 #   lftp_run_script). Each caller-supplied command is echoed as a
 #   separate line so shell metacharacters in the caller's command stay
 #   literal (no eval).
+#
+#   v2.11.7 (#265): the open line contains the FTP_PASSWORD. Apply
+#   chmod 0600 to the output script so a busybox mktemp that defaults
+#   to 0644 does not leak the synthetic credential to any other host
+#   process running as the same UID. Mirrors the chmod applied by
+#   build_action_env_file (parity with the #133 / #158 fixes).
 # ------------------------------------------------------------------------------
 lftp_build_open_script() {
   _lbs_out=$1
@@ -339,6 +345,7 @@ lftp_build_open_script() {
     done
     printf '%s\n' "quit"
   } > "${_lbs_out}"
+  chmod 0600 "${_lbs_out}"
 }
 
 # ------------------------------------------------------------------------------
