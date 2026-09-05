@@ -701,9 +701,8 @@ jobs:
             echo "body-empty=$(test -f release/body-empty && echo true || echo false)"
           } >> "$GITHUB_OUTPUT"
 
-      # Create the GitHub Release. `make_latest: 'true'` marks
-      # this release as Latest so notification feeds and
-      # tooling that hits `/releases/latest` see the new tag.
+      # Create the GitHub Release. Pre-release tags must not become the
+      # repository's Latest release or replace the stable notification target.
       # If `build` did not find a CHANGELOG section,
       # `generate_release_notes` builds the body from the tag
       # delta as a fallback. `fail_on_unmatched_files: true`
@@ -714,7 +713,8 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.tag }}
-          make_latest: 'true'
+          prerelease: ${{ contains(steps.meta.outputs.tag, '-') }}
+          make_latest: ${{ !contains(steps.meta.outputs.tag, '-') }}
           generate_release_notes: ${{ steps.meta.outputs.body-empty == 'true' }}
           body_path: ${{ steps.meta.outputs.body-empty != 'true' && 'release/CHANGELOG.body.md' || '' }}
           files: |
