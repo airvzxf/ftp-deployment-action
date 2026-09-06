@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.11] - 2026-09-06
+
+Hardening batch v2.11.11 (F2 audit round post-v2.11.10). Closes 5 issues with
+code changes and re-confirms 12 already-fixed issues as stale. See PR #307 for
+the detailed diff.
+
+### Fixed
+
+- **`Dockerfile` drops the dead `WORKDIR /app` directive (closes #205)** — neither `entrypoint.sh` nor `lib.sh` uses `cd` or any relative path; every `/app/*` reference is absolute (`. /app/lib.sh`, `cat /app/VERSION`, `ENTRYPOINT ["/app/entrypoint.sh"]`). `WORKDIR` is a metadata directive that does not create a layer, so image size is unchanged. ENTRYPOINT uses an absolute path; the runner invokes it the same way regardless of cwd. The single-line removal cleans up the only remaining Dockerfile-level hygiene drift from the v2.11.7 (#262) batch.
+- **`ci.yml` hadolint comment for `tests/integration/Dockerfile.test-server` no longer mis-identifies DL3018 (closes #220)** — pre-fix, the comment claimed "DL3018 (pin apk versions) ... treat as info for now", but DL3018 is hadolint's `apt-get`-version-pinning rule and does NOT apply here (the test-server uses `apk add` with every package version pinned: `vsftpd=3.0.5-r3`, `lftp=4.9.3-r0`, `ca-certificates=20260611-r0` at `tests/integration/Dockerfile.test-server:101-104`; the production Dockerfile does the same). The `failure-threshold: error` below silently drops DL3018's warning-level finding as a side effect, so there is nothing to "fix" — the comment is now a line-anchored explanation of *why* the rule is currently silent and a forward-looking warning that DL3018 will start surfacing the moment a future maintainer adds an apt-get-using Dockerfile.
+- **`release.yml` ECR Public SBOM attestation step is commented out (closes #216)** — the active step was unreachable in practice because the ECR Public login steps earlier in the same job are already commented out and `ecr_enabled` resolves to `false` in every normal release. The step is now commented out with a `DISABLED:` preamble matching the existing ECR-login commented block, and the adjacent login-block preamble updated to reference three commented sites (login ×2, cosign-sign ECR branch, SBOM attestation) instead of one. The re-enable diff stays a one-step uncomment when the IAM trust policy is rewritten (tracked in #212). The `ecr_enabled` / `ecr_image` outputs emitted by the meta step remain wired so a future operator can verify the re-enable works end-to-end without rewiring.
+- **`extract_netrc_host` coverage now includes the IPv6 zone-id form and path-prefix combinations (closes #182)** — added 4 bats tests to `tests/unit/parse.bats` after the existing `extract_netrc_host` block (`ftp://host/path?query`, `ftp://host/path#frag`, `ftp://user:pw@host/path`, `ftps://[fe80::1%25eth0]/path`). The zone-id case (RFC 6874 `%25`-encoded) was the genuinely missing input: `%` is not a sed metacharacter inside a `[...]` character class, so the existing regex preserves it correctly — the test pins that behaviour mechanically. The other three cases are belt-and-braces coverage; the production behaviour is already correct, but pinning it makes a future sed-regex regression fail loudly.
+- **`start_ftp_server` / `start_ftps_server` defensively validate the FTP port globals (closes #166)** — added a 3- or 4-line `case` pattern check at the top of each helper (matching `lib.sh::validate_int`'s shape) for `FTP_CONTROL_PORT` / `FTP_IMPLICIT_PORT` / `FTP_PASV_MIN_PORT` / `FTP_PASV_MAX_PORT`. The variables are double-quoted in every use site and reach `${RUNTIME}` as opaque strings — POSIX sh does not word-split / glob-expand double-quoted parameter expansions and the container's `/bin/sh` never sees them, so this is NOT a security fix; it is a strict-improvement `log_fail` that surfaces a misconfigured harness (e.g. shell metacharacters in a config file) instead of letting the next scenario fail with a confusing "bind: invalid port" / "no port :// in URL" error.
+
+### Audit backlog (closed stale — no behaviour change)
+
+The following issues were re-confirmed as already-fixed on `main` at v2.11.10 (commit `37c3f35`) by the v2.11.11 audit subagent swarm and are closed as stale — no code change is required:
+
+- **#164** (concurrency_lock doc drift in action.yml / README) — fixed by v2.11.3 PR #245 (`CHANGELOG.md:155, 238`); grep for `quote MKD|inline-lftp` returns zero matches across the repo.
+- **#193** (`run_lftp_once` lftp log truncated on each retry) — fixed by v2.11.9 PR #302 (`lib.sh:1102` uses `>>`; `CHANGELOG.md:68`).
+- **#198** (`concurrency_lock_poll_interval` description missing the `> 0` restriction) — fixed by v2.11.9 PR #302 (`action.yml:124-127` documents the constraint; `entrypoint.sh:185-194` enforces it; `tests/smoke.sh:698-707` regression-guards it).
+- **#203** (Dockerfile three RUN layers could be combined) — only two RUNs remain after v2.11.7 PR #281 (`CHANGELOG.md:144`); combining the `apk add` and `echo $VERSION` RUNs would re-introduce the apk-index race #135 closed.
+- **#224** (scenario 09 `sleep 1` for bind-mount propagation) — replaced by a 100ms-granularity deterministic visibility poll in v2.11.9 PR #302 (`tests/integration/scenarios/09-concurrency-lock-e2e.sh:147-176`).
+- **#225** (`_log` files leaked on failure path) — every scenario (01/02/03/04/05/07/08/09/10/11/12) now registers `${_log:-}` in its EXIT trap; hardened by v2.11.10 PR #305 (`CHANGELOG.md:74-75`).
+- **#226** (`_script` files leaked on failure path) — the three lftp-script scenarios (01/02/05) now register `${_script:-}` in their EXIT trap; same v2.11.9 / v2.11.10 batch.
+- **#228** (lint target missing `tests/release-smoke.sh`) — `Makefile:88` includes it; closed by v2.11.9 PR #302 (`CHANGELOG.md:70`).
+- **#229** (scenario 10 sentinel date hardcoded) — replaced by a POSIX-awk dynamic stamp in v2.11.9 PR #302 (`tests/integration/scenarios/10-stale-lock-recovery.sh:87-117`).
+- **#232** (scenarios 03/04 missing `_log` cleanup comment) — both scenarios now document and implement the EXIT-trap cleanup (`tests/integration/scenarios/03-ftps-explicit-upload.sh:37-43,95-113`; `04-ftps-implicit-upload.sh:46-52,93-108`).
+- **#235** (CHANGELOG.md missing v2.11.0/v2.11.1 link-references) — footer already includes `[2.11.2]`, `[2.11.1]`, `[2.11.0]` references (`CHANGELOG.md:1200-1202`); closed by `7289ebf`.
+- **#133** (scenarios leak `INPUT_PASSWORD` through podman argv) — closed by commit `2627109` (`tests/integration/lib/common.sh:352-421` env-file + `chmod 0600`; `Makefile:247-260` `--env-file` instead of `-e`; `CHANGELOG.md:265`).
+
+EPIC trackers also touched (no closure — they remain open as the audit-round deliverable, not a single release):
+
+- **#233** ([EPIC] tests hardening audit) — sub-issues closed by the v2.11.9 / v2.11.10 hardening batches.
+- **#241** ([EPIC] docs hardening audit) — sub-issues closed by v2.11.3 / v2.11.9 / v2.11.10 batches.
+- **#280** ([EPIC] hardening batch — docs drift, build cleanup, validation tighten) — sub-issues closed by v2.11.10 PR #305 (`CHANGELOG.md:47-55`).
+- **#285** ([EPIC] tests hardening batch v2.11.9) — sub-issues closed by v2.11.9 PR #302 (`CHANGELOG.md:93-99`).
+
 ## [2.11.10] - 2026-09-06
 
 Workflows / `lib.sh` / tests / docs hardening batch (EPIC #304,
