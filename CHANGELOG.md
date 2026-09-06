@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.9] - 2026-09-06
+
+Test infrastructure hardening batch (EPIC #285). Closes the test-side
+findings from the v2.11.x audit arc; production-side hardening already
+shipped in v2.11.8.
+
+### Fixed
+
+- **`run_lftp_once` retry log is appended, not overwritten (closes #193)** — `lib.sh:1074` switches the log redirect from `>` to `>>` so retries preserve history. Pre-fix, each retry erased the previous attempt's output; the post-mortem log only contained the LAST attempt's stderr (or nothing if every attempt failed mid-startup). One-character change.
+- **`action.yml` documents the `> 0` restriction for `INPUT_CONCURRENCY_LOCK_POLL_INTERVAL` (closes #198)** — the input was already validated by `lib.sh::validate_int` to reject `0`, but the description claimed `default: "10"` without calling out the `> 0` constraint. README / docs parity restored; no behaviour change.
+- **`Makefile` lint target now covers `tests/release-smoke.sh` (closes #228)** — the post-build smoke check was missing from the `shellcheck -x` invocation, so `make lint` could not catch a regression in that file. CI was unaffected (its own lint path is exhaustive); local dev is now consistent with CI.
+
+### Tests
+
+- **Integration scenarios register `_log` / `_script` / `_env` in the EXIT trap (closes #225, #226, #232)** — eleven scenarios (`01, 02, 03, 04, 05, 07, 08, 09, 10, 11, 12`) now remove the tempfiles on EVERY exit path (success, lftp error, assertion failure, signal). Pre-fix, only the success branch cleaned up; failure paths leaked tempfiles until the host's `/tmp` GC fired. The header in scenarios 03 and 04 documents the cleanup behaviour.
+- **F2 audit: `${_env:-}` / `${_log:-}` defaults on every trap variable (closes #225 F2 audit)** — the EXIT trap is installed BEFORE `_log` / `_env` are assigned. Under `set -u`, a bare `${_log}` would abort the entire trap string before `stop_ftp_server` runs, leaking the FTP container on the host. `${VAR:-}` defaults restore the trap-safe contract across all eleven action-driven scenarios.
+- **Integration scenarios assert the `assets/` subdirectory landed on the server (closes #165)** — the FTPS scenarios (`03`, `04`) and the bare-host action-driven scenario (`08`) were uploading files but never asserting `assets/` arrived. The plain FTP scenarios (`01`, `02`, `05`, `09`, `10`, `11`, `12`) already covered it; this closes the symmetric gap.
+- **`tests/integration/scenarios/05` drops the NULL `local.bak` assertion (closes #165)** — the assertion checked for a filename that did not exist on either source or destination. Residual `INPUT_EXCLUDE` end-to-end gap is documented in the scenario header (scenario 11 covers `INPUT_EXCLUDE_DELETE`; scenario 05 stays as the lftp-primitive smoke test).
+- **`tests/integration/scenarios/09` replaces `sleep 1` with a deterministic visibility poll (closes #224)** — the bind-mount propagation wait was a fixed 1-second sleep, fragile against slower runners. Now a 200 ms-granularity poll against the FTP container with a 5-second budget.
+- **`tests/integration/scenarios/10` makes the stale sentinel timestamp dynamic (closes #229)** — was a hardcoded `2026-01-01` literal, would drift on long-lived CI runners and become ambiguous in future years. Now derived from `now - 2 × INPUT_CONCURRENCY_LOCK_TIMEOUT`. Also closes the F2 audit finding that hardcoded `900` in two unrelated places — the staleness window is now read from the same `_tlock_timeout` variable passed to the env file.
+
+### Stale-issue cleanup
+
+These pre-existing fixes needed their GitHub state closed (no code change
+required for any of them):
+
+- #191 (GITHUB_OUTPUT abort on echo failure) — already fixed in `entrypoint.sh:422`; closed.
+- #195 (INPUT_SERVER userinfo bypass) — closed by v2.11.8 #190 fix.
+- #257 (print_inputs_dump order) — closed by v2.11.8 #181 fix.
+- #227 (stale '24 declared inputs' comment) — closed by v2.11.8 #181 fix.
+- #204 (COPY layers) — already combined in trunk.
+- #221 (concurrency group key without default) — already fixed in trunk.
+
+### Validation
+
+- `make lint` (shellcheck + actionlint + hadolint): clean.
+- `make contract`: 31 inputs match.
+- `make unit`: 197 / 197 passing.
+- `make smoke`: 46 / 46 passing.
+- `tests/integration` (all 11 scenarios): PASS.
+
+F2 audit batch: 16 new issues filed (#286-#301) covering workflows,
+docs, `lib.sh`, and tests — separate EPIC will be filed if the volume
+warrants it.
+
 ## [2.11.8] - 2026-09-05
 
 ### Security
@@ -1094,6 +1139,7 @@ malformed input).
 Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 
 
+[2.11.8]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.7...v2.11.8
 [2.11.7]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.6...v2.11.7
 [2.11.6]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.5...v2.11.6
 [2.11.5]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.4...v2.11.5
