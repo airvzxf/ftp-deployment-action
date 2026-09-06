@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.8] - 2026-09-05
+
+### Security
+
+- **`INPUT_SERVER` is now validated and rejects URL userinfo with embedded password** (closes #190, #195) — `INPUT_SERVER` flowed verbatim into three lftp invocations and `extract_netrc_host`, with no validator in front. Three hardening steps in `entrypoint.sh`:
+  * `validate_path "server" "${INPUT_SERVER}"` — the same deny-list (`;|&`` $`, `!`, `"`, `..`, leading dash, control chars, newlines, and (v2.11.8) ASCII space) that already guards `INPUT_LOCAL_DIR`, `INPUT_REMOTE_DIR`, and `INPUT_CONCURRENCY_LOCK_PATH`. Valid FTP / FTPS / bracketed-IPv6 URLs all pass; shell-metacharacter payloads are rejected with exit 2 before any `.netrc` is written.
+  * URL userinfo with embedded password is rejected: `INPUT_SERVER=ftp://deploy:plaintext@example.com/` (the `*://*:*@*` shape) now exits 2 with a precise error. lftp 4.9.3 parses the userinfo and authenticates with the embedded credentials, silently bypassing the action's `.netrc`-based credential path. Bare `ftp://user@host` (no `:` between the userinfo's `://` and `@`) is the legitimate pattern used by `tests/integration/scenarios/03-ftps-explicit-upload.sh` and `04-ftps-implicit-upload.sh`, where the username must live in the URL so lftp's netrc lookup fires; this check intentionally allows that shape.
+  * `extract_netrc_host` strips `?query` and `#fragment` segments (closes #185). URLs like `ftp://example.com?token=abc` previously returned the entire string for the `.netrc` lookup, breaking it for legitimate URLs with query / fragment.
+
+### Fixed
+
+- **`validate_path` rejects ASCII space** (closes #174) — `remote_dir: /my data/site/` previously tokenised as `cd /my` + leftover `data/site/` inside the `lftp -e` body. The new case-based check runs *after* the `!` lftp-shell-escape check so a combined payload like `foo!cat /etc/passwd` still surfaces the more-precise `!` error first. All integration fixtures use space-free paths; the check is a strict improvement (loud failure beats silent breakage).
+- **`compute_backoff_seconds` no longer depends on `$RANDOM`** (closes #179) — the busybox-ash `$RANDOM` extension is unset on a strict POSIX `/bin/sh` (dash on Debian), which would collapse the jitter to zero and fire every retry at the same instant. Replaced with the POSIX-portable `awk -v n=… 'BEGIN { srand(); printf "%d", int(rand() * (n + 1)) - int(n / 2) }'` pattern already idiomatic in `tests/integration/lib/common.sh:106`. The `-d/2 ... +d/2` symmetric jitter range (and the four existing `tests/unit/retry.bats` range tests) are unchanged.
+- **`print_resolved_config` is now gated by `INPUT_DEBUG=true`** (closes #194) — the function previously dumped `INPUT_LOCAL_DIR`, `INPUT_REMOTE_DIR`, `FTP_SETTINGS`, `MIRROR_COMMAND`, `INPUT_MAX_RETRIES`, and a recursive `ls -lha` of the local directory on every run regardless of debug. Default `INPUT_DEBUG` is `"false"`; the dump is now visible only when the operator explicitly opts in. New smoke test pins the contract (`INPUT_DEBUG=false` does NOT emit a `Resolved configuration` group).
+- **`print_inputs_dump` order matches `action.yml` and the debug=true printf block is complete** (closes #181, #257, #227) — two issues closed in one fix:
+  * Reordered the `delete` and `max_retries` printf lines so a side-by-side diff of the debug dump against `action.yml`'s `inputs:` block is clean (action.yml declares `delete` before `max_retries`; the previous block had them swapped).
+  * Added the two missing entries to the `debug=true` printf block: `fail_on_deprecated` and `dry_run` (the block had 29 entries while the `debug=false` for-loop iterated 31). A regression that drops either from the printf block would have slipped past `tests/contract.sh` (which only audits the for-loop) and past the existing `report.bats` test (which only covered the `debug=false` branch).
+  * Extended the `report.bats:94` test to cover all 31 declared inputs and updated the misleading "24 declared inputs" comment.
+- **`acquire_lock_with_recovery` RMDs the lock dir on MKD-success + PUT-failure** (closes #254) — pre-fix, a transient sentinel-PUT failure inside the MKD-success branch continued the loop without cleaning up. `ACQUIRED_LOCK_SENTINEL` was never set, so `release_lock_safely`'s post-#188 no-sentinel guard would short-circuit, leaving the lock dir behind until a later runner's stale-recovery branch RMD'd it. New 10s-timeout `quote RMD` best-effort before `continue`, mirroring the recovery branch's `set +e` / `>/dev/null 2>&1` swallow semantics.
+- **`build_ftp_settings` drops a dead leading-space strip** (closes #258) — the always-empty leading whitespace the strip was protecting cannot exist: the first iteration of the while loop unconditionally appends `set ftp:ssl-allow …;`, so `_bfs_settings` always starts with `s`. `tests/unit/parse.bats:119-131` already asserts the first character is `s`, which mechanically proves the strip is a no-op. Cosmetic; no behaviour change.
+- **`run_lftp_once` no longer threads two permanently-empty lock arguments** (closes #259) — `LOCK_ACQUIRE` / `LOCK_RELEASE` have been unconditional no-op shims since v2.9.0 (lock work moved to `acquire_lock_with_recovery` / `release_lock_safely`). The two positional arguments (positions 9 and 10 of the old 11-arg signature) were concatenated as empty strings into the lftp script body. Dropped from `run_lftp_once`, `entrypoint.sh`, and the `run_init`-style smoke harness. The two `build_lock_*_script` helpers stay in `lib.sh` as no-ops for source-level backward compat.
+
+### Validation
+
+- `make lint` (shellcheck + actionlint + hadolint): clean.
+- `make contract`: 31 inputs match (dump loop's name list now agrees with `action.yml`).
+- `make unit`: 197 / 197 passing (was 183 + 14 new for #174, #185, #181, #257, #227, #179; one test for #172 inverted after review: `validate_lftp_settings` legitimately allows `"` because `action.yml:85` documents `set http:user-agent "firefox";` as a happy path; the fix surface for #172 is `validate_path` and `validate_glob_pattern`, both of which already reject `"` since v2.11.3 / v2.11.3.1).
+- `make smoke`: 47 / 47 passing.
+
 ## [2.11.7] - 2026-09-05
 
 ### Security

@@ -319,6 +319,23 @@ validate_path() {
       exit 2
       ;;
   esac
+  # v2.11.8 (#174): reject ASCII space. Must come AFTER the `!`
+  # check so a combined input like `foo!cat /etc/passwd` surfaces
+  # the more-precise "!" lftp-shell-escape error first. server-dir
+  # / remote_dir / local_dir values are interpolated into the
+  # `lftp -e` script body (see run_lftp_once at lib.sh:~1031) where
+  # lftp 4.9.3 tokenises on whitespace; a value like "/my
+  # data/site/" splits into `cd /my` + leftover `data/site/`,
+  # silently breaking the action. Tests in tests/integration/ all
+  # use space-free paths, so this is a strict-improvement error
+  # class (loud failure beats silent breakage).
+  case "${_vp_value}" in
+    *' '*)
+      printf 'ERROR: %s contains space (breaks lftp -e token parsing): %s\n' \
+        "${_vp_name}" "${_vp_value}" >&2
+      exit 2
+      ;;
+  esac
 }
 
 # ------------------------------------------------------------------------------
@@ -467,13 +484,19 @@ print_inputs_dump() {
   printf '::group::Inputs received\n'
   echo "=== Inputs received ==="
   if [ "${_pid_debug}" = "true" ]; then
+    # v2.11.8 (#181): order matches action.yml's `inputs:` block so a
+    # side-by-side diff of the dump against the schema is clean. Also
+    # adds the two entries the previous printf block was silently
+    # missing: `fail_on_deprecated` and `dry_run` (29 entries vs the
+    # 31 declared inputs). The DEBUG=false branch already iterated
+    # all 31 names correctly.
     printf '  %-26s %s\n' "server:"                  "$(_indirection INPUT_SERVER)"
     printf '  %-26s %s\n' "user:"                    "$(_indirection INPUT_USER)"
     printf '  %-26s %s\n' "password:"                "$(_indirection INPUT_PASSWORD)"
     printf '  %-26s %s\n' "local_dir:"               "$(_indirection INPUT_LOCAL_DIR)"
     printf '  %-26s %s\n' "remote_dir:"              "$(_indirection INPUT_REMOTE_DIR)"
-    printf '  %-26s %s\n' "max_retries:"             "$(_indirection INPUT_MAX_RETRIES)"
     printf '  %-26s %s\n' "delete:"                  "$(_indirection INPUT_DELETE)"
+    printf '  %-26s %s\n' "max_retries:"             "$(_indirection INPUT_MAX_RETRIES)"
     printf '  %-26s %s\n' "no_symlinks:"             "$(_indirection INPUT_NO_SYMLINKS)"
     printf '  %-26s %s\n' "mirror_verbose:"          "$(_indirection INPUT_MIRROR_VERBOSE)"
     printf '  %-26s %s\n' "ftp_ssl_allow:"           "$(_indirection INPUT_FTP_SSL_ALLOW)"
@@ -491,14 +514,18 @@ print_inputs_dump() {
     printf '  %-26s %s\n' "exclude:"                 "$(_indirection INPUT_EXCLUDE)"
     printf '  %-26s %s\n' "exclude_delete:"          "$(_indirection INPUT_EXCLUDE_DELETE)"
     printf '  %-26s %s\n' "debug:"                   "$(_indirection INPUT_DEBUG)"
+    printf '  %-26s %s\n' "fail_on_deprecated:"      "$(_indirection INPUT_FAIL_ON_DEPRECATED)"
+    printf '  %-26s %s\n' "dry_run:"                 "$(_indirection INPUT_DRY_RUN)"
     printf '  %-26s %s\n' "upload_log_on_failure:"   "$(_indirection INPUT_UPLOAD_LOG_ON_FAILURE)"
     printf '  %-26s %s\n' "concurrency_lock:"        "$(_indirection INPUT_CONCURRENCY_LOCK)"
     printf '  %-26s %s\n' "concurrency_lock_path:"   "$(_indirection INPUT_CONCURRENCY_LOCK_PATH)"
     printf '  %-26s %s\n' "concurrency_lock_timeout:"  "$(_indirection INPUT_CONCURRENCY_LOCK_TIMEOUT)"
     printf '  %-26s %s\n' "concurrency_lock_poll_interval:"  "$(_indirection INPUT_CONCURRENCY_LOCK_POLL_INTERVAL)"
   else
+    # v2.11.8 (#181): swap MAX_RETRIES <-> DELETE to match action.yml
+    # declaration order. Loop already iterates all 31 names.
     for _pid_name in \
-      SERVER USER PASSWORD LOCAL_DIR REMOTE_DIR MAX_RETRIES DELETE \
+      SERVER USER PASSWORD LOCAL_DIR REMOTE_DIR DELETE MAX_RETRIES \
       NO_SYMLINKS MIRROR_VERBOSE FTP_SSL_ALLOW SSL_VERIFY_CERTIFICATE \
       SSL_CHECK_HOSTNAME FTP_PASSIVE_MODE FTP_USE_FEAT FTP_NOP_INTERVAL \
       NET_MAX_RETRIES NET_PERSIST_RETRIES NET_TIMEOUT DNS_MAX_RETRIES \
@@ -550,10 +577,6 @@ print_inputs_dump() {
 #     * the free-form lftp_settings input (already validated
 #       upstream by `validate_lftp_settings`) is appended verbatim
 #       with a trailing semicolon.
-#
-#   The "Remove leading space" trick at the end of the function
-#   keeps the output clean when the first directive is preceded by
-#   one of the extension blocks.
 # ------------------------------------------------------------------------------
 build_ftp_settings() {
   _bfs_settings=""
@@ -588,11 +611,14 @@ build_ftp_settings() {
   if [ -n "${_bfs_extra}" ]; then
     _bfs_settings="${_bfs_settings} ${_bfs_extra};"
   fi
-  # Remove leading space if the first directive is followed by a
-  # space (e.g. when lftp_settings is non-empty).
-  if [ -n "${_bfs_settings}" ]; then
-    _bfs_settings="${_bfs_settings#"${_bfs_settings%%[![:space:]]*}"}"
-  fi
+  # v2.11.8 (#258): the previous code stripped a leading whitespace
+  # block here. _bfs_settings always starts with `set ftp:ssl-allow`
+  # (the first iteration of the while loop above unconditionally
+  # appends `set ... ;`); the leading character is `s`, never
+  # whitespace. When _bfs_settings is empty, the [ -n ... ] guard
+  # skipped the strip too. So the strip never had anything to
+  # remove. tests/unit/parse.bats:119-131 asserts the first
+  # character is `s`, which mechanically proves this.
   printf '%s' "${_bfs_settings}"
 }
 
@@ -832,13 +858,16 @@ normalize_dir() {
 #     ftp://user:pw@host:21            -> host
 #     ftps://[::1]:990                 -> ::1
 #     ftps://[::1]                     -> ::1
+#     ftp://host?token=abc             -> host   (v2.11.8, #185)
+#     ftp://host#frag                  -> host   (v2.11.8, #185)
 #     host                             -> host  (no scheme)
 # ------------------------------------------------------------------------------
 extract_netrc_host() {
   _enh_value=$1
   _enh_value=$(printf '%s' "${_enh_value}" \
     | sed -E 's|^[a-zA-Z]+://||' \
-    | sed -E 's|^[^@/]*@||')
+    | sed -E 's|^[^@/]*@||' \
+    | sed -E 's|[?#].*||')
   # IPv6 host literals arrive wrapped in [ ]. The host literal may
   # be followed by :port and/or /path (e.g. "[::1]:990" or
   # "[::1]/x"). Match the bracket form on the leading character so
@@ -904,8 +933,13 @@ classify_permanent_error() {
 #   With ±50% jitter for counter>=2 (so the actual sleep is in
 #   [delay - delay/2, delay + delay/2], floor at 1).
 #
-#   The RANDOM expansion is busybox ash (the runtime we actually
-#   use); POSIX sh does not define it, hence the SC3028 disable.
+#   v2.11.8 (#179): jitter uses POSIX `awk` rather than the
+#   busybox-ash `$RANDOM` extension. On a strict POSIX /bin/sh
+#   (e.g. dash on Debian), `$RANDOM` is unset and the jitter
+#   collapses to zero, defeating the backoff. busybox awk is on
+#   the alpine runtime and on every CI test runner; the same
+#   pattern is already idiomatic in tests/integration/lib/common.sh
+#   for synthetic-port generation.
 # ------------------------------------------------------------------------------
 compute_backoff_seconds() {
   _cb_counter=$1
@@ -919,8 +953,10 @@ compute_backoff_seconds() {
     *) _cb_delay=30 ;;
   esac
   if [ "${_cb_delay}" -gt 1 ]; then
-    # shellcheck disable=SC3028  # RANDOM is a busybox ash extension (the shell we actually run in).
-    _cb_jitter=$(( RANDOM % (_cb_delay + 1) - _cb_delay / 2 ))
+    # _cb_delay+1 makes the divisor odd, which is what produces the
+    # perfectly symmetric [-d/2, +d/2] range for every even delay
+    # (verified by tests/unit/retry.bats). jitter in [-d/2, +d/2].
+    _cb_jitter=$(awk -v n="${_cb_delay}" 'BEGIN { srand(); printf "%d", int(rand() * (n + 1)) - int(n / 2) }')
     _cb_sleep=$(( _cb_delay + _cb_jitter ))
   else
     _cb_sleep="${_cb_delay}"
@@ -968,7 +1004,7 @@ rewrite_lftp_url() {
 }
 
 # ------------------------------------------------------------------------------
-# run_lftp_once SERVER FTP_SETTINGS MIRROR LOCAL REMOTE LOG_FILE TIMEOUT KILL_AFTER LOCK_ACQUIRE LOCK_RELEASE USER
+# run_lftp_once SERVER FTP_SETTINGS MIRROR LOCAL REMOTE LOG_FILE TIMEOUT KILL_AFTER USER
 #   Run a single lftp invocation with the given parameters, capturing
 #   combined stdout+stderr to LOG_FILE. The function returns lftp's
 #   exit code via the function-return convention. The caller is
@@ -979,10 +1015,13 @@ rewrite_lftp_url() {
 #   lftp, and an explicit exit-code capture so the caller's
 #   `set -e` does not short-circuit the failure banner.
 #
-#   LOCK_ACQUIRE is prepended to the mirror command, LOCK_RELEASE is
-#   appended right before the final `; quit;`. Both are empty when
-#   INPUT_CONCURRENCY_LOCK is not "true", in which case the script
-#   is bit-for-bit identical to v2.7.0.
+#   v2.11.8 (#259): removed the LOCK_ACQUIRE / LOCK_RELEASE positional
+#   arguments (10, 11). Both have been unconditional no-op shims
+#   since v2.9.0 (lock work moved to acquire_lock_with_recovery /
+#   release_lock_safely); the empty strings were concatenated into
+#   the lftp -e body for years without effect. Threading two
+#   permanently-empty positional arguments through a 10-argument
+#   function is dead code.
 #
 #   IMPORTANT: this function does NOT re-enable `set -e` before
 #   returning. If it did, a non-zero lftp exit would cause the
@@ -1000,17 +1039,15 @@ run_lftp_once() {
   _rlo_log=$6
   _rlo_timeout=$7
   _rlo_kill_after=$8
-  _rlo_lock_acquire=$9
-  _rlo_lock_release=${10}
-  _rlo_user=${11}  # v2.11.0: optional. When non-empty AND the URL
-                   # has no embedded user, we rewrite the URL to
-                   # "scheme://user@host:port" so lftp's lookup against
-                   # ~/.netrc (B-03) actually triggers. See
-                   # tests/integration/scenarios/08-action-driven-upload.sh
-                   # and #124 (closes lftp-by-design workaround). The
-                   # rewrite itself lives in rewrite_lftp_url (shared
-                   # with acquire_lock_with_recovery / release_lock_safely
-                   # to close the asymmetry tracked in #132).
+  _rlo_user=$9  # v2.11.0: optional. When non-empty AND the URL
+                # has no embedded user, we rewrite the URL to
+                # "scheme://user@host:port" so lftp's lookup against
+                # ~/.netrc (B-03) actually triggers. See
+                # tests/integration/scenarios/08-action-driven-upload.sh
+                # and #124 (closes lftp-by-design workaround). The
+                # rewrite itself lives in rewrite_lftp_url (shared
+                # with acquire_lock_with_recovery / release_lock_safely
+                # to close the asymmetry tracked in #132).
 
   # v2.11.0: rewrite the URL when it has a scheme but no embedded user.
   # Without this, lftp 4.9.3 falls back to USER anonymous for
@@ -1030,7 +1067,7 @@ run_lftp_once() {
   # the user wishes, attached as a workflow artifact.
   timeout -k "${_rlo_kill_after}" "${_rlo_timeout}" lftp \
     "${_rlo_server_eff}" \
-    -e "${_rlo_settings} ${_rlo_lock_acquire}${_rlo_mirror} ${_rlo_local} ${_rlo_remote}; ${_rlo_lock_release}quit;" \
+    -e "${_rlo_settings} ${_rlo_mirror} ${_rlo_local} ${_rlo_remote}; quit;" \
     > "${_rlo_log}" 2>&1
 }
 
@@ -1182,7 +1219,21 @@ acquire_lock_with_recovery() {
       # stale-recovery / retry); this can re-enter the loop and
       # either win the MKD against the lock-holder's stale sentinel
       # or back off and wait.
+      #
+      # v2.11.8 (#254): MKD succeeded (this process owns the lock
+      # dir) but the sentinel PUT failed — ACQUIRED_LOCK_SENTINEL is
+      # never set, so release_lock_safely's post-#188 no-sentinel
+      # guard will short-circuit, leaving the dir behind. RMD
+      # best-effort before retrying so the next iteration either wins
+      # MKD against a clean tree or hands off to stale-recovery.
+      # Mirrors the recovery branch's set +e / set -e / >/dev/null
+      # swallow semantics (transient RMD failures are not actionable).
       if [ "${_alwr_put_rc}" -ne 0 ]; then
+        set +e
+        timeout 10s lftp "${_alwr_server_eff}" \
+          -e "${_alwr_preamble} quote RMD ${_alwr_path}; quit;" \
+          >/dev/null 2>&1
+        set -e
         continue
       fi
 

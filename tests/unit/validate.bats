@@ -160,6 +160,49 @@ setup() {
   [[ "$output" == *"double-quote"* ]]
 }
 
+@test "validate_path rejects ASCII space (lftp -e token parsing — v2.11.8 #174)" {
+  # server-dir / remote_dir values are interpolated into the
+  # `lftp -e` script body where lftp 4.9.3 tokenises on whitespace.
+  # /my data/site/ would split into `cd /my` + leftover `data/site/`.
+  run validate_path "remote_dir" "/my data/site/"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"space"* ]]
+}
+
+@test "validate_path rejects a leading space (v2.11.8 #174)" {
+  run validate_path "remote_dir" " /leading"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"space"* ]]
+}
+
+@test "validate_path rejects a trailing space (v2.11.8 #174)" {
+  run validate_path "remote_dir" "trailing "
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"space"* ]]
+}
+
+@test "validate_path accepts valid FTP / FTPS URL-shaped inputs (v2.11.8 #190)" {
+  # New use case for validate_path: INPUT_SERVER. Valid FTP / FTPS
+  # URL shapes (bare host, with port, bracketed IPv6) must all pass.
+  run validate_path "server" "ftp://example.com"
+  [ "$status" -eq 0 ]
+  run validate_path "server" "ftp://example.com:21"
+  [ "$status" -eq 0 ]
+  run validate_path "server" "ftps://[::1]:990"
+  [ "$status" -eq 0 ]
+  run validate_path "server" "example.com"
+  [ "$status" -eq 0 ]
+}
+
+@test "validate_path rejects shell metacharacters in INPUT_SERVER (v2.11.8 #190)" {
+  run validate_path "server" 'ftp://example.com"; cls; quit;'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"double-quote"* ]]
+  run validate_path "server" 'ftp://h;rm -rf /'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"forbidden shell metacharacter"* ]]
+}
+
 # ----------------------------------------------------------------------------
 # validate_bool — v2.11.3 (#171)
 # ----------------------------------------------------------------------------
@@ -388,4 +431,20 @@ bar'
   run validate_lftp_settings "set x:y; !uname; set a:b"
   [ "$status" -eq 2 ]
   [[ "$output" == *"\"!\""* ]]
+}
+
+@test "validate_lftp_settings accepts double-quote (documented set-directive string delimiter — F2 audit finding #172 reviewed in v2.11.8)" {
+  # F2 audit (#172) claimed validate_lftp_settings should reject
+  # `"` because the value flows into the `lftp -e` body. Validated
+  # against the documented use case in action.yml:85: the example
+  # `set http:user-agent "firefox";` is a 3-`;`-chained string with
+  # embedded double-quotes, and tests/smoke.sh:286 pins it as a
+  # documented happy path. The closing of #172 therefore means
+  # ensuring the validator rejects `"` only where it is dangerous
+  # (paths in validate_path; mirror -x/-X values in
+  # validate_glob_pattern), not in validate_lftp_settings where
+  # `"` is the documented string-delimiter for lftp's
+  # `set <key> "value";` directive. v2.11.8 close-doc.
+  run validate_lftp_settings 'set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent "firefox";'
+  [ "$status" -eq 0 ]
 }

@@ -96,6 +96,23 @@ INPUT_CONCURRENCY_LOCK=$(normalize_bool        "concurrency_lock"      "${INPUT_
 INPUT_DEBUG=$(normalize_bool                   "debug"                 "${INPUT_DEBUG}")
 INPUT_FAIL_ON_DEPRECATED=$(normalize_bool      "fail_on_deprecated"    "${INPUT_FAIL_ON_DEPRECATED}")
 
+# v2.11.8 (#195): reject URL userinfo WITH EMBEDDED PASSWORD in
+# INPUT_SERVER. lftp 4.9.3 parses `ftp://user:pw@host/path` and
+# authenticates with the embedded credentials instead of ~/.netrc,
+# silently bypassing the action's documented credential source.
+# Bare `ftp://user@host` (no password embedded) is the legitimate
+# pattern used by tests/integration/scenarios/03-ftps-explicit-upload.sh
+# and 04-ftps-implicit-upload.sh, where the username is required to
+# live in the URL so lftp's netrc lookup fires (see rewrite_lftp_url
+# at lib.sh:~956). The detection pattern is the strict `:pw@` form:
+# a `:` between the `://` and the `@` in the userinfo segment.
+case "${INPUT_SERVER}" in
+  *://*:*@*)
+    printf 'ERROR: server must not contain URL userinfo with embedded password (user:pass@host); use the user/password inputs instead.\n' >&2
+    exit 2
+    ;;
+esac
+
 # ------------------------------------------------------------------------------
 # Emit deprecation / EOL warning based on the ref the user pinned
 # this action to. Runs *before* any other echo so the warning is the
@@ -145,6 +162,14 @@ validate_duration "net_timeout"            "${INPUT_NET_TIMEOUT}"
 validate_duration "dns_fatal_timeout"      "${INPUT_DNS_FATAL_TIMEOUT}"
 # B-16: light sanitization of the free-form lftp_settings input.
 validate_lftp_settings "${INPUT_LFTP_SETTINGS}"
+# v2.11.8 (#190): INPUT_SERVER flows verbatim into the lftp URL
+# argument (entrypoint.sh:223, 276, 334) and into extract_netrc_host
+# (line 223 above). validate_path's deny-list covers shell
+# metacharacters, ";", "&", "|", backtick, "$", "!", `"`, `..`,
+# leading dash, control characters, newlines (v2.11.3.1), and
+# (v2.11.8 #174) ASCII space. None of those are valid in an lftp
+# URL. Valid bare-host and bracketed-IPv6 URLs all pass.
+validate_path "server" "${INPUT_SERVER}"
 # v2.11.3 (#160): the exclude inputs flow onto the `mirror -x` /
 # `mirror -X` command line (not into the lftp `-e` script body,
 # since v2.11.2), so they need a lighter validator that allows
@@ -186,20 +211,32 @@ INPUT_REMOTE_DIR=$(normalize_dir "${INPUT_REMOTE_DIR}")
 validate_path "local_dir"  "${INPUT_LOCAL_DIR}"
 validate_path "remote_dir" "${INPUT_REMOTE_DIR}"
 MIRROR_COMMAND=$(build_mirror_command)
-# v2.8.0: server-side concurrency lock fragments. Both functions
-# are no-ops as of v2.9.0 — the lock work moved out of the lftp
-# -e fragment to shell-driven helpers (acquire_lock_with_recovery
-# and release_lock_safely) so the stale-lock auto-recovery can
-# LIST/parse/DELE/RMD without fighting lftp's flow-control. The
-# assignments are kept for backward compat with anyone sourcing
-# lib.sh; their values are always empty.
-LOCK_ACQUIRE=$(build_lock_acquire_script)
-LOCK_RELEASE=$(build_lock_release_script)
+# v2.11.8 (#259): LOCK_ACQUIRE / LOCK_RELEASE removed entirely.
+# The two build_lock_*_script helpers have been unconditional
+# no-ops since v2.9.0; the lock work moved out of the lftp -e
+# fragment to shell-driven helpers (acquire_lock_with_recovery
+# and release_lock_safely). The two empty positional args in
+# run_lftp_once (positions 9-10 in the old signature) were
+# always interpolated as empty into the lftp script body. The
+# helpers themselves are kept in lib.sh as no-ops so anyone
+# sourcing lib.sh continues to find the documented names.
+# Build them only to preserve the deprecation-by-print pattern
+# of the source-level compat. Output is discarded.
+build_lock_acquire_script >/dev/null
+build_lock_release_script >/dev/null
 
 # ------------------------------------------------------------------------------
-# Display the resolved configuration.
+# Display the resolved configuration only when INPUT_DEBUG=true.
+# v2.11.8 (#194): print_resolved_config was called unconditionally,
+# dumping INPUT_LOCAL_DIR / INPUT_REMOTE_DIR / FTP_SETTINGS /
+# MIRROR_COMMAND and a recursive `ls -lha` of the local directory
+# to stdout even when debug was off. Default INPUT_DEBUG is "false";
+# the dump was visible in the GH Actions log on every run. The
+# function body itself is unchanged; the call site is the gate.
 # ------------------------------------------------------------------------------
-print_resolved_config
+if [ "${INPUT_DEBUG}" = "true" ]; then
+  print_resolved_config
+fi
 
 # ------------------------------------------------------------------------------
 # B-03: write credentials to a private .netrc and let lftp read it.
@@ -339,8 +376,6 @@ while true; do
     "${LOG_FILE}" \
     "${LFTP_TIMEOUT}" \
     "${LFTP_KILL_AFTER}" \
-    "${LOCK_ACQUIRE}" \
-    "${LOCK_RELEASE}" \
     "${INPUT_USER}"
   LFTP_RC=$?
   set -e
