@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.7] - 2026-09-05
+
+### Security
+
+- **Boolean aliases (`yes`/`no`/`on`/`off`/`0`/`1`) now work for the 7 gate inputs** (closes #252) — `delete`, `no_symlinks`, `dry_run`, `upload_log_on_failure`, `concurrency_lock`, `debug`, and `fail_on_deprecated` were compared to the literal string `"true"`, so a workflow that wrote `concurrency_lock: yes` or `dry_run: True` was silently off. New `normalize_bool` helper in `lib.sh` validates through `validate_bool` (rejects RCE payloads and capitalised variants with exit 2) and canonicalises to `"true"` / `"false"` so the existing literal compares keep working. The 5 booleans that flow into the `lftp -e` body were already covered by `validate_bool` since v2.11.3 (#171); this closes the symmetric gap for the 7 gate booleans.
+- **`validate_int` rejects leading zeros** (closes #253) — `00`, `007`, `08`, `09` now exit 2 with `"must be a non-negative integer without leading zeros"`. The string compare at `entrypoint.sh:358` (`max_retries != "0"`) silently broke the documented retry-forever sentinel when `max_retries=00`. The arithmetic at `lib.sh:1077` (lock-acquire count) crashed on `concurrency_lock_poll_interval=08` and divided-by-zero on `=00`. Single-line, single source of truth; the canonical `0` retry-forever sentinel is unaffected.
+
+### Fixed
+
+- **Dockerfile build hygiene** (closes #262 #208 #209) — three changes:
+  * Consolidated two consecutive `RUN` instructions (`echo VERSION > /app/VERSION` + `chmod +x /app/entrypoint.sh`) into a single `RUN` (hadolint DL3059). Image layers reduced from 10 to 9.
+  * Removed redundant `mkdir -p /home/lftp` + `chown -R lftp:lftp /home/lftp`. Busybox `adduser -h DIR` already creates the home dir; the `mkdir` / `chown` were no-ops on alpine:3.24.
+  * Removed `COPY LICENSE README.md /app/`. Neither file is read at runtime by `entrypoint.sh` or `lib.sh`; ~76 KB and one image layer saved.
+- **Makefile recipes work from any subdirectory** (closes #269) — the `ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))` variable declared at `Makefile:15` was unused; `build`, `build-test-server-image`, `build-smoke-image`, and `run` all used CWD-relative paths (`docker build .`, `tests/integration`, `$(PWD)`). Wired `$(ROOT)` into all four recipes with quoted variable substitutions. CI is unaffected (runs from repo root).
+- **`.dockerignore` tightened** (closes #262 #206) — added `.worktrees`, `tests`, `scripts`, `Makefile`, `action.yml`, `CHANGELOG.md`, `AGENTS.md`, `ROADMAP.md`, `SECURITY.md`. ~570 KB of leaked build-context removed; `make build` and `docker build .` no longer ship docs / tests / scripts to the daemon.
+- **Test-harness parity fix** (closes #265) — `tests/integration/lib/common.sh::lftp_build_open_script` now applies `chmod 0600` to the lftp script file it writes. The script contains the synthetic test FTP password on the `open -u ${FTP_USER},${FTP_PASSWORD} ...` line; the #133 / #158 chmod was applied to the FTPS env-files but missed this path. Scenarios 01 / 02 / 05 use this helper.
+
+### Documentation
+
+- **`README.md` ASCII-art flow** (closes #239) — `@master` → `@main` on the deprecation-check step (default branch was renamed to `main`; the diagram is the only `@master` reference in the README).
+- **`README.md` exclusion section** (closes #260) — 9 stale references to pre-v2.11.2 `set mirror:exclude` / `set mirror:exclude-file` / comma-separated glob prose rewritten to match the current `mirror -x` (POSIX ERE) / `mirror -X` (PatternSet::Glob) behaviour. The extended example's `exclude: "*.map,node_modules/**,.git/**"` was broken as POSIX ERE; replaced with the correct `.*\.map|node_modules/.*|\.git/.*`. The "Pattern exclusions" table's `exclude_delete` row was claiming delete-only behaviour (false since lftp 4.9.3 — both `-x` and `-X` apply to upload AND delete).
+- **`README.md` concurrency-lock section** (closes #261) — 6 stale `quote MKD` / inline-`-e` references rewritten to the high-level `mkdir` (acquire) and `quote RMD` (release, intentional raw form). The flowchart row now describes `acquire_lock_with_recovery` (shell-driven, since v2.9.0) instead of `build_lock_acquire` (deprecated inline `-e` fragment).
+- **`README.md` Security section** (closes #260) — listed the v2.11.3 hardening additions (`"`, `!`, newline) and called out that `exclude` / `exclude_delete` use the separate `validate_glob_pattern` validator (they are valid PatternSet / regex metacharacters and are NOT command separators for lftp's `-e` handler).
+- **`CHANGELOG.md` v2.11.3 link reference** (closes #264) — PR #245 added `v2.11.0` and `v2.11.1` references but missed the `v2.11.3` line. Footer now descending `2.11.4 → 2.11.3 → 2.11.2 → 2.11.1 → 2.11.0`.
+
+### Tests
+
+- **`print_resolved_config` unit coverage** (closes #266) — `tests/unit/report.bats` header advertised coverage for `print_resolved_config` but had zero `@test` blocks. Added three tests covering the group markers, the `ls -lha` local listing, and the resolved-settings section.
+- **Validation bats coverage** — 7 new tests covering `validate_int` leading-zero rejection (`00`, `007`, `08`, `09`) and `normalize_bool` canonicalisation (`yes`/`on`/`1` → `"true"`, `no`/`off`/`0`/`""` → `"false"`), capitalised-variant rejection, and RCE-payload rejection.
+
 ## [2.11.6] - 2026-09-05
 
 ### Security
@@ -1035,6 +1065,7 @@ malformed input).
 Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 
 
+[2.11.7]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.6...v2.11.7
 [2.11.6]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.5...v2.11.6
 [2.11.5]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.4...v2.11.5
 [2.11.4]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.3...v2.11.4
