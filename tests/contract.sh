@@ -110,4 +110,61 @@ ok "dump loop's name list matches declared inputs"
 n=$(echo "${declared}" | wc -l | tr -d ' ')
 printf '  info: %s input(s): %s\n' "${n}" "$(echo "${declared}" | tr '\n' ' ')"
 
+# 5. Docs version stamp matches VERSION. The re-drift of #234 (the
+# original SEC.md stamp drift fix) and the F2 audit's #299 made the
+# same point: VERSION, CHANGELOG.md, and SECURITY.md drift every
+# release unless something mechanically pins them together. This
+# check enforces that contract at CI time. The release branch
+# (release.yml) bumps VERSION and stamps CHANGELOG.md; a missed
+# SECURITY.md stamp update would otherwise reach the release page.
+#
+# The check operates on the EXPLICIT version stamps in each file
+# (SECURITY.md's `latest = vX.Y.Z`, CHANGELOG.md's `## [X.Y.Z]`
+# heading) rather than a `grep -q v${VER}` substring match, because
+# feature-history notes like `since v2.0.0` and `Fixed in v2.11.0`
+# would make a substring match trivially true and hide the drift.
+
+VER=$(cat "${ROOT}/VERSION") || fail "cannot read ${ROOT}/VERSION"
+
+# SECURITY.md line 7 carries the explicit stamp:
+#   `| Currently maintained | `v2.x` (latest = `vX.Y.Z`) | ...`
+# shellcheck disable=SC2016
+_sec_stamp=$(sed -n '7p' "${ROOT}/SECURITY.md" \
+  | sed -n 's/.*(latest = `v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)`).*/\1/p')
+if [ "${_sec_stamp:-}" != "${VER}" ]; then
+  fail "SECURITY.md line 7 stamp is '${_sec_stamp:-<missing>}' but VERSION is '${VER}'"
+fi
+ok "SECURITY.md line 7 'latest = vX.Y.Z' matches VERSION (${VER})"
+
+# CHANGELOG.md top heading: `## [X.Y.Z] - YYYY-MM-DD`. The Keep a
+# Changelog preamble sits between line 1 and the first version
+# heading, so search the first 30 lines to be resilient to preamble
+# edits.
+_chg_stamp=$(sed -n '1,30p' "${ROOT}/CHANGELOG.md" \
+  | awk '/^## \[[0-9]+\.[0-9]+\.[0-9]+\][ ]/ { sub(/^## \[/, ""); sub(/\][ ].*$/, ""); print; exit }')
+if [ -z "${_chg_stamp:-}" ]; then
+  fail "CHANGELOG.md has no '## [X.Y.Z]' heading in lines 1-30"
+fi
+if [ "${_chg_stamp}" != "${VER}" ]; then
+  fail "CHANGELOG.md top '## [X.Y.Z]' heading is '${_chg_stamp}' but VERSION is '${VER}'"
+fi
+ok "CHANGELOG.md top '## [X.Y.Z]' matches VERSION (${VER})"
+
+# README.md: most version references in README are feature-history
+# notes ('since v2.0.0', 'Fixed in v2.11.0', `v2.10.0+` publishing
+# examples), not stamps. Defensive check: if a `latest = vX.Y.Z`
+# stamp is added later, verify it matches VERSION; otherwise emit an
+# info note so a future audit knows the check ran and found no
+# stamp to verify.
+if grep -qE 'latest = v[0-9]+\.[0-9]+\.[0-9]+' "${ROOT}/README.md"; then
+  _readme_stamp=$(grep -oE 'latest = v[0-9]+\.[0-9]+\.[0-9]+' "${ROOT}/README.md" \
+    | head -n 1 | sed 's/.*v//')
+  if [ "${_readme_stamp}" != "${VER}" ]; then
+    fail "README.md 'latest = vX.Y.Z' stamp is 'v${_readme_stamp}' but VERSION is '${VER}'"
+  fi
+  ok "README.md 'latest = vX.Y.Z' matches VERSION (${VER})"
+else
+  ok "README.md has no 'latest = vX.Y.Z' stamp (no drift to check)"
+fi
+
 exit 0

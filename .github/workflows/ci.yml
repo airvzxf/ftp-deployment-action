@@ -25,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install shellcheck
         run: |
           sudo apt-get update
@@ -46,6 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # rhysd/actionlint is a Go binary, not a JavaScript action. We install
       # it directly from the upstream release instead of using a wrapper
       # action, which keeps the dependency footprint small and the version
@@ -67,6 +71,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # Pin to a specific tag because the upstream has no floating "v3" ref
       # (only v3.0.0, v3.1.0, ...). Using `@v3` makes the resolver fail.
       # hadolint/hadolint-action takes a single `dockerfile:` input
@@ -90,6 +96,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Verify action.yml ↔ entrypoint.sh/lib.sh consistency
         run: tests/contract.sh
 
@@ -98,6 +106,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install bats
         run: |
           sudo apt-get update
@@ -111,6 +121,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # v2.11.3 (#137): build the pre-baked smoke-test image
       # (tests/Dockerfile.smoke) once, then run the suite against
       # it. The previous inline `apk add --no-cache lftp ca-certificates`
@@ -151,6 +163,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build the action image under test
         run: make build IMAGE=ftp-deployment-action:ci-integration VERSION=ci
       # Build the pre-baked FTPS test server image used by scenarios

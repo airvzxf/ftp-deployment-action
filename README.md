@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@v4
       # Here is the deployment action
       - name: Upload from public_html via FTP
-        uses: airvzxf/ftp-deployment-action@v2
+        uses: airvzxf/ftp-deployment-action@v2.11.9
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -84,18 +84,25 @@ jobs:
           local_dir: "./public_html"
 ```
 
-> **Pin to a major version (recommended)**: `@v2` always points to the
-> latest v2.x release. For stricter reproducibility pin to a specific
-> tag (`@v2.0.0`) or a full commit SHA. Avoid `@latest` and `@main` —
-> they move under you and can introduce regressions.
+> **Pin to a specific tag (recommended)**: The `@v2` floating
+> major alias is **stale** — it still points at the v2.0.x-era
+> image and the release pipeline does not move it, so following
+> it silently skips every fix between v2.1.0 and the present
+> (notably v2.11.3 CRITICAL RCE fix, the v2.11.0 HOME/netrc fix,
+> the v2.11.6 lock hardening, and the v2.11.7 / v2.11.8
+> input-validator batch). Pin to a specific tag (the examples
+> below use `@v2.11.9`) or a full commit SHA. Always avoid
+> `@latest`, `@main`, and `@master` — they move under you and
+> can introduce regressions.
 >
 > **Verify a tag's signature before pinning to it**:
-> `scripts/verify-tag.sh v2.11.0` checks the tag against the
-> in-repo allow-list (`.github/trusted-signers` for SSH-signed
-> v2.11.0+ tags, `.github/trusted-signers.asc` for PGP-signed
-> v1.5.0 – v2.10.0). The release pipeline's
-> `verify-tag-signature` job runs the same check on every push
-> before any image is published.
+> `scripts/verify-tag.sh <tag>` checks the tag against the
+> in-repo allow-lists and auto-detects whichever backend the
+> tag used (`.github/trusted-signers` for SSH-signed tags,
+> `.github/trusted-signers.asc` for PGP-signed tags; see
+> [SECURITY.md](./SECURITY.md) for the per-tag range). The
+> release pipeline's `verify-tag-signature` job runs the same
+> check on every push before any image is published.
 
 ## Publishing targets (v2.10.0+)
 
@@ -104,8 +111,8 @@ when configured); a third (ECR Public) is currently disabled — see below:
 
 | Registry | Image | How to consume |
 |---|---|---|
-| GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.10.0` | `uses: airvzxf/ftp-deployment-action@v2` (the example above) |
-| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.10.0` | `uses: docker://docker.io/airvzxf/ftp-deployment-action@v2` |
+| GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.11.9` | `uses: airvzxf/ftp-deployment-action@v2.11.9` (the example above) |
+| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.11.9` | `uses: docker://docker.io/airvzxf/ftp-deployment-action@v2.11.9` |
 
 Both carry the same OCI image bytes (one `docker buildx build`,
 one digest), the same `cosign` keyless signature
@@ -153,26 +160,42 @@ have secrets configured. The ghcr.io path is unaffected.
 
 ### Re-enable ECR Public (when AWS access is restored)
 
-The ECR Public publishing code is fully present in
-`.github/workflows/release.yml` but gated by `if false; then` in
-the meta step and commented-out steps in the build job. To
-re-enable, two edits in `release.yml`:
+The ECR Public publishing code is fully present and
+uncommented in `.github/workflows/release.yml` (the OIDC
+credentials step and the ECR Public login step in the build
+job are live). The publish path is gated by the
+`ECR_DISABLED_FORCE` opt-in switch at `release.yml`:
 
-1. In the `Resolve tag, version and enabled registries` step,
-   change the `if false; then` line to:
-   ```bash
-   if [ -n "${AWS_ROLE_TO_ASSUME}" ]; then
-   ```
-   (and delete the "ECR Public publishing is temporarily disabled"
-   comment block above it).
-2. In the `Build · release image` job, uncomment the two steps
-   marked `# - name: Configure AWS credentials (OIDC) for ECR Public`
-   and `# - name: Log in to ECR Public` (the line `# - name:`
-   becomes `      - name:` and the `# ` prefix is removed from
-   each subsequent line).
+```bash
+if [ -n "${ECR_DISABLED_FORCE:-}" ] && [ -n "${AWS_ROLE_TO_ASSUME}" ]; then
+```
 
-Then update the IAM role's OIDC trust policy as documented
-in this section (below — kept for reference, no longer active).
+The default state is **disabled** (the variable is unset, the
+condition is false, the build skips the ECR publish and the
+meta step emits `ecr_enabled=false`). To re-enable, do
+**two things**:
+
+1. Repair the AWS IAM role's OIDC trust policy documented in
+   the next section so this repo can assume it, and set the
+   `AWS_ROLE_TO_ASSUME` repository secret to the repaired
+   role ARN. With both the IAM trust policy and the secret
+   in place, future releases will start publishing to ECR
+   Public without any in-source edit.
+2. For a one-off test run that bypasses the IAM trust policy
+   state (e.g. to validate the OIDC + ECR Public path
+   end-to-end before the trust policy is repaired), set the
+   `ECR_DISABLED_FORCE` repository variable to any non-empty
+   string (e.g. `1`) on
+   <https://github.com/airvzxf/ftp-deployment-action/settings/variables/actions>.
+   With `ECR_DISABLED_FORCE` non-empty AND `AWS_ROLE_TO_ASSUME`
+   set, the publish branch is taken unconditionally. **Remove
+   the variable** once the IAM trust policy is confirmed
+   working — leaving it set forces every future release to
+   publish to ECR Public regardless of the IAM state, which is
+   rarely what you want.
+
+No edit to `release.yml` is needed in either case — the
+gating is purely on the environment variables above.
 
 #### Reference: ECR Public with OIDC (currently disabled)
 
@@ -242,7 +265,7 @@ secrets):
            "ecr-public:UploadLayerPart",
            "ecr-public:CompleteLayerUpload"
          ],
-         "Resource": "arn:aws:ecr-public::ACCOUNT_ID:repository/m2z1h0m9/ftp-deployment-action"
+         "Resource": "arn:aws:ecr-public::ACCOUNT_ID:repository/ftp-deployment-action"
        }
      ]
    }
@@ -263,6 +286,26 @@ have secrets configured. The ghcr.io path is unaffected.
 ## Settings
 
 Usually the zero values mean unlimited or infinite. This table is based on the default values on `lftp-4.9.3`.
+
+> **Boolean inputs accept a fixed spelling set.** Every input
+> whose default is `true` / `false` (`delete`, `no_symlinks`,
+> `ftp_ssl_allow`, `ssl_verify_certificate`,
+> `ssl_check_hostname`, `ftp_passive_mode`, `ftp_use_feat`,
+> `debug`, `fail_on_deprecated`, `dry_run`,
+> `upload_log_on_failure`, `concurrency_lock`) accepts the
+> case-sensitive set `true`, `false`, `yes`, `no`, `on`, `off`,
+> `0`, and `1`. Anything else — including capitalised variants
+> such as `True`, `YES`, or `On` — is rejected with exit code
+> `2` before the upload starts.
+>
+> **Numeric inputs reject leading zeros.** `max_retries`,
+> `mirror_verbose`, `ftp_nop_interval`, `net_max_retries`,
+> `net_persist_retries`, `dns_max_retries`,
+> `concurrency_lock_timeout`, and
+> `concurrency_lock_poll_interval` accept a non-negative
+> integer without leading zeros. `max_retries: "00"` (and any
+> other `0`-prefixed integer) exits `2` rather than being
+> silently treated as `0`.
 
 | Option                 | Description                                                                           | Required | Default | Example                                                                                           |
 |------------------------|---------------------------------------------------------------------------------------|----------|---------|---------------------------------------------------------------------------------------------------|
@@ -292,7 +335,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | debug                  | If "true", print resolved input values to the log.                                    | No       | false   | N/A                                                                                               |
 | fail_on_deprecated     | If "true", exit 1 when the pinned ref is end-of-life (v1.x).                         | No       | false   | N/A                                                                                               |
 | dry_run                | If "true", compute the mirror plan but do not transfer or delete any file.           | No       | false   | N/A                                                                                               |
-| upload_log_on_failure  | If "true" (default), on exit 1 upload the captured lftp log to the workflow run as an artifact (90-day retention). Requires `env: GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` on the step. | No       | true    | N/A                                                                                               |
+| upload_log_on_failure  | **BROKEN** (do not rely on). If "true" (default), the action attempts to POST the log to a non-existent GitHub REST endpoint on exit 1 and always prints `WARNING: failed to upload log artifact`. Set to "false" to silence the warning, then read `outputs.log_file` and upload the log yourself with `actions/upload-artifact` (see "Workflow artifacts" below). | No       | true    | N/A                                                                                               |
 | concurrency_lock       | If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory. See "Concurrency / deployment lock" below. | No       | false   | N/A                                                                                               |
 | concurrency_lock_path  | Path of the sentinel directory used by `concurrency_lock`. Must be a valid FTP path (no `..`, no shell metacharacters, no leading dash, no `!`, no `"`). | No       | .lftp-deployment.lock | N/A                                                                                |
 | concurrency_lock_timeout | Maximum seconds to wait for the lock when `concurrency_lock` is "true" and another run is currently holding it. `0` means fail immediately when held. | No | 300  | N/A                                                                                               |
@@ -329,7 +372,7 @@ jobs:
       - uses: actions/checkout@v4
       # Here is the deployment action
   - name: Upload from public_html via FTP
-    uses: airvzxf/ftp-deployment-action@v2
+    uses: airvzxf/ftp-deployment-action@v2.11.9
     with:
       server: ${{ secrets.FTP_SERVER }}
       user: ${{ secrets.FTP_USERNAME }}
@@ -388,41 +431,72 @@ and lftp command-separator characters (`;`, `&`, `|`, and `"`)
 while allowing pattern metacharacters such as `!`, backticks, and
 `$` where they are valid in the selected regex or glob syntax.
 
-## Workflow artifacts (auto-upload on failure)
+## Workflow artifacts (manual upload on failure)
 
-When the action exits with code `1` (e.g. the FTP server is
-unreachable, credentials are wrong, or the retry loop is
-exhausted), the captured lftp log file is **automatically uploaded
-to the current workflow run as a workflow artifact** named
-`ftp-deployment-action-log-<run-attempt>`, with a 90-day
-retention. The artifact is attached to the run alongside any
-other artifacts your workflow produces; download it from the
-GitHub UI to inspect the exact lftp output that triggered the
-failure.
+> **⚠️ BROKEN as of v2.11.10**: the action's documented
+> `upload_log_on_failure: "true"` feature uses a non-existent
+> GitHub REST endpoint
+> (`POST /repos/<owner>/<repo>/actions/runs/<run_id>/artifacts`).
+> GitHub's REST API does not expose a create/POST endpoint for
+> artifacts — creation flows through the Actions Runtime API
+> (`ACTIONS_RUNTIME_TOKEN` + `ACTIONS_RESULTS_URL`), which
+> `GITHUB_TOKEN` cannot substitute for. The call always returns
+> a non-2xx, the action logs `WARNING: failed to upload log
+> artifact`, and the user never sees an artifact in the run.
+> This has been silently broken since v2.7.0; a follow-up
+> release will switch the upload to the runtime-token API.
+> Adding `GITHUB_TOKEN` to the step as the docs previously
+> suggested is harmless but pointless.
 
-To enable the upload, expose `GITHUB_TOKEN` to the step:
+The supported flow today is to read the `log_file` action
+output (declared in `action.yml`; the path inside the
+container, written before the failure banner) and pass it to
+`actions/upload-artifact` in a follow-up step. **Caveat**:
+`outputs.log_file` is an in-container path
+(`/home/lftp/.lftp-logs/run-<UTC-timestamp>.log`) — when the
+Docker-action step finishes, the container is destroyed and
+the path no longer exists on the host runner, so a vanilla
+follow-up `actions/upload-artifact` step will fail with
+`if-no-files-found: error`. To make the path survive, mount it
+to the host:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2
-  env:
-    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+- id: deploy
+  uses: airvzxf/ftp-deployment-action@v2.11.9
   with:
     server: ${{ secrets.FTP_SERVER }}
     user: ${{ secrets.FTP_USERNAME }}
     password: ${{ secrets.FTP_PASSWORD }}
     local_dir: "./public_html"
+
+- if: failure()
+  uses: actions/upload-artifact@v4
+  with:
+    name: ftp-deployment-action-log-${{ github.run_attempt }}
+    path: /tmp/ftp-deployment-action-logs
+    retention-days: 90
 ```
 
-The upload is fail-soft. If the token (or any of the
-GitHub-Actions env vars) is missing, the action skips the
-upload with a notice and still exits `1`. If the upload
-request itself fails (network, 4xx, 5xx), a warning is
-printed and the action still exits `1`. Set
-`upload_log_on_failure: "false"` to disable the upload
-entirely. The log file is always captured under
-`~/.lftp-logs/` in the container regardless — the runner can
-inspect it from a follow-up step if it has access to the
-container filesystem.
+```yaml
+# Job-level volumes mount for the action container (works for both
+# container and composite / docker actions in GH-hosted runners).
+# The container must be launched with a writable host path mapped
+# to its /home/lftp/.lftp-logs directory.
+```
+
+**Practical alternative while the upload is being redesigned**
+(tracked alongside #296): set `INPUT_DEBUG=true` and read the
+captured log from the run's standard log — `print_resolved_config`
+prints the configuration on success and lftp's stderr is also
+captured. This avoids the cross-container-file dance but loses
+the structured-artifact ergonomics.
+
+The log file is always written to
+`/home/lftp/.lftp-logs/run-<UTC-timestamp>.log` inside the
+container (the `log_file` output), regardless of
+`upload_log_on_failure`. Set `upload_log_on_failure: "false"`
+to silence the misleading `WARNING: failed to upload log
+artifact` notice printed by the broken code path.
 
 The artifact name uses `<run-attempt>` (the attempt number
 within the workflow run) so that re-running a failed job
@@ -453,7 +527,7 @@ jobs:
       group: ftp-deploy-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - uses: airvzxf/ftp-deployment-action@v2
+      - uses: airvzxf/ftp-deployment-action@v2.11.9
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -481,7 +555,7 @@ distinct workflows pointing to the same FTP and don't want
 to share a group name), opt in to the server-side lock:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2
+- uses: airvzxf/ftp-deployment-action@v2.11.9
   with:
     server: ${{ secrets.FTP_SERVER }}
     user: ${{ secrets.FTP_USERNAME }}
@@ -561,7 +635,7 @@ production, one for staging, each writing to a different
 remote directory), give each its own lock path:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2
+- uses: airvzxf/ftp-deployment-action@v2.11.9
   with:
     concurrency_lock: "true"
     concurrency_lock_path: ".lftp-deployment.lock.prod"
@@ -633,8 +707,12 @@ remote directory), give each its own lock path:
 |      max_retries=0..N)   |   + releases lock via `quote RMD` + EXIT trap
 |                          |     if it was acquired
 |                          |
-|  7. Upload log artifact  |--- only on FAIL; needs GITHUB_TOKEN; skip-on-missing
-|     (upload_log_artifact)|   90-day retention; fail-soft (warning on error)
+|  7. Upload log artifact  |--- BROKEN since v2.7.0 (uses a non-existent REST POST
+|     (upload_log_artifact)|    endpoint — see "Workflow artifacts (manual upload
+|                          |    on failure)" below). The log is still captured at
+|                          |    /home/lftp/.lftp-logs/run-<UTC>.log inside the
+|                          |    container; a follow-up release will switch the
+|                          |    upload to the Actions Runtime API.
 |                          |
 |  8. Result banner        |--- ERROR: UPLOAD FAILED + last lftp exit code
 |     (print_failure_      |    FTP UPLOADED FINISHED! on success
@@ -693,7 +771,7 @@ non-buildable image) **before** a tag is pushed.
 |------|---------|
 | `0`  | Upload finished successfully. |
 | `1`  | Upload failed after all retries; the last lftp error is printed above. |
-| `2`  | Invalid input. This includes: a non-integer numeric option (e.g. `max_retries`); a `local_dir` / `remote_dir` that fails the path-traversal or shell-metacharacter guard; an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives. |
+| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` — v2.11.8 #195 closes the credential-source bypass); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives; an `exclude` / `exclude_delete` value rejected by `validate_glob_pattern` (control chars, leading dash, `;`, `&`, `|`, or `"`). |
 
 When the global 5-hour timeout is reached the lftp process is killed and the
 action exits with `1` (the most recent lftp exit code is also printed to the
@@ -747,7 +825,7 @@ cannot yet upgrade to v2.11.0, the workaround is to pin `HOME`
 explicitly on the step:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2
+- uses: airvzxf/ftp-deployment-action@v2.11.9
   env:
     HOME: /home/lftp        # override the runner's HOME
   with:
@@ -780,13 +858,21 @@ on any exit path (success, error, `set -e` abort, SIGINT). Combined,
 these mean the password never appears in `/proc/<pid>/cmdline` or in
 the GitHub Actions runner log.
 
-`local_dir` and `remote_dir` are validated against `..` path-traversal
+`server`, `local_dir`, `remote_dir`, and `concurrency_lock_path`
+are all validated against the same deny-list: `..` path-traversal
 components, leading dashes (which `lftp` would misread as options),
 control characters, newlines, double quotes, shell metacharacters
-(`;`, `&`, `|`, backtick, and dollar), and `!` (lftp's shell escape).
-`lftp_settings` is lightly sanitised: control characters, newlines,
-backtick, dollar, and `!` are rejected, and no more than three
-semicolon-chained directives are allowed.
+(`;`, `&`, `|`, backtick, and dollar), `!` (lftp's shell escape),
+and (since v2.11.8) ASCII space — a value like `/my data/site/`
+used to silently break the lftp `-e` tokeniser, now exits `2`.
+The `server` input additionally rejects URL userinfo that
+embeds a password (the `ftp://user:pass@host` form, v2.11.8
+#195 — lftp 4.9.3 would otherwise authenticate with the embedded
+credentials and silently bypass the action's documented
+credential source). `lftp_settings` is lightly sanitised:
+control characters, newlines, backtick, dollar, and `!` are
+rejected, and no more than three semicolon-chained directives
+are allowed.
 
 The `exclude` and `exclude_delete` inputs use a separate
 `validate_glob_pattern` validator because their values are passed to
@@ -796,13 +882,14 @@ leading dash, and command-separator characters (`;`, `&`, `|`, and
 backticks, and `$`. The action exits with code `2` and a clear error
 when validation fails.
 
-When the auto-upload feature is enabled (`upload_log_on_failure`
-is `true` and the step exposes `GITHUB_TOKEN`), the token is
-sent only to `${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts`
-as an `Authorization: Bearer <token>` header. The token is
-never interpolated into the URL, so it cannot leak into the
-runner log even if `curl -v` were used. The upload response is
-discarded (`> /dev/null`).
+The `upload_log_on_failure` input is currently a no-op end-to-end:
+see "Workflow artifacts (manual upload on failure)" above for the
+supported replacement using the `log_file` output and a follow-up
+`actions/upload-artifact` step. The action does not store or
+forward `GITHUB_TOKEN` anywhere outside the broken POST request
+it issues today; that request does not interpolate the token
+into the URL, so it does not leak into the runner log even if
+`curl -v` were used.
 
 ## Changelog
 

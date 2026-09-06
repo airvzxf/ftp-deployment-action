@@ -28,7 +28,7 @@ page from the `CHANGELOG.md` section for the new version.
 | Registries | ghcr.io (primary), docker.io (optional), public.ecr.aws (optional) |
 | Image signing | cosign keyless via OIDC (Sigstore Fulcio) |
 | SBOM | CycloneDX JSON via `anchore/sbom-action`, attached as in-toto attestation |
-| Tag signing | PGP (v1.5.0 – v2.10.0) and SSH (v2.11.0+) — see "Tag signature guard" |
+| Tag signing | PGP (v1.5.0 – v2.10.0, v2.11.7 – v2.11.8) and SSH (v2.11.0 – v2.11.6, v2.11.9+) — see "Tag signature guard" |
 
 ## Stack
 
@@ -245,10 +245,13 @@ being verified.
   full fingerprint
   `82DE44111B30F91F55BCEB1F414687A3CD7E65B9`) in ASCII-armored
   form. Imported into the runner's keyring **only when the tag
-  being verified is PGP-signed** (v2.10.0 and earlier). For
-  v2.11.0+ SSH-signed tags the file is optional — this keeps
-  the documented key-removal path below intact when the
-  maintainer eventually drops the legacy GPG key.
+  being verified is PGP-signed** (`v1.5.0`–`v2.10.0` and
+  `v2.11.7`–`v2.11.8`). The `.asc` is **not** optional today:
+  the maintainer alternates between the two backends and both
+  keys are load-bearing for at least one shipped release. Do
+  not remove the file until the most recent PGP-signed tag is
+  at least one minor version old (see "Removing a signer"
+  below).
 
 `git verify-tag` auto-detects which backend the tag used, so
 both formats are supported without conditional logic in the

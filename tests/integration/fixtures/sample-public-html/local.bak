@@ -1,0 +1,10 @@
+Placeholder fixture for the INPUT_EXCLUDE regression test in
+tests/integration/scenarios/05-exclude-and-exclude-delete.sh. This
+file exists in the source fixture so the mirror has a `.bak` entry
+to consider; the scenario asserts the file is NOT uploaded to the
+FTP home because INPUT_EXCLUDE=*.bak (translated to
+`set mirror:exclude '.*\.bak'`) blocks it.
+
+If this file is missing, scenario 05 becomes vacuous (closes #165):
+the assertion `assert_absent local.bak` would pass trivially because
+no local file named `local.bak` ever existed in the first place.

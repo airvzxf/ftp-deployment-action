@@ -306,7 +306,8 @@ jobs:
             echo "Fix (re-tag with the maintainer's signing key):"
             echo "  git tag -d ${TAG}"
             echo "  git push origin :refs/tags/${TAG}"
-            echo "  git tag -s ${TAG} -m 'release: ${TAG#v}'"
+            msg="release: ${TAG#v}"
+            echo "  git tag -s ${TAG} -m '${msg}'"
             echo "  git push origin ${TAG}"
             echo ""
             echo "See .github/trusted-signers and AGENTS.md 'Tag signature guard'."
@@ -350,7 +351,8 @@ jobs:
             tag="${GITHUB_REF_NAME}"
           fi
           version="${tag#v}"
-          image="ghcr.io/${{ github.repository_owner }}/ftp-deployment-action"
+          owner="${{ github.repository_owner }}"
+          image="ghcr.io/${owner}/ftp-deployment-action"
 
           {
             echo "tag=${tag}"
@@ -382,7 +384,7 @@ jobs:
           ecr_image=""
 
           if [ -n "${DOCKERHUB_USERNAME}" ] && [ -n "${DOCKERHUB_TOKEN}" ]; then
-            dockerhub_image="docker.io/airvzxf/ftp-deployment-action"
+            dockerhub_image="docker.io/${owner}/ftp-deployment-action"
             tags="${tags}"$'\n'"${dockerhub_image}:${version}"$'\n'"${dockerhub_image}:${tag}"
             if [ "${pre_release}" = false ]; then
               tags="${tags}"$'\n'"${dockerhub_image}:latest"
@@ -425,6 +427,9 @@ jobs:
           # test run) combined with `AWS_ROLE_TO_ASSUME` is
           # enough to enable the publish path without rewriting
           # this step.
+          # ECR Public namespace `m2z1h0m9` is a per-account AWS ID,
+          # not a GitHub owner; derive from `owner` only after the IAM
+          # trust policy is rewritten to authorize per-fork OIDC subjects.
           if [ -n "${ECR_DISABLED_FORCE:-}" ] && [ -n "${AWS_ROLE_TO_ASSUME}" ]; then
             ecr_image="public.ecr.aws/m2z1h0m9/ftp-deployment-action"
             tags="${tags}"$'\n'"${ecr_image}:${version}"$'\n'"${ecr_image}:${tag}"
@@ -473,11 +478,16 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-          # F2 audit (#275): defense-in-depth — refuse to publish a
-          # pre-release tag with a :latest alias anywhere. The
-          # all_tags heredoc above is what docker/build-push-action
-          # consumes via steps.meta.outputs.all_tags.
-          if [ "${pre_release}" = true ] && grep -Fq ':latest' "$GITHUB_OUTPUT"; then
+          # F2 audit (#275) hardened in v2.11.10 (#288): refuse to publish
+          # a pre-release tag with a :latest alias. Grep the parsed
+          # `tags` list (not the raw $GITHUB_OUTPUT file, which also
+          # contains `tag=`, `image=`, the all_tags heredoc, and the
+          # `dockerhub_*` / `ecr_*` metadata lines); a future maintainer
+          # adding any output value containing the substring `:latest`
+          # would otherwise false-positive here. `-Fxq`: full-line,
+          # fixed-string, quiet — matches only if some line in `tags`
+          # is exactly `${image}:latest`.
+          if [ "${pre_release}" = true ] && printf '%s\n' "${tags}" | grep -Fxq -e "${image}:latest"; then
             echo "::error::Pre-release tag ${tag} must not publish a :latest alias"
             exit 1
           fi
@@ -495,6 +505,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ needs.verify-tag-reachability.outputs.tag_commit }}
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -733,10 +744,20 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${INPUT_VERSION:-${GITHUB_REF_NAME}}"
+          if [ -f release/body-empty ]; then
+            body=""
+            body_empty=true
+          else
+            body="$(cat release/CHANGELOG.body.md)"
+            body_empty=false
+          fi
           {
             echo "tag=${TAG}"
             echo "version=${TAG#v}"
-            echo "body-empty=$(test -f release/body-empty && echo true || echo false)"
+            echo "body-empty=${body_empty}"
+            echo "body<<EOF"
+            printf '%s\n' "${body}"
+            echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
       # Create the GitHub Release. Pre-release tags must not become the
@@ -746,6 +767,17 @@ jobs:
       # delta as a fallback. `fail_on_unmatched_files: true`
       # (moagan's hardening) aborts the publish if the bundle
       # is missing the expected SBOM.
+      # v2.11.10 (#293): `body_path` previously collapsed to `''`
+      # when `body-empty == 'true'`, which `softprops/action-gh-release`
+      # interpreted as the cwd and tried to read `body.md` from there
+      # (failing), then escalated via `fail_on_unmatched_files: true`.
+      # Switch to `body:` (content carried through the `meta` step's
+      # heredoc output) so the empty-body case is a clean empty string
+      # rather than a filesystem lookup. `fail_on_unmatched_files` is
+      # still true when a body IS expected (so a missing SBOM still
+      # fails the publish), and false when the body is intentionally
+      # empty (so the SBOM-missing failure mode doesn't shadow the
+      # generate_release_notes fallback).
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
@@ -754,7 +786,7 @@ jobs:
           prerelease: ${{ contains(steps.meta.outputs.tag, '-') }}
           make_latest: ${{ !contains(steps.meta.outputs.tag, '-') }}
           generate_release_notes: ${{ steps.meta.outputs.body-empty == 'true' }}
-          body_path: ${{ steps.meta.outputs.body-empty != 'true' && 'release/CHANGELOG.body.md' || '' }}
+          body: ${{ steps.meta.outputs.body }}
           files: |
             release/sbom.cyclonedx.json
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: ${{ steps.meta.outputs.body-empty != 'true' }}
