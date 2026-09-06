@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.10] - 2026-09-06
+
+Workflows / `lib.sh` / tests / docs hardening batch (EPIC #304,
+PR #305). Closes the F2 audit findings filed against v2.11.9.
+
+### Fixed
+
+- **`acquire_lock_with_recovery` now honors the documented `INPUT_CONCURRENCY_LOCK_TIMEOUT` (closes #294)** — pre-fix, the loop ran `ceil(timeout/poll)` iterations, each accumulating ~1-3s of MKD+LIST+RMD+sleep work, so total wall-clock was 1.4×–2× the documented value. Replaced iteration-counting with a POSIX `date +%s`-based wall-clock deadline check at the top of every iteration. `timeout=0` keeps its documented "no waiting, fail immediately" semantic. Worst-case overshoot is now one iteration's worth of MKD+LIST+RMD+sleep (~55s on a stuck server); 32-bit `$((...))` overflow for absurdly large timeouts is documented in the comment.
+- **`extract_netrc_host` no longer silently corrupts the `.netrc` for malformed bracketed IPv6 URLs (closes #295)** — pre-fix, `ftp://[::1` (typo) passed `validate_path`, then `extract_netrc_host`'s regex produced empty output, then `write_netrc` emitted `machine  login user password` (invalid `.netrc`) and the user saw a confusing `530 Login authentication failed` downstream. Added a `[` / `]` count-balance check to `validate_path`; unbalanced brackets now exit 2 with `unbalanced IPv6 brackets (found N "[" and M "]")`.
+- **Scenario 05 `INPUT_EXCLUDE` coverage is now load-bearing (closes #297)** — pre-fix, the `assert_absent local.bak` after the mirror was vacuous because the fixture carried no `.bak` file (it was inherited from a prior fixture layout). Added `tests/integration/fixtures/sample-public-html/local.bak` and updated the test to invoke the same `mirror -x '.*\.bak'` flag the action uses (the prior `set mirror:exclude` form is a silent no-op in lftp 4.9.3). The assertion now actually proves the upload-time `-x` flag is wired end-to-end; scenario 11's `INPUT_EXCLUDE_DELETE` (`-X`) coverage remains separate.
+- **Scenario 09's deterministic visibility poll fails loudly instead of silently giving up (closes #298)** — pre-fix, when the 5-second poll expired without the lock dir being visible to vsftpd, the test continued and step 2's `assert_action_success` could pass for the wrong reason (action took a fresh lock, not a stale one). Now `log_fail "lock dir not visible to vsftpd within 5s; bind-mount propagation stalled"` on poll expiry so a real bind-mount stall surfaces as a red test, not a false-positive PASS.
+- **SECURITY.md / CHANGELOG.md / README.md version stamps cannot drift again (closes #299)** — pre-fix, the SECURITY.md "latest = vX.Y.Z" stamp silently went stale every release (recurring drift of #234). Added a mechanical version-stamp drift check to `tests/contract.sh` that compares `VERSION` against the SECURITY.md line 7 stamp AND the top `## [X.Y.Z]` heading in CHANGELOG.md. README.md is checked defensively (no stamp today; added later it must match). A drifted stamp now fails CI on the next release branch instead of being caught by a future F2 audit.
+
+### Security
+
+- **`actions/checkout` no longer persists the auto-injected `GITHUB_TOKEN` to `.git/config` (closes #292)** — pre-fix, 7 of 7 ci.yml checkouts AND the release.yml build job's SHA-pinned checkout left `persist-credentials` at its default of `true`. The two release.yml verify jobs already set `persist-credentials: false`; consistency across all 10 sites closes a defense-in-depth gap (the token in `.git/config` is read-write scoped to the repo and can be reached by any subsequent `git push` invocation, even if no such invocation exists today).
+- **README `@v2` floating alias is dead; every example now pins a specific tag (closes #289)** — pre-fix, README documented `@v2` as "always points to the latest v2.x release" but the release pipeline never moves the major alias (it still points at commit `2920f30` from 2026-07-05 — `git tag --contains` lists `v2.0.1`–`v2.6.0`). Users following the documented pin silently ran a v2.0.x-era image missing every fix between v2.1.0 and the present (notably v2.11.3 CRITICAL RCE fix, the v2.11.0 HOME/netrc fix, v2.11.6 lock hardening, and the v2.11.7 / v2.11.8 input-validator batch). Every README example now pins `@v2.11.9`. SECURITY.md floating-refs paragraph updated to call out `@v2` alongside `@latest`, `@master`, `@main`. (The `@v2.11.10` bump for the next release's examples is tracked as a follow-up doc-update PR.)
+- **`upload_log_on_failure` is now honestly documented as BROKEN (closes #290)** — pre-fix, action.yml and README promised the action uploads the lftp log to the workflow run on exit 1 via an auto-upload to `${GITHUB_API_URL}/repos/.../actions/runs/.../artifacts`. GitHub's REST artifacts API has no create/POST endpoint; the call always returns non-2xx, the action logs `WARNING: failed to upload log artifact`, and the user never sees an artifact. The feature has been silently broken since v2.7.0 and is now marked BROKEN in both action.yml and README. README documents the supported manual replacement using `outputs.log_file` + a follow-up `actions/upload-artifact` step (with the caveat that the path is in-container and requires a host volume mount to survive).
+- **SECURITY.md tag-signing table now reflects the actual record (closes #291)** — pre-fix, the table said "v2.11.0 and later" = SSH, but v2.11.7 and v2.11.8 were signed with PGP. The corrected table shows `v1.5.0–v2.10.0` PGP, `v2.11.0–v2.11.6` SSH, `v2.11.7–v2.11.8` PGP, `v2.11.9+` SSH, and the `.asc` is **not** optional today (the maintainer alternates between the two backends and both keys are load-bearing for at least one shipped release). AGENTS.md "Tag signing" table and "Tag signature guard" prose updated to match.
+- **`dockerhub_image` namespace no longer hardcodes the maintainer's handle (closes #287)** — pre-fix, `release.yml:385` set `dockerhub_image="docker.io/airvzxf/ftp-deployment-action"` regardless of the workflow's `github.repository_owner`, so a fork that has `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` configured would silently push to the original maintainer's `docker.io/airvzxf/…` namespace. Now derived from `${owner}` (the same `owner="${{ github.repository_owner }}"` variable ghcr.io already used). The ECR Public namespace (`m2z1h0m9`) stays hardcoded with a comment explaining why (per-account AWS ID, not GitHub owner).
+- **README ECR re-enable recipe now matches `release.yml` (closes #300)** — pre-fix, the recipe told operators to "change the `if false; then` line to `if [ -n "${AWS_ROLE_TO_ASSUME}" ]; then`", but v2.11.4 (#217) replaced the `if false; then` gate with `if [ -n "${ECR_DISABLED_FORCE:-}" ] && [ -n "${AWS_ROLE_TO_ASSUME}" ]` at `release.yml`. The README recipe now documents the actual `ECR_DISABLED_FORCE` opt-in switch and the IAM trust-policy repair it pairs with. The IAM Resource ARN was also corrected to drop the bogus `m2z1h0m9/` registry alias (`arn:aws:ecr-public::<account>:repository/<name>` does not carry a registry alias).
+
+### Workflow
+
+- **`:latest` assertion in the pre-release guard now scopes to the parsed `tags` list (closes #288)** — pre-fix, `release.yml:480` greps the **entire** `$GITHUB_OUTPUT` file for `:latest` (defense-in-depth for the v2.11.9 #275 fix). Today no metadata value contains `:latest` so the assertion passes, but any future maintainer adding a `:latest` substring to an unrelated output value (e.g. `latest_supported=…`) would false-positive, AND a regression that put `:latest` into a metadata field rather than `all_tags` could slip past. Replaced with `printf '%s\n' "${tags}" | grep -Fxq -e "${image}:latest"` — full-line, fixed-string, scoped to the parsed tags variable.
+- **Empty `body_path` ternary in `publish` no longer confuses `softprops/action-gh-release` (closes #293)** — pre-fix, when the build step didn't find a CHANGELOG section, `body_path: ${{ body-empty != 'true' && 'release/CHANGELOG.body.md' || '' }}` resolved to `''`, which the action interpreted as the cwd and tried to read `body.md` from there (failing), then escalated via `fail_on_unmatched_files: true` into a misleading publish failure. Refactored the publish-meta step to emit the body content via a heredoc (`body<<EOF…EOF`) and switched the action invocation from `body_path` to `body`. `fail_on_unmatched_files` is now conditional: true when a body IS expected (so a missing SBOM still fails), false on the empty-body path (so the SBOM-missing failure mode doesn't shadow the `generate_release_notes` fallback).
+
+### Documentation
+
+- **README validation / exit-code docs now cover v2.11.7 and v2.11.8 changes (closes #301)** — pre-fix, the exit-codes table's `2` row mentioned only `local_dir` / `remote_dir` and the `lftp_settings` denylist; the Settings preamble said nothing about the canonical boolean spellings. The new row adds `server` validation, URL-userinfo-with-embedded-password rejection (v2.11.8 #195 closes the `.netrc`-bypass), ASCII space (v2.11.8 #174), leading zeros (v2.11.7 #253), the canonical boolean set (`true|false|yes|no|on|off|0|1`, anything else exits 2; v2.11.7 #252), and the `exclude` / `exclude_delete` `validate_glob_pattern` rejects. The Settings preamble now documents the boolean spellings and the leading-zero rejection explicitly. The Security section's path-validation prose now covers `server` and `concurrency_lock_path` alongside `local_dir` / `remote_dir`, with the URL-userinfo rejection and the ASCII-space guard called out.
+
+### Excluded
+
+- **#296** — `pending-design`. The right fix depends on what
+  `upload_log_on_failure` is meant to deliver (last attempt only? full
+  retry history? first failure only?). README now reflects the broken
+  state honestly (see #290 above); the architectural redesign tracks
+  with this issue.
+
+### Validation
+
+- `make lint` (shellcheck + actionlint + hadolint): clean.
+- `make contract`: 5/5 ok (31 inputs match; SECURITY.md / CHANGELOG.md /
+  README.md stamps match VERSION).
+- `make unit`: 203/203 passing (was 197 in v2.11.9, +1 for #294, +5 for #295).
+- `make smoke`: all smoke tests pass.
+- `tests/integration` (all 11 scenarios): PASS — including the now-
+  load-bearing scenario 05 INPUT_EXCLUDE coverage.
+
+F2 audit batch: 16 issues filed (#286–#301), 15 closed in this release
+(#296 deferred per `pending-design`).
+
 ## [2.11.9] - 2026-09-06
 
 Test infrastructure hardening batch (EPIC #285). Closes the test-side
