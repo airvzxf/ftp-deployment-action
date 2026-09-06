@@ -29,8 +29,9 @@ COPY entrypoint.sh lib.sh /app/
 # `release.yml` passes --build-arg VERSION=<tag>; local `docker build`
 # gets the default "dev".
 ARG VERSION=dev
-RUN echo "$VERSION" > /app/VERSION \
- && /bin/chmod +x /app/entrypoint.sh
+RUN printf '%s\n' "$VERSION" > /app/VERSION \
+ && chmod 0644 /app/VERSION \
+ && chmod 0755 /app/entrypoint.sh
 
 # B-03 / B-14: the script writes the .netrc file at $HOME/.netrc, so
 # HOME must point at the lftp user's writable home. Without this ENV

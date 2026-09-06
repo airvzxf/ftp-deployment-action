@@ -86,11 +86,11 @@ inputs:
     required: false
     default: ''
   exclude:
-    description: 'POSIX ERE pattern (e.g. `.*\.map`, `node_modules/.*`) passed to `mirror -x` (regex exclude). Files matching the pattern are neither uploaded nor deleted. v2.11.2: switched from the previous (silent-no-op) `set mirror:exclude` to `mirror -x`, which is what lftp 4.9.3 actually applies. v2.11.3 (#160): validated by `validate_glob_pattern`. v2.11.3.1 (#246): the validator also rejects `;`, `&`, `|`, `"` as lftp `-e` command separators even mid-token. Allowed metacharacters are `!`, backtick, and `$` (these are valid PatternSet / regex characters and are NOT parsed as command separators by lftp''s `-e` handler). See #131, #167.'
+    description: 'POSIX ERE pattern (e.g. `.*\.map`, `node_modules/.*`) passed to `mirror -x` (regex exclude). Files matching the pattern are neither uploaded nor deleted. v2.11.2: switched from the previous (silent-no-op) `set mirror:exclude` to `mirror -x`, which is what lftp 4.9.3 actually applies. v2.11.3 (#160): validated by `validate_glob_pattern`. v2.11.3.1 (#246): the validator also rejects `;`, `&`, `|`, `"` as lftp `-e` command separators even mid-token, plus embedded newlines, other `[[:cntrl:]]` control characters, and a leading `-` (would be misread as a `mirror` option). Allowed metacharacters are `!`, backtick, and `$` (these are valid PatternSet / regex characters and are NOT parsed as command separators by lftp''s `-e` handler). See #131, #167.'
     required: false
     default: ''
   exclude_delete:
-    description: 'Shell glob pattern (lftp PatternSet::Glob syntax, e.g. `*.log`, `uploads/**`) passed to `mirror -X` (glob exclude-delete). Independent of `exclude`: same `mirror -X` semantics as `mirror -x` (both apply to upload AND delete). v2.11.2: switched from the previous (silent-no-op) `set mirror:exclude-file` (no such variable in lftp 4.9.3) to `mirror -X`. v2.11.3 (#160): validated by `validate_glob_pattern`. v2.11.3.1 (#246): the validator also rejects `;`, `&`, `|`, `"` as lftp `-e` command separators even mid-token. Allowed metacharacters are `!`, backtick, and `$` (these are valid PatternSet / regex characters and are NOT parsed as command separators by lftp''s `-e` handler). See #131, #167.'
+    description: 'Shell glob pattern (lftp PatternSet::Glob syntax, e.g. `*.log`, `uploads/**`) passed to `mirror -X` (glob exclude-delete). Independent of `exclude`: same `mirror -X` semantics as `mirror -x` (both apply to upload AND delete). v2.11.2: switched from the previous (silent-no-op) `set mirror:exclude-file` (no such variable in lftp 4.9.3) to `mirror -X`. v2.11.3 (#160): validated by `validate_glob_pattern`. v2.11.3.1 (#246): the validator also rejects `;`, `&`, `|`, `"` as lftp `-e` command separators even mid-token, plus embedded newlines, other `[[:cntrl:]]` control characters, and a leading `-` (would be misread as a `mirror` option). Allowed metacharacters are `!`, backtick, and `$` (these are valid PatternSet / regex characters and are NOT parsed as command separators by lftp''s `-e` handler). See #131, #167.'
     required: false
     default: ''
   debug:
@@ -114,7 +114,7 @@ inputs:
     required: false
     default: 'false'
   concurrency_lock_path:
-    description: 'Path of the sentinel directory used by `concurrency_lock`. Relative paths are resolved against the FTP user''s home; absolute paths are accepted. Must be a valid FTP path (no `..`, no shell metacharacters, no leading dash, no `!`, no `"`). Default: ".lftp-deployment.lock" (a hidden directory alongside the deployed files). The directory will be created and removed by the action; do not use a path that holds user data.'
+    description: 'Path of the sentinel directory used by `concurrency_lock`. Relative paths are resolved against the FTP user''s home; absolute paths are accepted. Must be a valid FTP path: validated by `validate_path` (lib.sh), which rejects `..` path-traversal components, a leading `-` (would be misread as an lftp option), embedded newlines and other `[[:cntrl:]]` control characters, `;|&`` shell metacharacters, `$` (shell substitution), `!` (lftp shell escape), `"` (breaks lftp -e string parsing), ASCII space (breaks lftp -e token parsing), unbalanced IPv6 brackets, and empty `[]` brackets. Default: ".lftp-deployment.lock" (a hidden directory alongside the deployed files). The directory will be created and removed by the action; do not use a path that holds user data.'
     required: false
     default: '.lftp-deployment.lock'
   concurrency_lock_timeout:

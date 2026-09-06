@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@v4
       # Here is the deployment action
       - name: Upload from public_html via FTP
-        uses: airvzxf/ftp-deployment-action@v2.11.9
+        uses: airvzxf/ftp-deployment-action@v2.11.13
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -91,7 +91,7 @@ jobs:
 > (notably v2.11.3 CRITICAL RCE fix, the v2.11.0 HOME/netrc fix,
 > the v2.11.6 lock hardening, and the v2.11.7 / v2.11.8
 > input-validator batch). Pin to a specific tag (the examples
-> below use `@v2.11.9`) or a full commit SHA. Always avoid
+> below use `@v2.11.13`) or a full commit SHA. Always avoid
 > `@latest`, `@main`, and `@master` — they move under you and
 > can introduce regressions.
 >
@@ -111,8 +111,8 @@ when configured); a third (ECR Public) is currently disabled — see below:
 
 | Registry | Image | How to consume |
 |---|---|---|
-| GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.11.9` | `uses: airvzxf/ftp-deployment-action@v2.11.9` (the example above) |
-| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.11.9` | `uses: docker://docker.io/airvzxf/ftp-deployment-action@v2.11.9` |
+| GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.11.13` | `uses: airvzxf/ftp-deployment-action@v2.11.13` (the example above) |
+| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.11.13` | `uses: docker://docker.io/airvzxf/ftp-deployment-action@v2.11.13` |
 
 Both carry the same OCI image bytes (one `docker buildx build`,
 one digest), the same `cosign` keyless signature
@@ -160,42 +160,65 @@ have secrets configured. The ghcr.io path is unaffected.
 
 ### Re-enable ECR Public (when AWS access is restored)
 
-The ECR Public publishing code is fully present and
-uncommented in `.github/workflows/release.yml` (the OIDC
-credentials step and the ECR Public login step in the build
-job are live). The publish path is gated by the
-`ECR_DISABLED_FORCE` opt-in switch at `release.yml`:
+ECR Public publishing is **disabled by default** as of
+v2.11.11 (#216). All four ECR Public sites in
+`.github/workflows/release.yml` are under `# DISABLED:`
+preambles:
 
-```bash
-if [ -n "${ECR_DISABLED_FORCE:-}" ] && [ -n "${AWS_ROLE_TO_ASSUME}" ]; then
-```
+1. The ECR Public block inside the
+   `Resolve tag, version and enabled registries` step
+   (`meta` step in the `build` job) — guarded by
+   `if [ -n "${ECR_DISABLED_FORCE:-}" ] && [ -n "${AWS_ROLE_TO_ASSUME}" ]`,
+   so the publish path is only taken when both are set.
+   When the condition is false, the step emits
+   `ecr_enabled=false` and a `::notice::` explaining why the
+   publish was skipped.
+2. The two ECR Public login steps (`Configure AWS credentials
+   (OIDC) for ECR Public` and `Log in to ECR Public`) further
+   down in the `build` job — commented out, with a `# DISABLED:`
+   preamble referencing the meta-step block above.
+3. The cosign-sign ECR branch in the `Sign image with cosign`
+   step — wrapped in `if [ "${{ steps.meta.outputs.ecr_enabled }}" = "true" ]`,
+   which is dead while `ecr_enabled=false`.
+4. The `Attach SBOM attestation to ECR Public image` step at
+   the end of the `build` job — commented out, with a
+   `v2.11.11 (#216): DISABLED.` preamble.
 
-The default state is **disabled** (the variable is unset, the
-condition is false, the build skips the ECR publish and the
-meta step emits `ecr_enabled=false`). To re-enable, do
-**two things**:
+To re-enable, do **three things** (canonical runbook
+tracked in #212):
 
 1. Repair the AWS IAM role's OIDC trust policy documented in
    the next section so this repo can assume it, and set the
    `AWS_ROLE_TO_ASSUME` repository secret to the repaired
-   role ARN. With both the IAM trust policy and the secret
-   in place, future releases will start publishing to ECR
-   Public without any in-source edit.
-2. For a one-off test run that bypasses the IAM trust policy
+   role ARN.
+2. Uncomment the three commented-out ECR steps in
+   `.github/workflows/release.yml` (the two ECR login steps
+   in `build` and the `Attach SBOM attestation to ECR Public
+   image` step at the end of `build`). The `if [ ... = "true" ]`
+   wrapping on the cosign-sign ECR branch is already in
+   place; it becomes live the moment `ecr_enabled` flips to
+   `true`.
+3. For a one-off test run that bypasses the IAM trust policy
    state (e.g. to validate the OIDC + ECR Public path
    end-to-end before the trust policy is repaired), set the
    `ECR_DISABLED_FORCE` repository variable to any non-empty
    string (e.g. `1`) on
    <https://github.com/airvzxf/ftp-deployment-action/settings/variables/actions>.
    With `ECR_DISABLED_FORCE` non-empty AND `AWS_ROLE_TO_ASSUME`
-   set, the publish branch is taken unconditionally. **Remove
-   the variable** once the IAM trust policy is confirmed
-   working — leaving it set forces every future release to
-   publish to ECR Public regardless of the IAM state, which is
-   rarely what you want.
+   set, the meta step takes the publish branch unconditionally
+   and emits `ecr_enabled=true` — useful for end-to-end
+   testing on a temporary fork. **Remove the variable** once
+   the IAM trust policy is confirmed working — leaving it set
+   forces every future release to publish to ECR Public
+   regardless of the IAM state, which is rarely what you
+   want.
 
-No edit to `release.yml` is needed in either case — the
-gating is purely on the environment variables above.
+The meta step's `ECR_DISABLED_FORCE` opt-in is the only
+`release.yml` line you can flip without editing the file.
+The three commented-out steps (login ×2 + SBOM attestation)
+must be uncommented by hand. After both edits, future
+releases will start publishing to ECR Public without further
+in-source changes.
 
 #### Reference: ECR Public with OIDC (currently disabled)
 
@@ -300,12 +323,17 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 >
 > **Numeric inputs reject leading zeros.** `max_retries`,
 > `mirror_verbose`, `ftp_nop_interval`, `net_max_retries`,
-> `net_persist_retries`, `dns_max_retries`,
-> `concurrency_lock_timeout`, and
+> `net_persist_retries`, `net_timeout`, `dns_max_retries`,
+> `dns_fatal_timeout`, `concurrency_lock_timeout`, and
 > `concurrency_lock_poll_interval` accept a non-negative
 > integer without leading zeros. `max_retries: "00"` (and any
 > other `0`-prefixed integer) exits `2` rather than being
-> silently treated as `0`.
+> silently treated as `0`. v2.11.12 (F2 audit) extended the
+> same guard to the two duration inputs (`net_timeout`,
+> `dns_fatal_timeout`) so `net_timeout: "00s"` and
+> `dns_fatal_timeout: "00"` are also rejected with exit `2`
+> — they are silent typos of the `0` retry-forever sentinel,
+> not distinct values.
 
 | Option                 | Description                                                                           | Required | Default | Example                                                                                           |
 |------------------------|---------------------------------------------------------------------------------------|----------|---------|---------------------------------------------------------------------------------------------------|
@@ -372,7 +400,7 @@ jobs:
       - uses: actions/checkout@v4
       # Here is the deployment action
   - name: Upload from public_html via FTP
-    uses: airvzxf/ftp-deployment-action@v2.11.9
+    uses: airvzxf/ftp-deployment-action@v2.11.13
     with:
       server: ${{ secrets.FTP_SERVER }}
       user: ${{ secrets.FTP_USERNAME }}
@@ -462,7 +490,7 @@ to the host:
 
 ```yaml
 - id: deploy
-  uses: airvzxf/ftp-deployment-action@v2.11.9
+  uses: airvzxf/ftp-deployment-action@v2.11.13
   with:
     server: ${{ secrets.FTP_SERVER }}
     user: ${{ secrets.FTP_USERNAME }}
@@ -527,7 +555,7 @@ jobs:
       group: ftp-deploy-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - uses: airvzxf/ftp-deployment-action@v2.11.9
+      - uses: airvzxf/ftp-deployment-action@v2.11.13
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -555,7 +583,7 @@ distinct workflows pointing to the same FTP and don't want
 to share a group name), opt in to the server-side lock:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2.11.9
+- uses: airvzxf/ftp-deployment-action@v2.11.13
   with:
     server: ${{ secrets.FTP_SERVER }}
     user: ${{ secrets.FTP_USERNAME }}
@@ -635,7 +663,7 @@ production, one for staging, each writing to a different
 remote directory), give each its own lock path:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2.11.9
+- uses: airvzxf/ftp-deployment-action@v2.11.13
   with:
     concurrency_lock: "true"
     concurrency_lock_path: ".lftp-deployment.lock.prod"
@@ -825,7 +853,7 @@ cannot yet upgrade to v2.11.0, the workaround is to pin `HOME`
 explicitly on the step:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2.11.9
+- uses: airvzxf/ftp-deployment-action@v2.11.13
   env:
     HOME: /home/lftp        # override the runner's HOME
   with:

@@ -88,6 +88,19 @@ shellcheck:
 	shellcheck -x entrypoint.sh lib.sh tests/contract.sh tests/smoke.sh tests/release-smoke.sh scripts/backfill-releases.sh
 	shellcheck -x tests/integration/lib/common.sh tests/integration/run-integration-tests.sh
 	shellcheck -x tests/integration/scenarios/*.sh
+	# v2.11.13 (#317): include the FTPS-cert helper and the
+	# tag-verifier script in the lint sweep. verify-tag.sh is clean;
+	# self-signed-cert.sh has three known SC2016 false positives
+	# (lines 225-226 are vsftpd config lines whose $$USER / $$USER
+	# literals are consumed by vsftpd's *own* template expansion at
+	# runtime, not by the outer shell; line 470 uses the
+	# `'"$${var}"'` close-quote / open-double-quote trick to smuggle
+	# outer-shell expansions into a `-c '...'` docker body, and
+	# shellcheck parses the in-line `"$${var}"` segment as outer
+	# shell code that looks like an unexpanded literal). Excluding
+	# SC2016 is per-file (`-e`) so a future real SC2016 elsewhere
+	# (entrypoint.sh, lib.sh, etc.) is still caught.
+	shellcheck -x scripts/verify-tag.sh tests/integration/lib/self-signed-cert.sh -e SC2016
 
 .PHONY: actionlint
 actionlint:
@@ -118,7 +131,19 @@ hadolint:
 # skip with a notice, mirroring the smoke.sh behaviour.
 # ----------------------------------------------------------------------------
 .PHONY: test
-test: contract unit smoke
+# v2.11.13 (#315): make smoke depends on a pre-baked SMOKE_IMAGE
+# (tests/smoke.sh fails fast when the image is missing). Previously
+# `make test` -> `make smoke` hard-failed locally for any developer
+# who had not remembered to run `make build-smoke-image` first.
+# Chain build-smoke-image as a prerequisite so `make test` (and
+# `make smoke` on its own) auto-build the image when absent. CI
+# already builds the image explicitly before invoking `make smoke`
+# (.github/workflows/ci.yml lines 144-153) so this is a no-op for
+# CI; the prerequisite is local-dev ergonomics. The `integration:`
+# target is untouched — it depends on a different image
+# (`make build IMAGE=...` + `make build-test-server-image`) which
+# the integration job builds explicitly.
+test: contract unit build-smoke-image smoke
 
 .PHONY: contract
 contract:

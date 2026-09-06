@@ -51,6 +51,64 @@ setup() {
   [ "$n" -eq 2 ]
 }
 
+# F2 audit (#314): ::add-mask:: is a SINGLE-LINE workflow command.
+# If INPUT_PASSWORD (or INPUT_USER / INPUT_SERVER) contains CR/LF,
+# pre-fix the runner only masks the FIRST line and the remainder
+# surfaces UNMASKED in the log. Post-fix add_masks strips CR/LF and
+# the rest of the C0 control range from each value before emitting
+# the directive so a multi-line secret collapses into a single
+# masked line.
+@test "add_masks: multi-line INPUT_PASSWORD collapses to a single masked line (issue #314)" {
+  INPUT_PASSWORD="first-line-password
+second-line-password"
+  INPUT_USER="me"
+  INPUT_SERVER="ftp://example.com"
+  run add_masks
+  [ "$status" -eq 0 ]
+  # Exactly 3 lines (one per non-empty input).
+  n=$(printf '%s\n' "$output" | grep -c '^::add-mask::')
+  [ "$n" -eq 3 ]
+  # The post-newline portion must NOT appear on its own line —
+  # a bare `second-line-password` line would be the partial-leak
+  # signature the runner's single-line parser would expose.
+  if printf '%s\n' "$output" | grep -qx "second-line-password"; then
+    echo "post-newline password leaked on its own line (issue #314 regression)"
+    printf '%s\n' "$output"
+    false
+  fi
+  # The first add-mask line must contain the COLLAPSED value
+  # (CR/LF stripped), NOT just the pre-newline portion. Pre-fix
+  # the line would have been `::add-mask::first-line-password`
+  # with `second-line-password` on a separate unmasked line.
+  printf '%s\n' "$output" | grep -qx "::add-mask::first-line-passwordsecond-line-password"
+  if printf '%s\n' "$output" | grep -qx "::add-mask::first-line-password"; then
+    echo "pre-fix shape detected: add-mask line stops at the first newline (issue #314 regression)"
+    printf '%s\n' "$output"
+    false
+  fi
+}
+
+@test "add_masks: CR and other control chars in INPUT_USER are stripped (issue #314)" {
+  INPUT_PASSWORD="secret"
+  # Mix CR + NUL + BEL — NUL and BEL are in the C0 control range
+  # but the runner's parser does not treat them as line breaks; the
+  # defense-in-depth strip removes all C0 anyway.
+  INPUT_USER=$'alice\rNUL\x07\x1b'
+  INPUT_SERVER="ftp://example.com"
+  run add_masks
+  [ "$status" -eq 0 ]
+  # Exactly 3 masked lines; the bare "alice" must appear, with no
+  # CR / NUL / BEL residue and no post-newline leakage.
+  n=$(printf '%s\n' "$output" | grep -c '^::add-mask::')
+  [ "$n" -eq 3 ]
+  printf '%s\n' "$output" | grep -q "::add-mask::alice"
+  if printf '%s' "$output" | grep -q $'\r'; then
+    echo "CR survived add_masks stripping (issue #314 regression)"
+    printf '%s\n' "$output" | cat -A
+    false
+  fi
+}
+
 # ----------------------------------------------------------------------------
 # print_inputs_dump
 # ----------------------------------------------------------------------------

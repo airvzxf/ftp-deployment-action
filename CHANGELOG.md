@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.13] - 2026-09-06
+
+Hardening batch v2.11.13 (F2 audit round post-v2.11.12). Closes 16
+follow-up findings from the 2026-09-06 F2 audit swarm (8 subagents in
+parallel): 5 LOW-severity defence-in-depth code fixes, 1 MEDIUM
+build/dev-tooling fix, 4 MEDIUM docs drifts, 4 LOW docs drifts, 1 LOW
+shellcheck lint target gap, 1 MEDIUM contract test gap. See EPIC #327
+for the full audit backlog.
+
+### Fixed
+
+- **`/app/VERSION` file mode is now independent of build-host umask** — pre-fix, `Dockerfile:31-33` created `/app/VERSION` via `RUN echo "$VERSION" > /app/VERSION && /bin/chmod +x /app/entrypoint.sh`, leaving the VERSION file's mode to whatever the build-time umask allowed (0644 under Docker/BuildKit's 0022 default, 0600 under a stricter 0077 host). When the file ended up 0600 and the runtime `lftp` user couldn't read it, `entrypoint.sh:123` fell through `cat /app/VERSION 2>/dev/null || echo "unknown"` and the deprecation warning reported `(image version: unknown)`. Replaced the `RUN` with `printf '%s\n' "$VERSION" > /app/VERSION && chmod 0644 /app/VERSION && chmod 0755 /app/entrypoint.sh`. `tests/release-smoke.sh` Check 3 (already fixed in v2.11.12) catches the regression on a 0077 build host. Closes #311.
+- **`acquire_lock_with_recovery` mktemp-fallback sentinel body now lands at 0600** — pre-fix, `lib.sh:1296-1303` ran `chmod 600 "${_alwr_sentinel_body}"` BEFORE the redirect `{ printf ... } > "${_alwr_sentinel_body}"` that actually created the file. On the fallback path (when `mktemp` returns 1) the static filename did not exist when `chmod` ran, the redirect then created the file with the process umask (022 → 0644), and the sentinel body containing `pid` / `started_at` / `host=$(hostname)` ended up world-readable. Regression of the v2.11.7 #184 fix. Moved the `chmod` AFTER the redirect; added a bats test (`tests/unit/lock.bats`) that forces the mktemp fallback and asserts the resulting file's mode is 0600. Closes #312.
+- **`add_masks` no longer leaks multi-line secrets via partial `::add-mask::` coverage** — pre-fix, `lib.sh:512-522` interpolated the raw `INPUT_PASSWORD` / `INPUT_USER` / `INPUT_SERVER` into `::add-mask::<value>\n`. If the value contained a CR/LF (intentional or copy-paste artifact), the runner's `::add-mask::` directive masked only the first line and the remainder surfaced verbatim in the workflow log. Refactored into a 3-name loop that strips CR/LF and the rest of the C0 control range (`tr -d '\r\n' | tr -d '[:cntrl:]'`) before emitting the directive. Added 2 bats tests in `tests/unit/report.bats`. Closes #314.
+- **GITHUB_OUTPUT write no longer aborts the action after a successful mirror** — pre-fix, `entrypoint.sh:422-424` ran `printf 'log_file=%s\n' "${LOG_FILE}" >> "${GITHUB_OUTPUT}"` under `set -e`. If the file became unwritable (ENOSPC, chmod 000 by a misconfigured runner, fd leaked from a dead worker, read-only fs on a self-hosted runner), the script aborted AFTER the mirror had succeeded, marking the workflow run as failed for a side-channel metadata write. Follow-up to v2.11.8 #191 (which guarded the env-unset half). Bracketed the write with `set +e` / capture rc / `set -e` / warn, mirroring the `upload_log_artifact` pattern at `lib.sh:1743-1759`. Closes #313.
+
+### Chore
+
+- **`make test` now auto-builds the smoke image as a prerequisite** — pre-fix, `Makefile:121` declared `test: contract unit smoke`, but `tests/smoke.sh:42-45` hard-fails (exit 1) when `SMOKE_IMAGE` is not present. A developer following the documented T1 flow (`make test`, per `AGENTS.md` and `README.md`) hit a confusing "smoke image not found" failure. Changed `Makefile:134` to `test: contract unit build-smoke-image smoke` so the dependency chain builds the image transparently. CI is unaffected (it already built the smoke image explicitly before invoking `make smoke`). Closes #315.
+
+### Documentation
+
+- **`action.yml` `concurrency_lock_path` description now enumerates the full `validate_path` deny list** — pre-fix, the description listed only `..`, shell metacharacters, leading dash, `!`, and `"`, but `validate_path` (lib.sh:274-394) also rejects ASCII space (v2.11.8 #174), embedded newlines (v2.11.3.1 #246), `[[:cntrl:]]` control characters, `$` (pre-v2.5.0), unbalanced IPv6 brackets (v2.11.10 #295), and empty `[]` brackets (v2.11.12). Re-drift of closed #271. Closes #316.
+- **`action.yml` `exclude` and `exclude_delete` descriptions now enumerate the full `validate_glob_pattern` deny list** — same drift class as #316 for the glob validator. Added mention of embedded newlines, `[[:cntrl:]]` control characters, and a leading `-`. Closes #318.
+- **`README.md` "Numeric inputs reject leading zeros" block now lists `net_timeout` and `dns_fatal_timeout`** — pre-fix, the block listed 8 inputs (`max_retries`, `mirror_verbose`, `ftp_nop_interval`, `net_max_retries`, `net_persist_retries`, `dns_max_retries`, `concurrency_lock_timeout`, `concurrency_lock_poll_interval`) but missed the two duration-validated inputs (`net_timeout`, `dns_fatal_timeout`) that the v2.11.12 F2 audit also extended to reject leading zeros. Closes #320.
+- **`README.md` ECR re-enable recipe rewritten to match the actual v2.11.11 state** — pre-fix, `README.md:163-166` claimed the ECR Public publishing code is "fully present and uncommented" in `release.yml`. As of v2.11.11 #216 the meta-step `if` block, the two ECR login steps, and the SBOM attestation step are all under `# DISABLED:` preambles. Re-drift of closed #300. Rewrote the section to enumerate the four sites and the three-step re-enable procedure; cross-references #212 as the canonical runbook. Closes #321.
+- **CHANGELOG.md link-reference footer now covers v2.11.9 through v2.11.12** — pre-fix, the footer block at `CHANGELOG.md:1270-1294` stopped at `[2.11.0]`; the four newer version headings (lines 8, 46, 84, 136) had no matching `[X.Y.Z]:` definitions, so external readers saw headings that should be clickable but rendered as plain text. Re-drift of closed #235 / #264. Added the four missing compare-links. Closes #319.
+- **9 README example pin occurrences updated from `@v2.11.9` to `@v2.11.12`** — pre-fix, README.md had 9-10 occurrences of `airvzxf/ftp-deployment-action@v2.11.9` at lines 79, 94, 114, 115, 375, 465, 530, 558, 638, 828 (and the related `:v2.11.9` image tags on the "Publishing targets" table). Pin drift had been open since v2.11.10. Closes #322.
+
+### Tests
+
+- **`make shellcheck` now covers `tests/integration/lib/self-signed-cert.sh` and `scripts/verify-tag.sh`** — pre-fix, the lint target at `Makefile:88-90` listed 7 files explicitly but missed the openssl cert helper used by FTPS scenarios 03/04 and the local tag-signature re-verification script. Same family of gap as #228 (which fixed `tests/release-smoke.sh`). The cert helper carries 3 known SC2016 false positives; the invocation uses `-e SC2016` per-file so the global lint policy is unchanged. Closes #317.
+- **`tests/contract.sh` now mechanically verifies README `@vX.Y.Z` example pins match VERSION** — pre-fix, `tests/contract.sh:171-180` only checked the `latest = vX.Y.Z` stamp (which README does not have). The 9-occurrence pin drift from #322 (now fixed) had to be caught at the audit table. Added a check that uses `grep -oE 'airvzxf/ftp-deployment-action@v[0-9]+\.[0-9]+\.[0-9]+' README.md | sort -u` and asserts the unique value equals `$VER`. Closes #326.
+
+### Out of scope (deferred to a follow-up)
+
+- #323, #324, #325 — three INPUT_* integration e2e coverage gaps (INPUT_DRY_RUN, INPUT_FAIL_ON_DEPRECATED, INPUT_UPLOAD_LOG_ON_FAILURE). These are test-coverage gaps that overlap with the umbrella issue #230 / #231 and need a design decision on what a passing scenario looks like for the always-broken `INPUT_UPLOAD_LOG_ON_FAILURE` path (see #290).
+- #189, #192, #296 — log-growth and unbounded-runtime concerns. Already labelled `pending-design` / `pending-human` because they require operator decision on the retry-forever semantics.
+- #180 — `validate_int` upper bound. Labelled `pending-design` / `pending-human`.
+
+### Validation
+
+- `make lint` (shellcheck + actionlint + hadolint): clean.
+- `make contract`: 6/6 ok (31 inputs match; SECURITY.md / CHANGELOG.md stamps match VERSION; README `@vX.Y.Z` pin stamp matches VERSION; new lint coverage for `tests/integration/lib/self-signed-cert.sh` and `scripts/verify-tag.sh`).
+- `make unit`: 215/215 passing (was 212 in v2.11.12, +3 for the v2.11.13 batch: 1 mktemp-fallback chmod test + 2 `add_masks` multi-line tests).
+- `make smoke`: all smoke tests pass (the `make test` chain now auto-builds the smoke image).
+
 ## [2.11.12] - 2026-09-06
 
 Hardening batch v2.11.12 (F2 audit round post-v2.11.11). Closes the
@@ -1267,6 +1314,11 @@ malformed input).
 Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 
 
+[2.11.13]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.12...v2.11.13
+[2.11.12]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.11...v2.11.12
+[2.11.11]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.10...v2.11.11
+[2.11.10]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.9...v2.11.10
+[2.11.9]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.8...v2.11.9
 [2.11.8]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.7...v2.11.8
 [2.11.7]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.6...v2.11.7
 [2.11.6]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.5...v2.11.6

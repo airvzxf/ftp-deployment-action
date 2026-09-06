@@ -804,3 +804,61 @@ FAKE
   # v2.11.x (#132): URL must carry the embedded user.
   grep -q "ftp://ftptest@example.test" "${FAKE_LFTP_LOG}"
 }
+
+# F2 audit (#312): the mktemp fallback branch in
+# acquire_lock_with_recovery used to chmod the body file BEFORE
+# the redirect that creates it; the chmod was a no-op on the
+# fallback path (the static filename does not exist yet) and
+# the file ended up at 0644 — leaking pid / started_at / host
+# metadata to the runner's other processes. Post-fix the chmod
+# runs AFTER the redirect, so the fallback branch ends at 0600
+# regardless of the process umask.
+#
+# Force the fallback by overriding mktemp to fail; intercept rm
+# to capture the body file path so we can stat() its mode after
+# the function returns. Same trick as the FAKE_LFTP shim above.
+@test "acquire_lock_with_recovery: mktemp fallback branch sets sentinel body mode to 0600 (issue #312)" {
+  export FAKE_LFTP_RC="0"
+
+  # mktemp() override: return 1 so the `|| _alwr_sentinel_body="..."`
+  # fallback fires with a static name.
+  mktemp() { return 1; }
+
+  # rm() override: capture the body file path that the function
+  # would otherwise delete. The acquire call uses `rm -f <path>`,
+  # so we have to scan all args, not just $1 (which would be -f).
+  CAPTURED_BODY_FILE=""
+  rm() {
+    for _arg in "$@"; do
+      case "${_arg}" in
+        /tmp/.lftp-lock-body.*)
+          CAPTURED_BODY_FILE="${_arg}"
+          ;;
+      esac
+    done
+    return 0
+  }
+
+  unset INPUT_SERVER INPUT_CONCURRENCY_LOCK_PATH INPUT_CONCURRENCY_LOCK_TIMEOUT INPUT_CONCURRENCY_LOCK_POLL_INTERVAL
+  INPUT_SERVER="ftp://example.test"
+  INPUT_CONCURRENCY_LOCK_PATH=".lftp-deployment.lock"
+  INPUT_CONCURRENCY_LOCK_TIMEOUT="5"
+  INPUT_CONCURRENCY_LOCK_POLL_INTERVAL="1"
+  unset ACQUIRED_LOCK_SENTINEL
+  acquire_lock_with_recovery \
+    "ftp://example.test" ".lftp-deployment.lock" "5" "1" "ftptest" || rc=$?
+  [ "${rc:-0}" -eq 0 ]
+
+  # The rm override should have captured the body file path.
+  [ -n "${CAPTURED_BODY_FILE}" ]
+  [ -f "${CAPTURED_BODY_FILE}" ]
+
+  # The whole point: mode MUST be 0600. Pre-fix this would be
+  # 0644 on the standard 0022 umask CI default (or 0600 only on
+  # systems with a 0077 umask — a non-portable coincidence).
+  actual_mode=$(stat -c '%a' "${CAPTURED_BODY_FILE}")
+  [ "${actual_mode}" = "600" ]
+
+  # Clean up the body file we protected from the rm call.
+  command rm -f "${CAPTURED_BODY_FILE}" 2>/dev/null || true
+}
