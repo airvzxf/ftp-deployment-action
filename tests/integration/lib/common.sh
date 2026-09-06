@@ -183,6 +183,16 @@ start_ftp_server() {
   _sfs_pass=$2
   _sfs_data_dir=$3
 
+  # v2.11.11 (#166): see the matching guard in self-signed-cert.sh
+  # ::start_ftps_server for the rationale. The plain-FTP scenarios
+  # (01, 02, 05, 07, 08, 09, 10, 11, 12) reuse this helper, so the
+  # same defensive check belongs here. Defaults (2121, 31100, 31110)
+  # pass; only a misconfigured harness (or a future operator who
+  # loads FTP_* from a config file with shell metacharacters) trips.
+  case "${FTP_CONTROL_PORT}"   in ''|*[!0-9]*) log_fail "FTP_CONTROL_PORT is not numeric: ${FTP_CONTROL_PORT}"   ;; esac
+  case "${FTP_PASV_MIN_PORT}"  in ''|*[!0-9]*) log_fail "FTP_PASV_MIN_PORT is not numeric: ${FTP_PASV_MIN_PORT}"   ;; esac
+  case "${FTP_PASV_MAX_PORT}"  in ''|*[!0-9]*) log_fail "FTP_PASV_MAX_PORT is not numeric: ${FTP_PASV_MAX_PORT}"   ;; esac
+
   # Pre-create the FTP user home inside DATA_DIR so the bind mount
   # has the directory vsftpd will chown to ftp:ftp at startup. The
   # host must be able to write under DATA_DIR (chmod 0777 below).

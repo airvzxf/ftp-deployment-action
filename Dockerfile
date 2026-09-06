@@ -22,8 +22,6 @@ RUN apk add --no-cache \
  && addgroup -S lftp \
  && adduser -S lftp -G lftp -h /home/lftp
 
-WORKDIR /app
-
 COPY entrypoint.sh lib.sh /app/
 
 # Bake the image version into /app/VERSION so the deprecation warning
