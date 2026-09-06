@@ -191,7 +191,7 @@ fi
 # distinguishes them).
 if ! grep -q 'Acquired concurrency lock' "${_log}"; then
   printf '%s\n' "---- captured action log ----" >&2
-  cat "${_log}">&2
+  cat "${_log}" >&2
   log_fail "action did not print 'Acquired concurrency lock'"
 fi
 

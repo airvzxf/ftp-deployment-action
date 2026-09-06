@@ -267,6 +267,62 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+# v2.11.12 (F2 audit): same exploit class as #295 but for
+# BALANCED-but-empty brackets. The v2.11.10 balance check only
+# counts `[` vs `]`. Empty brackets `[]` slipped through and
+# produced silent .netrc corruption downstream. Shell-meta /
+# control-char / space checks already catch the rest of the
+# bracket-content threats; this guard closes the empty-content
+# gap specifically.
+@test "validate_path rejects empty IPv6 brackets (F2 audit v2.11.12)" {
+  # `ftp://[]:21` — empty brackets, balanced (1 [ / 1 ]).
+  # Pre-fix validate_path returned 0; extract_netrc_host then
+  # echoed empty; write_netrc emitted `machine  login user
+  # password` (invalid .netrc).
+  run validate_path "server" 'ftp://[]:21'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"empty IPv6 brackets"* ]]
+  # The empty-bracket shape in a path component is also rejected
+  # (same exploit class via mirror command injection).
+  run validate_path "remote_dir" '/foo/[]/bar/'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"empty IPv6 brackets"* ]]
+}
+
+@test "validate_path accepts RFC 6874 zone-id form (F2 audit v2.11.12)" {
+  # `fe80::1%eth0` is a valid IPv6 zone-id. URL-encoded the `%`
+  # becomes `%25`, but the bracket content the user supplies may
+  # be either shape. The IPv6 charset includes `%` for the
+  # unescaped form; the validator accepts both (the chars pass
+  # the shell-meta / control-char / space checks above; the
+  # bracket-content guard only rejects EMPTY brackets).
+  run validate_path "server" 'ftps://[fe80::1%25eth0]:990'
+  [ "$status" -eq 0 ]
+  run validate_path "server" 'ftps://[fe80::1%eth0]:990'
+  [ "$status" -eq 0 ]
+  run validate_path "server" 'ftps://[::1]:990'
+  [ "$status" -eq 0 ]
+}
+
+@test "validate_path accepts bracketed non-empty content (F2 audit v2.11.12)" {
+  # Regression guard — non-empty brackets pass even if the
+  # content is not strictly IPv6-shaped. The other validators
+  # (control-char, shell-meta, space) handle the malicious
+  # shapes; the bracket-content guard only adds the
+  # empty-content check.
+  run validate_path "server" 'ftp://[xyz]:21'
+  [ "$status" -eq 0 ]
+}
+
+@test "validate_path accepts pure-IPv4 dotted form with brackets not used (F2 audit v2.11.12)" {
+  # Regression guard — brackets only fire when they appear; bare
+  # IPv4 / host:port / path forms still pass.
+  run validate_path "server" 'ftp://192.0.2.1:21'
+  [ "$status" -eq 0 ]
+  run validate_path "server" 'ftp://example.com/some/path'
+  [ "$status" -eq 0 ]
+}
+
 # ----------------------------------------------------------------------------
 # validate_bool — v2.11.3 (#171)
 # ----------------------------------------------------------------------------
@@ -367,6 +423,28 @@ setup() {
 @test "validate_duration rejects a float" {
   run validate_duration "dns_fatal_timeout" "1.5"
   [ "$status" -eq 2 ]
+}
+
+@test "validate_duration rejects leading zeros (F2 audit v2.11.12)" {
+  # Symmetric with validate_int's v2.11.7 #253 fix. `00` is a
+  # typo for `0` and breaks the same retry-forever sentinel
+  # contract. The F2 audit subagent confirmed `00` / `01s`
+  # currently pass validate_duration.
+  run validate_duration "net_timeout" "00"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"leading zeros"* ]]
+  run validate_duration "dns_fatal_timeout" "01s"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"leading zeros"* ]]
+  # Single zero stays accepted — it's the retry-forever sentinel
+  # and the documented disable form.
+  run validate_duration "net_timeout" "0"
+  [ "$status" -eq 0 ]
+  # Bare digit followed by a unit stays accepted.
+  run validate_duration "net_timeout" "0s"
+  [ "$status" -eq 0 ]
+  run validate_duration "net_timeout" "5m"
+  [ "$status" -eq 0 ]
 }
 
 @test "validate_duration rejects a value with embedded text" {

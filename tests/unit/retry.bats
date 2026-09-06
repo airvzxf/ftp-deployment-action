@@ -5,10 +5,13 @@
 
 setup() {
   set +u
-  LIB="${BATS_TESTDIR}/../../lib.sh" 2>/dev/null
-  if [ -z "${LIB}" ] || [ ! -f "${LIB}" ]; then
-    LIB="${BATS_TEST_DIRNAME}/../../lib.sh"
-  fi
+  # v2.11.12 (F2 audit): drop the dead BATS_TESTDIR (no-underscores)
+  # branch. The correct bats-core variable is BATS_TEST_DIRNAME; the
+  # no-underscore form expands to empty under `set +u`, producing
+  # `LIB="/../../lib.sh"` which is non-empty (so the fallback never
+  # fires) and the file path is invalid. The other 6 .bats files
+  # already use BATS_TEST_DIRNAME directly; align.
+  LIB="${BATS_TEST_DIRNAME}/../../lib.sh"
   # shellcheck disable=SC1090
   . "${LIB}"
 }

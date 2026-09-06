@@ -251,13 +251,24 @@ start_ftp_server() {
 
 # ------------------------------------------------------------------------------
 # stop_ftp_server
-#   Remove the FTP server container started by start_ftp_server. Safe
-#   to call multiple times and on any exit path (designed to be used
-#   as the value of `trap ... EXIT`). Idempotent.
+#   Remove the FTP server container started by start_ftp_server and
+#   the per-scenario bind-mount source directory created by
+#   scenario_setup. Safe to call multiple times and on any exit path
+#   (designed to be used as the value of `trap ... EXIT`). Idempotent.
+#
+#   v2.11.12 (F2 audit): the FTP_DATA_DIR was previously leaked on
+#   every scenario exit — only the container was being torn down.
+#   Local dev and self-hosted CI accumulated one stale bind-mount
+#   source per scenario per run. Order matters: the container must
+#   be removed FIRST so the bind-mount is detached before the
+#   directory is unlinked.
 # ------------------------------------------------------------------------------
 stop_ftp_server() {
   if [ -n "${FTP_CONTAINER_NAME:-}" ]; then
     ${RUNTIME} rm -f "${FTP_CONTAINER_NAME}" >/dev/null 2>&1 || true
+  fi
+  if [ -n "${FTP_DATA_DIR:-}" ] && [ -d "${FTP_DATA_DIR}" ]; then
+    rm -rf "${FTP_DATA_DIR}" >/dev/null 2>&1 || true
   fi
 }
 

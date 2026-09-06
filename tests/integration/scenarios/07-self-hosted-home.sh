@@ -2,10 +2,13 @@
 # tests/integration/scenarios/07-self-hosted-home.sh
 #
 # Scenario 07 — POSITIVE regression test for the fix to issue #111
-# (sub-issue of EPIC #116). Mirrors the red reproducer scenario 06
+# (sub-issue of EPIC #116). Mirrors the bug's reproducer (originally
+# in scenario 06, deleted in commit 214492e once the bug was fixed)
 # but on the FIXED entrypoint.sh. Asserts that the action no longer
 # crashes with the .netrc write failure when a self-hosted runner
-# forwards HOME=/github/home into the container.
+# forwards HOME=/github/home into the container, AND that the upload
+# now succeeds end-to-end (the lftp 4.9.3 / bare-host rewrite closed
+# in v2.11.0 — #124).
 #
 # Background (from #111):
 #   entrypoint.sh pre-fix used `: "${HOME:=/home/lftp}"`. When a
@@ -20,7 +23,13 @@
 # NETRC=/home/lftp/.netrc and `export HOME=/home/lftp` so the bug
 # cannot surface regardless of what HOME the runner forwards.
 #
-# This scenario sets up the same four conditions as scenario 06:
+# The v2.11.0 #124 fix rewrites a bare-host `ftp://127.0.0.1:21`
+# into `ftp://user:pass@127.0.0.1:21` so lftp's .netrc lookup
+# fires — closing the 530-from-anonymous-vsftpd loop. With both
+# fixes in place, this scenario asserts end-to-end success.
+#
+# This scenario sets up the same four conditions as the original
+# reproducer:
 #   1. HOME=/github/home exported into the container.
 #   2. USER lftp active inside the container (Dockerfile sets it).
 #   3. /github/home bind-mounted read-only into the container,
@@ -35,21 +44,10 @@
 #     that the bug from #111 is closed: the .netrc write inside
 #     lib.sh::write_netrc succeeded (because the .netrc path is
 #     now pinned to /home/lftp/, not /github/home/).
-#
-# What this scenario DELIBERATELY does NOT assert:
-#   * That the upload to vsftpd succeeded end-to-end. lftp 4.9.3
-#     (pinned in the Dockerfile) ignores .netrc for `ftp://host:port`
-#     URLs and falls back to anonymous, which vsftpd rejects with
-#     530. That is a separate bug (#124) outside the scope of #119.
-#     Asserting end-to-end success here would make this scenario
-#     red against the current code and break CI. Once #124 lands,
-#     add `assert_action_success` to upgrade this to a true
-#     end-to-end scenario — see TODO below.
-#
-#   * The action's exit code is intentionally NOT asserted to be 0.
-#     With #124 open, lftp will exit non-zero (530 from vsftpd).
-#     The scenario PASSES regardless of that exit code, as long
-#     as the .netrc write failure from #111 is absent.
+#   * The action exits 0 AND emits the success banner
+#     (`assert_action_success`). Combined with the .netrc-write
+#     assertion above, this proves both #119 and the v2.11.0
+#     #124 fix are still in place end-to-end.
 
 set -eu
 
@@ -67,7 +65,7 @@ scenario_setup "07-self-hosted-home"
 start_ftp_server "${FTP_USER}" "${FTP_PASSWORD}" "${FTP_DATA_DIR}"
 
 # --- Step 2: build the host-side fake /github/home --------------------------
-# Mirrors scenario 06 verbatim: a host directory that mimics what a
+# Mirrors the bug's reproducer: a host directory that mimics what a
 # self-hosted runner forwards, bind-mounted :ro into the container.
 # In rootless podman the in-container lftp user (uid 1000) maps to a
 # high host uid; bind-mounting a directory owned by host root (uid 0)
@@ -94,9 +92,9 @@ trap 'rm -rf "${_fake_home}"; stop_ftp_server' EXIT
 
 # --- Step 3: invoke the action image with the four conditions --------------
 #
-# Same shape as scenario 06, but on the FIXED entrypoint.sh. The
-# only behavioural difference vs. scenario 06 is the entrypoint:
-# scenario 06 used to crash inside write_netrc (NETRC=/github/home/
+# Same shape as the original reproducer, but on the FIXED entrypoint.sh.
+# The only behavioural difference is the entrypoint:
+# the original used to crash inside write_netrc (NETRC=/github/home/
 # .netrc on a :ro bind-mount), scenario 07 does not (NETRC is
 # unconditionally pinned to /home/lftp/.netrc by the fix).
 #
@@ -202,6 +200,13 @@ assert_no_netrc_write_failure() {
 
 assert_no_netrc_write_failure "${_log}"
 
+# v2.11.12 (F2 audit): #124 was closed in v2.11.0 — lftp 4.9.3 with
+# the bare-host-rewrite now logs in via .netrc instead of falling
+# back to anonymous. Add the end-to-end success assertion that
+# scenarios 08/09/10 already use; the file-header note about the
+# "deliberate non-assertion" no longer reflects reality.
+assert_action_success "${_log}" "${_rc}"
+
 # --- Step 5: dump a tail of the log for the developer -----------------------
 #
 # Print the action's rc + the last 30 lines of the captured log so a
@@ -223,17 +228,6 @@ printf 'REGRESSION_FIXED: action ran without the .netrc write failure from #111\
 
 # _log cleanup is handled by the EXIT trap installed above
 # (v2.11.9 #225).
-
-# TODO (v2.11.x): enable full upload assertion after #124 lands.
-# lftp 4.9.3 (pinned in the Dockerfile) ignores .netrc for
-# `ftp://host:port` URLs and falls back to anonymous, which
-# vsftpd rejects with 530 Login authentication failed. Once that
-# bug is closed, add `assert_action_success "${_log}" "${_rc}"`
-# here and remove the file-header note about the deliberate
-# non-assertion of the exit code. Until then, this scenario
-# verifies the narrow fix from #119 (NETRC + HOME are pinned)
-# without making end-to-end claims the rest of the pipeline
-# cannot yet honour.
 
 log_pass "scenario 07 passed (green): bug #111 fix verified end-to-end"
 
