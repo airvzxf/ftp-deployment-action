@@ -81,18 +81,20 @@ chmod 644 '/home/vsftpd/${FTP_USER}/extra.html'
 # Sanity: confirm the pre-seed landed on the bind-mount.
 assert_present "${_ftp_home}" "extra.html"
 
-# Build the lftp script. We use `set mirror:exclude *.bak` to
-# protect local *.bak files from being uploaded. lftp 4.9.3
-# treats the value as a POSIX regular expression, so we use the
-# equivalent `.*\.bak` form. (lftp logs an error on `*.bak`
-# itself: "Invalid preceding regular expression".) The fixture's
-# `local.bak` is the upload-time probe; scenario 05 asserts that,
-# AFTER the mirror, no *.bak file appeared in the FTP home — which
-# proves the exclude pattern is in effect end-to-end.
+# Build the lftp script. We use `mirror -x <regex>` to protect
+# local *.bak files from being uploaded (the v2.11.2 fix that
+# replaced the silent-no-op `set mirror:exclude` with `mirror -x`,
+# which is what lftp 4.9.3 actually applies — see action.yml's
+# `exclude` description and CHANGELOG v2.11.2). lftp 4.9.3
+# treats `-x` as a POSIX regular expression anchor; we use the
+# `.*\.bak` form. The fixture's `local.bak` is the upload-time
+# probe; scenario 05 asserts that, AFTER the mirror, no *.bak
+# file appeared in the FTP home — which proves the exclude
+# pattern is in effect end-to-end.
 _script=$(mktemp -t lftpscr.XXXXXX) || log_fail "mktemp failed"
 lftp_build_open_script "${_script}" \
-  "set mirror:exclude '.*\.bak'" \
-  "mirror --reverse --delete --continue --verbose=1 /data/ ./"
+  "" \
+  "mirror --reverse --delete --continue --verbose=1 -x '.*\\.bak' /data/ ./"
 
 _log=$(mktemp -t lftplog.XXXXXX) || log_fail "mktemp failed"
 
@@ -102,7 +104,7 @@ _log=$(mktemp -t lftplog.XXXXXX) || log_fail "mktemp failed"
 # rationale and the F2 audit (v2.11.9 +1 day) trap-safety pattern.
 trap 'rm -f "${_log:-}" "${_script:-}"; stop_ftp_server' EXIT
 
-log_info "running mirror with mirror:exclude + --delete"
+log_info "running mirror with mirror -x *.bak + --delete"
 if lftp_run_script "${_script}" "${_log}" 60; then
   _rc=0
 else
@@ -129,14 +131,14 @@ assert_absent "${_ftp_home}" "extra.html"
 
 # INPUT_EXCLUDE protects *.bak from being uploaded. The fixture
 # carries a `local.bak` probe (see the assert_present above) and
-# the mirror was invoked with `set mirror:exclude '.*\.bak'`. After
+# the mirror was invoked with `mirror -x '.*\.bak'`. After
 # the mirror, the FTP home must NOT contain `local.bak` — the
-# exclude directive filtered it out at upload time. This assertion
+# `-x` flag filtered it out at upload time. This assertion
 # is the load-bearing coverage for INPUT_EXCLUDE (the upload-time
 # `-x` flag); INPUT_EXCLUDE_DELETE (the delete-time `-X` flag) is
 # covered separately by scenario 11.
 assert_absent "${_ftp_home}" "local.bak"
 
-log_pass "scenario 05 passed: --delete removed extra.html; mirror:exclude protected local.bak from upload"
+log_pass "scenario 05 passed: --delete removed extra.html; mirror -x protected local.bak from upload"
 
 exit 0
