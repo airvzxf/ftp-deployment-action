@@ -380,6 +380,22 @@ start_ftps_server() {
       ;;
   esac
 
+  # v2.11.11 (#166): defensively validate the port globals before
+  # passing them to `${RUNTIME} run`. The variables are double-quoted
+  # in every use site, so this is NOT a security fix (POSIX sh does
+  # not word-split / glob-expand double-quoted parameter expansions
+  # and the container's /bin/sh never sees them); it is a strict
+  # improvement that surfaces a loud `log_fail` if a future refactor
+  # introduces shell metacharacters in the defaults (e.g. via a
+  # config file), instead of letting the next scenario fail with a
+  # confusing "bind: invalid port" / "no port :// in URL" error.
+  # Same case-pattern shape as lib.sh::validate_int, but calls
+  # log_fail (the harness convention) instead of exit 2.
+  case "${FTP_IMPLICIT_PORT}" in ''|*[!0-9]*) log_fail "FTP_IMPLICIT_PORT is not numeric: ${FTP_IMPLICIT_PORT}" ;; esac
+  case "${FTP_PASV_MIN_PORT}"  in ''|*[!0-9]*) log_fail "FTP_PASV_MIN_PORT is not numeric: ${FTP_PASV_MIN_PORT}"   ;; esac
+  case "${FTP_PASV_MAX_PORT}"  in ''|*[!0-9]*) log_fail "FTP_PASV_MAX_PORT is not numeric: ${FTP_PASV_MAX_PORT}"   ;; esac
+  case "${FTP_CONTROL_PORT}"   in ''|*[!0-9]*) log_fail "FTP_CONTROL_PORT is not numeric: ${FTP_CONTROL_PORT}"   ;; esac
+
   # Pre-create the FTP user home so the bind mount has the
   # directory vsftpd will chown to the FTP user at startup.
   mkdir -p "${_sfs_data_dir}/${_sfs_user}"

@@ -571,10 +571,14 @@ jobs:
       #
       # DISABLED: see the comment on the ECR Public block in
       # the `Resolve tag, version and enabled registries` step
-      # above for why these two steps are commented out. The
-      # conditional `if: ecr_enabled == 'true'` is dead until
-      # ECR is re-enabled, but we keep it as documentation and
-      # to make the re-enable diff trivial.
+      # above for why these steps are commented out. All ECR
+      # sites in this job (login ×2 here, cosign-sign ECR branch
+      # in the `Sign image with cosign` step, and the SBOM
+      # attestation step further down) follow the same DISABLED
+      # pattern: commented out, kept in-tree as documentation,
+      # re-enabled via uncomment when the IAM trust policy is
+      # rewritten (tracked in #212). The re-enable diff stays a
+      # one-operator mechanical change.
       #
       # - name: Configure AWS credentials (OIDC) for ECR Public
       #   if: ${{ steps.meta.outputs.ecr_enabled == 'true' }}
@@ -655,14 +659,30 @@ jobs:
           sbom-path: sbom.cyclonedx.json
           push-to-registry: true
 
-      - name: Attach SBOM attestation to ECR Public image
-        if: ${{ steps.meta.outputs.ecr_enabled == 'true' }}
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-name: ${{ steps.meta.outputs.ecr_image }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          sbom-path: sbom.cyclonedx.json
-          push-to-registry: true
+      # v2.11.11 (#216): DISABLED. ECR Public publishing is
+      # intentionally off (see the `Resolve tag, version and enabled
+      # registries` step's ECR block above). The conditional
+      # `if: ecr_enabled == 'true'` is dead until ECR is re-enabled,
+      # but we keep this step commented out (matching the two ECR
+      # login steps earlier in this job, also commented out) so the
+      # re-enable diff is a one-step uncomment and the
+      # `ecr_enabled` / `ecr_image` outputs emitted by the meta step
+      # remain wired so a future operator can verify the re-enable
+      # works end-to-end without rewiring. Tracked under #212 (the
+      # canonical re-enable runbook). Cosign-sign ECR branch (above
+      # in the `Sign image with cosign` step) follows the same
+      # pattern: `if [ "${{ steps.meta.outputs.ecr_enabled }}" = "true" ]`
+      # is dead until ECR is re-enabled; left in-tree for the same
+      # one-step uncomment.
+      #
+      # - name: Attach SBOM attestation to ECR Public image
+      #   if: ${{ steps.meta.outputs.ecr_enabled == 'true' }}
+      #   uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      #   with:
+      #     subject-name: ${{ steps.meta.outputs.ecr_image }}
+      #     subject-digest: ${{ steps.build.outputs.digest }}
+      #     sbom-path: sbom.cyclonedx.json
+      #     push-to-registry: true
 
       # Extract the CHANGELOG.md section for this version so
       # the GitHub Release body mirrors the existing markdown.

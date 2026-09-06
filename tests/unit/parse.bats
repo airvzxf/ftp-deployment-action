@@ -98,6 +98,49 @@ setup() {
   [ "$output" = "example.com" ]
 }
 
+# v2.11.11 (#182): close the coverage gaps for URL forms
+# that flow through extract_netrc_host into the .netrc
+# "machine" line. RFC 6874 zone-id is the only genuinely
+# missing case (query / fragment / userinfo were covered by
+# the v2.11.8 #185 batch at tests/unit/parse.bats:71-99).
+# Path-prefix + query/fragment combos are included here as
+# belt-and-braces coverage: they are already implicitly
+# covered, but pinning the exact behaviour mechanically in
+# the test suite makes a future sed-regex regression fail
+# loudly rather than silently producing an empty "machine"
+# line and a confusing 530 Login authentication failed
+# downstream.
+
+@test "extract_netrc_host: ftp://host/path?query -> host (v2.11.11 #182, path+query)" {
+  run extract_netrc_host "ftp://example.com/some/path?token=abc"
+  [ "$status" -eq 0 ]
+  [ "$output" = "example.com" ]
+}
+
+@test "extract_netrc_host: ftp://host/path#frag -> host (v2.11.11 #182, path+fragment)" {
+  run extract_netrc_host "ftp://example.com/some/path#section"
+  [ "$status" -eq 0 ]
+  [ "$output" = "example.com" ]
+}
+
+@test "extract_netrc_host: ftp://user:pw@host/path -> host (v2.11.11 #182, userinfo+path)" {
+  run extract_netrc_host "ftp://deploy:plaintext@example.com/some/path"
+  [ "$status" -eq 0 ]
+  [ "$output" = "example.com" ]
+}
+
+@test "extract_netrc_host: ftps://[fe80::1%25eth0]/path -> fe80::1%25eth0 (v2.11.11 #182, IPv6 zone-id)" {
+  # RFC 6874: the zone-id in a URL is %25-encoded so the '%'
+  # is not misread as a percent-escape. extract_netrc_host
+  # must preserve the zone-id verbatim in the .netrc
+  # "machine" line. `%` is not a sed metacharacter inside a
+  # bracket character class, so the existing regex in
+  # extract_netrc_host preserves it correctly.
+  run extract_netrc_host "ftps://[fe80::1%25eth0]/path"
+  [ "$status" -eq 0 ]
+  [ "$output" = "fe80::1%25eth0" ]
+}
+
 # ----------------------------------------------------------------------------
 # build_ftp_settings
 # ----------------------------------------------------------------------------

@@ -86,9 +86,19 @@ jobs:
       - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
           dockerfile: tests/integration/Dockerfile.test-server
-          # DL3018 (pin apk versions) is a real concern but fixing it is
-          # out of scope for this PR — it will be addressed alongside
-          # the image digest pinning work. Treat as info for now.
+          # v2.11.11 (#220): the previous comment ("DL3018 (pin apk
+          # versions) ... treat as info for now") mis-identified
+          # DL3018 as an apk rule — DL3018 is hadolint's
+          # apt-get-version-pinning rule and does NOT apply to this
+          # image (which uses `apk add` with every package version
+          # pinned: vsftpd=3.0.5-r3, lftp=4.9.3-r0,
+          # ca-certificates=20260611-r0 at
+          # tests/integration/Dockerfile.test-server:101-104). The
+          # `failure-threshold: error` below silently drops DL3018's
+          # warning-level finding as a side effect, so there is
+          # nothing to "fix" — the comment is kept for traceability
+          # so a future maintainer adding an apt-get-using Dockerfile
+          # knows DL3018 will start surfacing the moment they do.
           failure-threshold: error
 
   contract:
