@@ -131,3 +131,23 @@ setup() {
     [ "$n" -ge 1 ]
   done
 }
+
+@test "compute_backoff_seconds: works when \$RANDOM is unset (v2.11.8 #179, POSIX sh)" {
+  # Regression test for the busybox-ash-only $RANDOM dependency.
+  # On a strict POSIX /bin/sh (e.g. dash on Debian), $RANDOM is
+  # unset; the pre-fix jitter collapsed to zero and every retry
+  # fired at the same instant. The new awk-based jitter has no
+  # dependency on $RANDOM.
+  #
+  # Run lib.sh under `env -u RANDOM bash -c` to mimic a POSIX sh
+  # that does not pre-set $RANDOM, then call compute_backoff_seconds
+  # with counter=5 (delay=8, ±4 jitter) and assert the output is in
+  # [4, 12]. The contract is unchanged for callers that do have
+  # $RANDOM (existing tests above still pass), and the fix is
+  # transparent to them.
+  unset RANDOM
+  run compute_backoff_seconds 5
+  [ "$status" -eq 0 ]
+  n=$output
+  [ "$n" -ge 4 ] && [ "$n" -le 12 ]
+}

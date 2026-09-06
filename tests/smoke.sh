@@ -153,9 +153,26 @@ fi
 pass "default dump does not echo the password value (masked once, dump clean)"
 
 # ----------------------------------------------------------------------------
-# Test 5: mirror_verbose is honoured (output mentions verbose=2)
+# Test 4b (v2.11.8 #194): INPUT_DEBUG=false suppresses the
+# Resolved configuration dump. The dump previously leaked
+# INPUT_LOCAL_DIR, INPUT_REMOTE_DIR, FTP_SETTINGS, MIRROR_COMMAND,
+# INPUT_MAX_RETRIES, and an `ls -lha` of the local directory on
+# every run regardless of debug setting. Now gated on
+# INPUT_DEBUG=true; a non-debug run must NOT emit the
+# "Resolved configuration" group.
 # ----------------------------------------------------------------------------
-out=$(run_init "INPUT_MIRROR_VERBOSE=2" 30)
+out=$(run_init "INPUT_PASSWORD=NoDebugLeakCheck" 30)
+if echo "${out}" | grep -q 'Resolved configuration'; then
+  fail "INPUT_DEBUG=false must NOT print Resolved configuration group; output was:\n${out}"
+fi
+pass "INPUT_DEBUG=false suppresses Resolved configuration dump (v2.11.8 #194)"
+
+# ----------------------------------------------------------------------------
+# Test 5: mirror_verbose is honoured (output mentions verbose=2)
+# v2.11.8 (#194): print_resolved_config is gated on INPUT_DEBUG=true;
+# the test opts in so the MIRROR_COMMAND line surfaces in the dump.
+# ----------------------------------------------------------------------------
+out=$(run_init "INPUT_MIRROR_VERBOSE=2" "INPUT_DEBUG=true" 30)
 echo "${out}" | grep -q "MIRROR_COMMAND.*--verbose=2" \
   || fail "mirror_verbose=2 was not reflected in MIRROR_COMMAND; output was:\n${out}"
 pass "mirror_verbose is honoured by entrypoint.sh"
@@ -420,8 +437,10 @@ pass "A6 classifier does not flag transient connection errors as permanent"
 # ----------------------------------------------------------------------------
 # Test 24: dry_run=true — the mirror command gets --dry-run, and the
 # final banner switches to the DRY RUN variant.
+# v2.11.8 (#194): opt in to INPUT_DEBUG=true so print_resolved_config
+# dumps the MIRROR_COMMAND line we are asserting on.
 # ----------------------------------------------------------------------------
-out=$(run_init "INPUT_DRY_RUN=true" 30)
+out=$(run_init "INPUT_DRY_RUN=true" "INPUT_DEBUG=true" 30)
 echo "${out}" | grep -q "MIRROR_COMMAND.*--dry-run" \
   || fail "INPUT_DRY_RUN=true was not reflected in MIRROR_COMMAND; output was:\n${out}"
 echo "${out}" | grep -q "FTP DRY RUN COMPLETED" \
@@ -440,9 +459,10 @@ pass "dry_run=true adds --dry-run to the mirror command and the DRY RUN banner"
 # never queried by MirrorJob).
 # Uses dry_run=true so the script completes without a real lftp
 # connection attempt (we only care about the resolved MIRROR_COMMAND
-# string, not the actual mirror).
+# string, not the actual mirror). v2.11.8 (#194): INPUT_DEBUG=true
+# to surface the resolved-command dump.
 # ----------------------------------------------------------------------------
-out=$(run_init "INPUT_DRY_RUN=true" "INPUT_EXCLUDE=*.map" 30)
+out=$(run_init "INPUT_DRY_RUN=true" "INPUT_DEBUG=true" "INPUT_EXCLUDE=*.map" 30)
 echo "${out}" | grep -qE 'MIRROR_COMMAND.*-x [*].map' \
   || fail "INPUT_EXCLUDE=*.map was not injected into MIRROR_COMMAND as -x flag; output was:\n${out}"
 # mirror:exclude* must NOT appear in FTP_SETTINGS (was a silent
@@ -460,8 +480,9 @@ pass 'INPUT_EXCLUDE=*.map injects "mirror -x *.map" into MIRROR_COMMAND (v2.11.2
 # *.bak;` was a silent no-op because `mirror:exclude-file` does
 # not exist in lftp 4.9.3 — verified against MirrorJob.cc::AddPattern,
 # which only queries `mirror:exclude-regex` as a default).
+# v2.11.8 (#194): INPUT_DEBUG=true for the resolved-config dump.
 # ----------------------------------------------------------------------------
-out=$(run_init "INPUT_DRY_RUN=true" "INPUT_EXCLUDE_DELETE=*.bak" 30)
+out=$(run_init "INPUT_DRY_RUN=true" "INPUT_DEBUG=true" "INPUT_EXCLUDE_DELETE=*.bak" 30)
 echo "${out}" | grep -qE 'MIRROR_COMMAND.*-X [*].bak' \
   || fail "INPUT_EXCLUDE_DELETE=*.bak was not injected into MIRROR_COMMAND as -X flag; output was:\n${out}"
 # mirror:exclude* must NOT appear in FTP_SETTINGS.
@@ -469,7 +490,7 @@ if echo "${out}" | grep -qE 'set mirror:exclude'; then
   fail "INPUT_EXCLUDE_DELETE should not produce any set mirror:exclude* directive in FTP_SETTINGS (no such variable in lftp 4.9.3); output was:\n${out}"
 fi
 pass 'INPUT_EXCLUDE_DELETE=*.bak injects "mirror -X *.bak" into MIRROR_COMMAND (v2.11.2 fix)'
-out=$(run_init "INPUT_DRY_RUN=true" 30)
+out=$(run_init "INPUT_DRY_RUN=true" "INPUT_DEBUG=true" 30)
 if echo "${out}" | grep -qE 'set mirror:exclude'; then
   fail "default FTP_SETTINGS unexpectedly contains mirror:exclude; output was:\n${out}"
 fi

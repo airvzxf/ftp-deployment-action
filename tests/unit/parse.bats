@@ -68,6 +68,36 @@ setup() {
   [ "$output" = "example.com" ]
 }
 
+@test "extract_netrc_host: ftp://host?query -> host (v2.11.8 #185)" {
+  run extract_netrc_host "ftp://example.com?token=abc"
+  [ "$status" -eq 0 ]
+  [ "$output" = "example.com" ]
+}
+
+@test "extract_netrc_host: ftp://host#frag -> host (v2.11.8 #185)" {
+  run extract_netrc_host "ftp://example.com#section"
+  [ "$status" -eq 0 ]
+  [ "$output" = "example.com" ]
+}
+
+@test "extract_netrc_host: ftp://host:21?query -> host (v2.11.8 #185)" {
+  run extract_netrc_host "ftp://example.com:21?token=abc"
+  [ "$status" -eq 0 ]
+  [ "$output" = "example.com" ]
+}
+
+@test "extract_netrc_host: ftps://[::1]:990?query -> ::1 (v2.11.8 #185)" {
+  run extract_netrc_host "ftps://[::1]:990?x=1"
+  [ "$status" -eq 0 ]
+  [ "$output" = "::1" ]
+}
+
+@test "extract_netrc_host: ftp://user:pw@host?query -> host (v2.11.8 #185 + userinfo)" {
+  run extract_netrc_host "ftp://deploy:plaintext@example.com?token=abc"
+  [ "$status" -eq 0 ]
+  [ "$output" = "example.com" ]
+}
+
 # ----------------------------------------------------------------------------
 # build_ftp_settings
 # ----------------------------------------------------------------------------

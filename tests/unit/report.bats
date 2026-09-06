@@ -91,23 +91,71 @@ setup() {
   [[ "$output" == *"password:"*"(using default)"* ]]
 }
 
-@test "print_inputs_dump: the dump loop covers all 24 declared inputs" {
+@test "print_inputs_dump: the dump loop covers all 31 declared inputs (v2.11.8 #257 + #227)" {
   unset INPUT_SERVER INPUT_USER INPUT_PASSWORD INPUT_LOCAL_DIR INPUT_REMOTE_DIR \
         INPUT_DELETE INPUT_NO_SYMLINKS INPUT_MAX_RETRIES INPUT_MIRROR_VERBOSE \
         INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME \
         INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
         INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
         INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS \
-        INPUT_DEBUG INPUT_FAIL_ON_DEPRECATED INPUT_DRY_RUN
+        INPUT_EXCLUDE INPUT_EXCLUDE_DELETE INPUT_DEBUG INPUT_FAIL_ON_DEPRECATED \
+        INPUT_DRY_RUN INPUT_UPLOAD_LOG_ON_FAILURE INPUT_CONCURRENCY_LOCK \
+        INPUT_CONCURRENCY_LOCK_PATH INPUT_CONCURRENCY_LOCK_TIMEOUT \
+        INPUT_CONCURRENCY_LOCK_POLL_INTERVAL
   run print_inputs_dump "false"
   [ "$status" -eq 0 ]
-  for name in server user password local_dir remote_dir max_retries delete \
+  for name in server user password local_dir remote_dir delete max_retries \
               no_symlinks mirror_verbose ftp_ssl_allow ssl_verify_certificate \
               ssl_check_hostname ftp_passive_mode ftp_use_feat ftp_nop_interval \
               net_max_retries net_persist_retries net_timeout dns_max_retries \
-              dns_fatal_timeout lftp_settings debug fail_on_deprecated dry_run; do
+              dns_fatal_timeout lftp_settings exclude exclude_delete debug \
+              fail_on_deprecated dry_run upload_log_on_failure concurrency_lock \
+              concurrency_lock_path concurrency_lock_timeout \
+              concurrency_lock_poll_interval; do
     [[ "$output" == *"${name}:"* ]]
   done
+}
+
+@test "print_inputs_dump: debug=true covers all 31 declared inputs (v2.11.8 #181)" {
+  # Previously the debug=true printf block was silently missing
+  # fail_on_deprecated and dry_run (29 entries vs 31). A regression
+  # that drops either from the printf block would have slipped
+  # past tests; this test locks the contract.
+  unset INPUT_SERVER INPUT_USER INPUT_PASSWORD INPUT_LOCAL_DIR INPUT_REMOTE_DIR \
+        INPUT_DELETE INPUT_NO_SYMLINKS INPUT_MAX_RETRIES INPUT_MIRROR_VERBOSE \
+        INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME \
+        INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
+        INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
+        INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS \
+        INPUT_EXCLUDE INPUT_EXCLUDE_DELETE INPUT_DEBUG INPUT_FAIL_ON_DEPRECATED \
+        INPUT_DRY_RUN INPUT_UPLOAD_LOG_ON_FAILURE INPUT_CONCURRENCY_LOCK \
+        INPUT_CONCURRENCY_LOCK_PATH INPUT_CONCURRENCY_LOCK_TIMEOUT \
+        INPUT_CONCURRENCY_LOCK_POLL_INTERVAL
+  run print_inputs_dump "true"
+  [ "$status" -eq 0 ]
+  for name in server user password local_dir remote_dir delete max_retries \
+              no_symlinks mirror_verbose ftp_ssl_allow ssl_verify_certificate \
+              ssl_check_hostname ftp_passive_mode ftp_use_feat ftp_nop_interval \
+              net_max_retries net_persist_retries net_timeout dns_max_retries \
+              dns_fatal_timeout lftp_settings exclude exclude_delete debug \
+              fail_on_deprecated dry_run upload_log_on_failure concurrency_lock \
+              concurrency_lock_path concurrency_lock_timeout \
+              concurrency_lock_poll_interval; do
+    [[ "$output" == *"${name}:"* ]]
+  done
+}
+
+@test "print_inputs_dump: debug=true label order matches action.yml (v2.11.8 #181)" {
+  # Spot-check the order: action.yml declares `delete` BEFORE
+  # `max_retries`; the previous printf block had them swapped.
+  INPUT_SERVER="ftp://example.com"
+  INPUT_DELETE="false"
+  INPUT_MAX_RETRIES="10"
+  run print_inputs_dump "true"
+  [ "$status" -eq 0 ]
+  delete_pos=$(printf '%s' "$output" | grep -n 'delete:' | head -1 | cut -d: -f1)
+  mr_pos=$(printf '%s' "$output" | grep -n 'max_retries:' | head -1 | cut -d: -f1)
+  [ "${delete_pos}" -lt "${mr_pos}" ]
 }
 
 # ----------------------------------------------------------------------------
