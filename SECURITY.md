@@ -4,15 +4,19 @@
 
 | Track                  | Tag range                                  | Support                                                              |
 |------------------------|--------------------------------------------|-----------------------------------------------------------------------|
-| Currently maintained   | `v2.x` (latest = `v2.11.5`)                | Active — security and bug fixes published in the next v2.x.y release. |
+| Currently maintained   | `v2.x` (latest = `v2.11.9`)                | Active — security and bug fixes published in the next v2.x.y release. |
 | Legacy support window  | `v1.4` — `v1.9`                            | Security-only backports on a best-effort basis.                       |
 | End-of-life            | `v1.0-alpha.*`, `v1.1`, `v1.2.0`, `v1.3.x`  | No support.                                                           |
 
-Floating refs like `@latest`, `@master`, or `@main` are **not** in
-the support matrix — pin to a specific tag (e.g. `@v2.10.0`) or a
-full commit SHA so the maintainer can reproduce the exact image
-you are running. See the "Pin to a major version" note in the
-README for the recommended pattern.
+Floating refs like `@latest`, `@master`, `@main`, and `@v2` are
+**not** in the support matrix — pin to a specific tag (e.g.
+`@v2.11.9`) or a full commit SHA so the maintainer can reproduce
+the exact image you are running. The `@v2` floating major alias
+is stale (it still points at the v2.0.x-era image and the
+release pipeline does not move it), so following it silently
+skips every fix between v2.1.0 and the present. See the
+"Pin to a specific tag" note in the README for the recommended
+pattern.
 
 ## Tag signing policy
 
@@ -25,31 +29,42 @@ to publish an image whose tag does not verify.
 |---|---|---|---|
 | `v1.0-alpha.1` … `v1.3.3` | Lightweight (unsigned) | n/a — EOL | n/a |
 | `v1.5.0` … `v2.10.0` | PGP (RSA) | `.github/trusted-signers.asc` | `82DE44111B30F91F55BCEB1F414687A3CD7E65B9` (long ID `414687A3CD7E65B9`) |
-| `v2.11.0` and later | SSH (ED25519) | `.github/trusted-signers` | `SHA256:POu2Sr8ILb1IM05Vh1cGU3xivjx05QjWoWYhdLc6YHA` (principal `israel.alberto.rv@gmail.com`) |
+| `v2.11.0` … `v2.11.6` | SSH (ED25519) | `.github/trusted-signers` | `SHA256:POu2Sr8ILb1IM05Vh1cGU3xivjx05QjWoWYhdLc6YHA` (principal `israel.alberto.rv@gmail.com`) |
+| `v2.11.7` … `v2.11.8` | PGP (RSA) | `.github/trusted-signers.asc` | `82DE44111B30F91F55BCEB1F414687A3CD7E65B9` (long ID `414687A3CD7E65B9`) |
+| `v2.11.9` (and later, see the per-release notes) | SSH (ED25519) | `.github/trusted-signers` | `SHA256:POu2Sr8ILb1IM05Vh1cGU3xivjx05QjWoWYhdLc6YHA` (principal `israel.alberto.rv@gmail.com`) |
 
-`git verify-tag` auto-detects which backend the tag used, so
-both formats are supported by the same workflow job. The PGP
-`.asc` allow-list is imported into the runner's keyring only
-when the tag being verified is PGP-signed; v2.11.0+ SSH tags
-never import the GPG key. This keeps the documented key-removal
-path intact (see AGENTS.md §"Tag signature guard" → "Removing a
-signer") — the `.asc` is optional for new releases.
+The maintainer alternates between the two backends; both
+allow-lists are committed to the repo and both keys are
+load-bearing for at least one shipped release. To check
+which backend a specific tag uses, run
+`scripts/verify-tag.sh <tag>` (it auto-detects and prints
+the key fingerprint). `git verify-tag` itself auto-detects
+the backend; the workflow's `verify-tag-signature` job
+imports the PGP keyring only when the tag is PGP-signed and
+the SSH allow-list only when the tag is SSH-signed. The
+`.asc` file is **not** optional — it is required to verify
+`v1.5.0`–`v2.10.0` and `v2.11.7`–`v2.11.8`. Do not remove
+it until the most recent PGP-signed tag is at least one
+minor version old (see AGENTS.md §"Tag signature guard" →
+"Removing a signer").
 
 The maintainer's PGP public key can be fetched from
 <https://keys.openpgp.net/search?q=82DE44111B30F91F55BCEB1F414687A3CD7E65B9>
 or with
 `gpg --keyserver keys.openpgp.net --recv-keys 82DE44111B30F91F55BCEB1F414687A3CD7E65B9`
-to verify PGP-signed tags (`v2.10.0` and earlier) locally. The
-SSH key is the maintainer's standard GitHub authentication key
-(fingerprint on the user's GitHub settings page).
+to verify PGP-signed tags (`v1.5.0`–`v2.10.0` and
+`v2.11.7`–`v2.11.8`) locally. The SSH key is the maintainer's
+standard GitHub authentication key (fingerprint on the user's
+GitHub settings page).
 
 **Verify any tag locally** with the in-repo script (handles all
 three formats; safe to run, writes nothing to your `~/.gnupg` or
 `.git/config`):
 
 ```sh
-scripts/verify-tag.sh v2.11.0   # SSH path (v2.11.0+)
-scripts/verify-tag.sh v2.10.0   # PGP path (v2.10.0 and earlier)
+scripts/verify-tag.sh v2.11.9   # SSH path
+scripts/verify-tag.sh v2.11.8   # PGP path
+scripts/verify-tag.sh v2.10.0   # PGP path
 scripts/verify-tag.sh v1.3.3    # lightweight, exits 0 with INFO
 ```
 

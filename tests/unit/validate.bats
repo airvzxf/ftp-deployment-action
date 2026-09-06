@@ -203,6 +203,70 @@ setup() {
   [[ "$output" == *"forbidden shell metacharacter"* ]]
 }
 
+# F2 audit v2.11.10 (#295): bracket-balance guard for IPv6 URLs.
+# Pre-fix, validate_path let `ftp://[::1` through and
+# extract_netrc_host returned empty (the IPv6 sed requires a
+# closing `]`). write_netrc then emitted `machine  login user
+# password` — invalid .netrc syntax — and the user got a
+# confusing "530 Login authentication failed" instead of a
+# precise URL-shape error. Post-fix: validate_path rejects
+# any value whose `[` and `]` counts don't match.
+@test "validate_path rejects unbalanced IPv6 brackets — missing close (issue #295)" {
+  run validate_path "server" 'ftp://[::1'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unbalanced IPv6 brackets"* ]]
+  # The error message embeds the counts so the user can see
+  # which side is unbalanced (1 "[" vs 0 "]").
+  [[ "$output" == *"1"* ]]
+  [[ "$output" == *"0"* ]]
+}
+
+@test "validate_path rejects unbalanced IPv6 brackets — extra close (issue #295)" {
+  run validate_path "server" 'ftp://::1]'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unbalanced IPv6 brackets"* ]]
+  # Counts: 0 "[" vs 1 "]". The `0` substring matches both the
+  # count field and the literal `0]` in the message body; the
+  # `1` substring matches the count. We assert the count
+  # direction by requiring `0 "["` and `1 "]"` next to each other.
+  [[ "$output" == *"0 \"[\""* ]]
+  [[ "$output" == *"1 \"]\""* ]]
+}
+
+@test "validate_path rejects unbalanced IPv6 brackets — mismatched pairs (issue #295)" {
+  # Two `[` and one `]`: the most common "I tried to write two
+  # brackets" typo. Counts must balance.
+  run validate_path "server" 'ftp://[[::1]'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unbalanced IPv6 brackets"* ]]
+}
+
+@test "validate_path accepts balanced IPv6 brackets — documented form (issue #295)" {
+  # The documented IPv6 form passes (balanced brackets) and
+  # does NOT trip the new guard.
+  run validate_path "server" 'ftps://[::1]:990'
+  [ "$status" -eq 0 ]
+  run validate_path "server" 'ftps://[::1]'
+  [ "$status" -eq 0 ]
+  run validate_path "server" 'ftp://[2001:db8::1]:21'
+  [ "$status" -eq 0 ]
+}
+
+@test "validate_path accepts values with no brackets unchanged (issue #295)" {
+  # The guard must be invisible for the common case where no
+  # bracket appears at all — count is (0, 0) and the comparison
+  # is equal. Regression guard against an over-broad rule that
+  # would block every server value.
+  run validate_path "server" 'ftp://example.com'
+  [ "$status" -eq 0 ]
+  run validate_path "server" 'ftp://example.com:21'
+  [ "$status" -eq 0 ]
+  run validate_path "local_dir" '/var/www/site/'
+  [ "$status" -eq 0 ]
+  run validate_path "remote_dir" '/www/user/home/'
+  [ "$status" -eq 0 ]
+}
+
 # ----------------------------------------------------------------------------
 # validate_bool — v2.11.3 (#171)
 # ----------------------------------------------------------------------------

@@ -591,6 +591,79 @@ FAKE
   [ -n "${ACQUIRED_LOCK_SENTINEL:-}" ]
 }
 
+# F2 audit v2.11.10 (#294): pre-fix the loop ran
+# `ceil(timeout/poll)` iterations, so total wall-clock was
+# `count * (poll + work)` — 1.4x to 2x the documented
+# concurrency_lock_timeout. Post-fix we track wall-clock via
+# `date +%s` and break when the deadline is reached, so the
+# action returns within `timeout + one iteration of slack`
+# regardless of how much per-iteration network work happens.
+#
+# The fake lftp here simulates 1s of network work per call
+# (a `sleep 1` injected via FAKE_LFTP_WORK) so the pre-fix
+# fixed-iteration loop blows past the documented timeout
+# while the post-fix wall-clock loop honors it. Without the
+# simulated work, both loops would complete in ~timeout
+# seconds (sleep poll dominates) and the test could not
+# distinguish them.
+@test "acquire_lock_with_recovery: wall-clock timeout respects concurrency_lock_timeout (issue #294)" {
+  # Stateful fake-lftp that always returns MKD-fail + recent
+  # sentinel + exit 0, after sleeping 1s to simulate network
+  # work. Pre-fill enough script lines for the worst case
+  # (count = ceil(timeout/poll) iterations, two lftp calls
+  # each: MKD + LIST).
+  export FAKE_LFTP_SCRIPT="${BATS_TEST_TMPDIR}/fake-lftp-script.txt"
+  export FAKE_LFTP_WORK="${FAKE_LFTP_WORK:-1}"
+  recent_stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  : > "${FAKE_LFTP_SCRIPT}"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    printf 'exit 1\n' >> "${FAKE_LFTP_SCRIPT}"
+    printf 'echo .lftp-deployment.lock.%s.1.info\n' "${recent_stamp}" >> "${FAKE_LFTP_SCRIPT}"
+  done
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/sh
+# Simulate network latency so the pre-fix fixed-iteration
+# loop's per-iteration "work" is non-trivial. Without this,
+# fake-lftp is sub-millisecond and the wall-clock blowup is
+# invisible.
+if [ -n "${FAKE_LFTP_WORK:-}" ]; then
+  sleep "${FAKE_LFTP_WORK}"
+fi
+line=$(head -n 1 "${FAKE_LFTP_SCRIPT:-/dev/null}" 2>/dev/null) || true
+if [ -n "${line:-}" ]; then
+  sed -i '1d' "${FAKE_LFTP_SCRIPT}"
+  case "${line}" in
+    exit\ *) rc=${line#exit }; printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit "${rc}" ;;
+    echo\ *) payload=${line#echo }; printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; printf '%s\n' "${payload}"; exit 0 ;;
+    *) printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit 0 ;;
+  esac
+fi
+printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit 0
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/lftp"
+
+  unset ACQUIRED_LOCK_SENTINEL
+  _start=$(date +%s)
+  # timeout=3, poll=1: pre-fix count=3, each iter is
+  # (1s MKD + 1s LIST + 1s sleep) = 3s, total ~9s.
+  # Post-fix: bounded at 3s + one iter of slack = ~5s.
+  # Allow 7s for CI clock granularity (sleep 1s is ±0.5s on
+  # busy runners).
+  acquire_lock_with_recovery \
+    "ftp://example.test" ".lftp-deployment.lock" "3" "1" "ftptest" || rc=$?
+  _end=$(date +%s)
+  _elapsed=$((_end - _start))
+
+  unset FAKE_LFTP_WORK
+
+  [ "${rc:-0}" -eq 1 ]
+  # Pre-fix: ceil(3/1)=3 iters * (1s work + 1s LIST + 1s
+  # sleep) ~= 9s. Post-fix: bounded at timeout + one iter
+  # ~= 5s. A regression to fixed-iteration counting blows
+  # past 7s; wall-clock tracking stays under 7s.
+  [ "${_elapsed}" -le 7 ]
+}
+
 # ----------------------------------------------------------------------------
 # rewrite_lftp_url — pure helper extracted from run_lftp_once
 # (closes #132). The URL rewrite is the v2.11.0 fix that makes lftp

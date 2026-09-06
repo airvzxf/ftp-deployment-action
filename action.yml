@@ -106,7 +106,7 @@ inputs:
     required: false
     default: 'false'
   upload_log_on_failure:
-    description: 'If "true" (default), when the action is about to exit 1, the captured lftp log file is uploaded to the current workflow run as a workflow artifact named "ftp-deployment-action-log-<run-attempt>". Requires the step to expose GITHUB_TOKEN via `env: GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}`. If the token (or any of the other GitHub-Actions env vars) is missing, the upload is silently skipped with a notice and the action still exits 1 normally. If the upload request itself fails (network, 4xx, 5xx), a warning is printed and the action still exits 1. Set to "false" to disable the upload entirely (the log file is still captured under ~/.lftp-logs/ for the runner to inspect).'
+    description: '**BROKEN** (do not rely on). If "true" (default), when the action is about to exit 1 it attempts to POST the captured lftp log to a non-existent GitHub REST endpoint and always prints `WARNING: failed to upload log artifact`. Set to "false" to silence the warning. The log file is always written to `~/.lftp-logs/run-<UTC-timestamp>.log` inside the container regardless; read it with `outputs.log_file` and upload via a follow-up `actions/upload-artifact` step (see README "Workflow artifacts (manual upload on failure)"). A follow-up release will switch the upload to the Actions Runtime API (`ACTIONS_RUNTIME_TOKEN` + `ACTIONS_RESULTS_URL`).'
     required: false
     default: 'true'
   concurrency_lock:

@@ -336,6 +336,24 @@ validate_path() {
       exit 2
       ;;
   esac
+  # v2.11.10 (#295): reject values whose IPv6 brackets don't balance
+  # (e.g. `ftp://[::1` from a typo). Pre-fix, validate_path passed
+  # these through, extract_netrc_host's IPv6 sed then produced empty
+  # output (the regex requires a closing `]`), and write_netrc
+  # emitted `machine  login user password` — invalid .netrc syntax
+  # that triggered a confusing "530 Login authentication failed" /
+  # PERMANENT classification downstream instead of a precise
+  # URL-shape error. Counts are computed unconditionally (cheap on
+  # busybox) and the comparison catches `[` without `]`, `]` without
+  # `[`, and unbalanced multi-bracket shapes; balanced brackets (the
+  # documented IPv6 form `ftp://[::1]:990`) still pass.
+  _vp_lbrack=$(printf '%s' "${_vp_value}" | tr -cd '[' | wc -c | tr -d ' ')
+  _vp_rbrack=$(printf '%s' "${_vp_value}" | tr -cd ']' | wc -c | tr -d ' ')
+  if [ "${_vp_lbrack}" != "${_vp_rbrack}" ]; then
+    printf 'ERROR: %s has unbalanced IPv6 brackets (found %s "[" and %s "]"): %s\n' \
+      "${_vp_name}" "${_vp_lbrack}" "${_vp_rbrack}" "${_vp_value}" >&2
+    exit 2
+  fi
 }
 
 # ------------------------------------------------------------------------------
@@ -1153,12 +1171,31 @@ acquire_lock_with_recovery() {
   # two cannot drift again.
   _alwr_server_eff=$(rewrite_lftp_url "${_alwr_server}" "${_alwr_user}")
 
-  # Compute iteration count. timeout=0 means "no waiting, fail
-  # immediately if the lock is held" -> count=1.
+  # v2.11.10 (#294): wall-clock deadline. timeout=0 keeps the
+  # documented "no waiting, fail immediately" semantic; for any
+  # positive value we record a deadline and break the loop when
+  # the wall-clock exceeds it. The pre-fix fixed-iteration loop
+  # (count = ceil(timeout/poll)) accumulated ~1-3s of network
+  # work per iteration (MKD, possibly LIST, possibly DELE+RMD),
+  # so total wall-clock was `count * (poll + work)` — 1.4x to
+  # 2x the documented value. Wall-clock tracking makes the
+  # timeout honor the action.yml description ("Maximum seconds
+  # to wait for the lock") within at most one iteration's worth
+  # of MKD+LIST+RECOVERY/sleep work (worst case ~55s on a stuck
+  # server: 30s MKD timeout + 10s LIST + 10s RMD + sleep(poll)).
+  #
+  # Edge case: busybox ash's `$((..))` is signed 32-bit, so a
+  # timeout of `999999999` (~31 years) overflows to a negative
+  # deadline and the loop would break on iteration 1. Practical
+  # workflows are bounded by the action's 5h global timeout, so
+  # this is cosmetic — but a future fork decoupling the lock
+  # timeout from the runner timeout should add an upper bound
+  # to validate_int. Today we document the 32-bit limit and
+  # leave the bound enforcement to the caller.
   if [ "${_alwr_timeout}" = "0" ]; then
-    _alwr_count=1
+    _alwr_deadline=0
   else
-    _alwr_count=$(( (_alwr_timeout + _alwr_poll - 1) / _alwr_poll ))
+    _alwr_deadline=$(( $(date +%s) + _alwr_timeout ))
   fi
 
   # Sentinel identity for THIS acquisition. Timestamp is captured
@@ -1177,8 +1214,22 @@ acquire_lock_with_recovery() {
   _alwr_preamble="set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5;"
 
   _alwr_attempt=0
-  while [ "${_alwr_attempt}" -lt "${_alwr_count}" ]; do
+  while :; do
     _alwr_attempt=$((_alwr_attempt + 1))
+
+    # v2.11.10 (#294): wall-clock check at the top of every
+    # iteration. timeout=0 keeps deadline=0 and we skip this
+    # check entirely (the fail-fast semantic is enforced by the
+    # `if [ "${_alwr_timeout}" = "0" ]; then return 1` branch
+    # further down). For positive timeouts, the MKD+LIST+recovery
+    # sequence on the previous iteration may have eaten into the
+    # budget, so we check before doing any more work. POSIX
+    # `date +%s` is portable to busybox ash (the action runtime)
+    # and every CI runner.
+    if [ "${_alwr_timeout}" != "0" ] \
+        && [ "$(date +%s)" -ge "${_alwr_deadline}" ]; then
+      break
+    fi
 
     # Step 1: try MKD. We use lftp's high-level `mkdir` command
     # rather than the raw `quote MKD` because lftp 4.9.x does not

@@ -153,15 +153,27 @@ chmod 0777 "${_ftp_home}/.lftp-deployment.lock"
 # bind-mount propagation delay (up to a 5-second budget) without
 # introducing a flake mode. Polling at 100 ms is ten times faster
 # than the previous sleep granularity.
+#
+# F2 audit (v2.11.9 +1 day): the poll silently fell through on
+# deadline expiry, letting step 2 pass for the wrong reason (the
+# action's MKD succeeded because the lock dir was NOT visible to
+# vsftpd, so the action took a fresh lock rather than recovering
+# from the held lock). Convert the silent give-up into a hard
+# `log_fail` so a real bind-mount stall surfaces as red.
 _deadline=$(( $(date +%s) + 5 ))
+_visible=0
 while [ "$(date +%s)" -lt "${_deadline}" ]; do
   if ${RUNTIME} exec "${FTP_CONTAINER_NAME}" \
       ls -la "/home/vsftpd/${FTP_USER}/.lftp-deployment.lock" \
       >/dev/null 2>&1; then
+    _visible=1
     break
   fi
   sleep 0.1
 done
+if [ "${_visible}" -ne 1 ]; then
+  log_fail "lock dir not visible to vsftpd within 5s; bind-mount propagation stalled"
+fi
 
 _log2=$(mktemp -t lockB.XXXXXX) || log_fail "mktemp log_b failed"
 
