@@ -179,4 +179,34 @@ else
   ok "README.md has no 'latest = vX.Y.Z' stamp (no drift to check)"
 fi
 
+# README.md action pin drift (#326): every `airvzxf/ftp-deployment-
+# action@vX.Y.Z` example in README must match VERSION. The repo's
+# AGENTS.md "No-go list" bans floating refs (`@latest`, `@main`,
+# ...) in user-facing examples and pins to a specific tag or SHA so
+# the maintainer can reproduce the exact image. Prior to v2.11.13
+# this was a manual chore — a README bump to v2.11.9 stayed at
+# v2.11.9 across three releases (v2.11.10/11/12) and was caught
+# only at the audit table. Collect every unique pin in README.md
+# and fail if any of them differ from VERSION. `sort -u` collapses
+# duplicate occurrences (the same example often appears 5-10 times
+# across the quickstart / inputs / release-notes sections) so the
+# check returns at most one stamp to compare.
+_readme_pins=$(grep -oE 'airvzxf/ftp-deployment-action@v[0-9]+\.[0-9]+\.[0-9]+' \
+  "${ROOT}/README.md" | sort -u)
+if [ -z "${_readme_pins}" ]; then
+  ok "README.md has no 'airvzxf/ftp-deployment-action@vX.Y.Z' pins (no drift to check)"
+else
+  _pin_version=$(printf '%s\n' "${_readme_pins}" | head -n 1 | sed 's/.*@v//')
+  # All unique pins must collapse to a single version after dropping
+  # the `@v` prefix; if they don't, multiple stamps coexist.
+  _pin_count=$(printf '%s\n' "${_readme_pins}" | wc -l | tr -d ' ')
+  if [ "${_pin_count}" -ne 1 ]; then
+    fail "README.md mixes multiple 'airvzxf/ftp-deployment-action@vX.Y.Z' pins: $(printf '%s ' "${_readme_pins}")"
+  fi
+  if [ "${_pin_version}" != "${VER}" ]; then
+    fail "README.md 'airvzxf/ftp-deployment-action@v${_pin_version}' pins do not match VERSION '${VER}'"
+  fi
+  ok "README.md 'airvzxf/ftp-deployment-action@v${_pin_version}' pins match VERSION (${VER})"
+fi
+
 exit 0

@@ -507,18 +507,29 @@ emit_deprecation_warning() {
 #   emits `::add-mask::` for the three values; the function reads
 #   them via _indirection so we don't repeat the eval pattern.
 #
+#   The ::add-mask:: directive is a SINGLE-LINE workflow command: if
+#   the value contains a CR/LF (intentionally or via a copy-paste of
+#   a multi-line secret), the runner only masks the FIRST line and
+#   the remainder surfaces UNMASKED in the log. F2 audit (#314)
+#   strips CR/LF and other control characters from the value before
+#   emitting the directive so a multi-line secret collapses into a
+#   single masked line.
+#
 #   Reads: INPUT_PASSWORD, INPUT_USER, INPUT_SERVER.
 # ------------------------------------------------------------------------------
 add_masks() {
-  if [ -n "$(_indirection INPUT_PASSWORD)" ]; then
-    printf '::add-mask::%s\n' "$(_indirection INPUT_PASSWORD)"
-  fi
-  if [ -n "$(_indirection INPUT_USER)" ]; then
-    printf '::add-mask::%s\n' "$(_indirection INPUT_USER)"
-  fi
-  if [ -n "$(_indirection INPUT_SERVER)" ]; then
-    printf '::add-mask::%s\n' "$(_indirection INPUT_SERVER)"
-  fi
+  for _am_name in INPUT_PASSWORD INPUT_USER INPUT_SERVER; do
+    _am_value=$(_indirection "${_am_name}")
+    if [ -n "${_am_value}" ]; then
+      # Collapse CR/LF/CRLF and strip the rest of the C0 control
+      # range so the post-newline portion of a multi-line secret
+      # never leaks through the runner's partial-mask parser.
+      _am_value=$(printf '%s' "${_am_value}" | tr -d '\r\n' | tr -d '[:cntrl:]')
+      if [ -n "${_am_value}" ]; then
+        printf '::add-mask::%s\n' "${_am_value}"
+      fi
+    fi
+  done
 }
 
 # ------------------------------------------------------------------------------
@@ -1287,20 +1298,22 @@ acquire_lock_with_recovery() {
       # tell whether we died mid-mirror. The sentinel content is
       # not parsed (we use the FILENAME timestamp); we keep the
       # body for human debugging via FTP `cat`.
-      # F2 audit (#178 + #184): mktemp's success path is fine
-      # (busybox gives a random name and mode 0600). Only the
-      # fallback needs hardening: PID-predictable name +
+      # F2 audit (#178 + #184 + #312): mktemp's success path is
+      # fine (busybox gives a random name and mode 0600). Only
+      # the fallback needs hardening: PID-predictable name +
       # umask-inherited mode. Mix in entropy from /dev/urandom
-      # and chmod 0600 unconditionally so the body file never
-      # lands at 0644 on the fallback branch.
+      # and chmod 0600 AFTER the redirect that creates the file,
+      # so the body file ends at 0600 on both branches. The
+      # mktemp success path is unaffected (chmod 0600 on a
+      # 0600 file is a no-op).
       _alwr_sentinel_body=$(mktemp 2>/dev/null) \
         || _alwr_sentinel_body="/tmp/.lftp-lock-body.$$-$(date +%s)-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-      chmod 600 "${_alwr_sentinel_body}" 2>/dev/null || true
       {
         printf 'pid=%s\n' "${_alwr_pid}"
         printf 'started_at=%s\n' "${_alwr_stamp}"
         printf 'host=%s\n' "$(hostname 2>/dev/null || echo unknown)"
       } > "${_alwr_sentinel_body}"
+      chmod 600 "${_alwr_sentinel_body}" 2>/dev/null || true
       set +e
       timeout 30s lftp "${_alwr_server_eff}" \
         -e "${_alwr_preamble} put ${_alwr_sentinel_body} -o ${_alwr_sentinel}; quit;" \

@@ -419,8 +419,21 @@ printf '::endgroup::\n'
 # step can attach it as a workflow artifact. Only do this if the
 # runner set GITHUB_OUTPUT (i.e. the user invoked us with `id:` in
 # their step and declared `log_file` in the step's outputs).
+# F2 audit (#313): if the write fails (file unwritable, disk full,
+# leaked fd on a dead runner worker, read-only fs on a self-hosted
+# runner, etc.) the action must not abort AFTER a successful mirror.
+# The output is best-effort metadata; bracket with set +e / set -e /
+# capture rc / warn, mirroring upload_log_artifact at
+# lib.sh:1743-1759.
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  set +e
   printf 'log_file=%s\n' "${LOG_FILE}" >> "${GITHUB_OUTPUT}"
+  _gho_rc=$?
+  set -e
+  if [ "${_gho_rc}" -ne 0 ]; then
+    printf 'WARNING: could not write log_file output to %s (rc=%s); continuing.\n' \
+      "${GITHUB_OUTPUT}" "${_gho_rc}" >&2
+  fi
 fi
 
 # ------------------------------------------------------------------------------
