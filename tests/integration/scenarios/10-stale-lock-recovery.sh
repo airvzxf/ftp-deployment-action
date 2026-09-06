@@ -83,8 +83,38 @@ _ftp_home="${FTP_DATA_DIR}/${FTP_USER}"
 # lock dir during recovery (vsftpd creates it as ftp:ftp but the
 # bind-mount maps ownership to host; 0777 ensures RMD succeeds
 # regardless).
+#
+# v2.11.9 (#229): the sentinel timestamp was hardcoded to
+# "20260101T000000Z" (a date clearly in the past) so the
+# action's stale-recovery branch could prove the takeover fired.
+# On a long-lived CI runner where the system date drifts past the
+# fixed stamp, the comparison INPUT_CONCURRENCY_LOCK_TIMEOUT vs
+# (now − _stale_ts) can fail or behave inconsistently; the test
+# is also brittle to whoever happens to be reading the spec in
+# the future (2026 is "in the past" today but ambiguous in 2030).
+# Make the stamp dynamic: subtract the desired staleness window
+# from the current UTC time so the sentinel is exactly
+# (2 × INPUT_CONCURRENCY_LOCK_TIMEOUT) older than the action's
+# threshold. The sentinel is then guaranteed stale by construction,
+# independent of the runner's wall clock. POSIX-awk does the date
+# arithmetic; no GNU date dependency.
+#
+# F2 audit (v2.11.9 +1 day): the staleness window is derived from
+# the same _tlock_timeout variable that is passed to the env file,
+# so changing one changes the other. The previous shape hardcoded
+# 900 in two unrelated places (the awk now_offset argument and
+# INPUT_CONCURRENCY_LOCK_TIMEOUT); a future tweak to one would
+# silently break the (2× threshold) invariant the test asserts.
+_tlock_timeout=900
 _lockdir="${_ftp_home}/.lftp-deployment.lock"
-_stale_ts="20260101T000000Z"
+_stale_ts=$(awk -v now_offset="$(( 2 * _tlock_timeout ))" 'BEGIN {
+  "date -u +%s" | getline now
+  close("date -u +%s")
+  ts = now - now_offset
+  printf "%04d%02d%02dT%02d%02d%02dZ", \
+    strftime("%Y", ts), strftime("%m", ts), strftime("%d", ts), \
+    strftime("%H", ts), strftime("%M", ts), strftime("%S", ts)
+}')
 _stale_pid="99999"
 _stale_sentinel=".lftp-deployment.lock.${_stale_ts}.${_stale_pid}.info"
 
@@ -112,11 +142,18 @@ assert_present "${_ftp_home}" "${_stale_sentinel}"
 _env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env failed"
 build_action_env_file "${_env}" "${IMAGE}" /data / \
   "INPUT_CONCURRENCY_LOCK=true" \
-  "INPUT_CONCURRENCY_LOCK_TIMEOUT=900" \
+  "INPUT_CONCURRENCY_LOCK_TIMEOUT=${_tlock_timeout}" \
   "INPUT_CONCURRENCY_LOCK_POLL_INTERVAL=1" \
   "INPUT_MAX_RETRIES=1"
 
-trap 'rm -f "${_env}"; stop_ftp_server' EXIT
+# v2.11.9 (#225): include _log in the EXIT trap so the captured
+# action log is removed on any exit path (success, assertion
+# failure, signal). See scenario 01 for the rationale.
+#
+# F2 audit (v2.11.9 +1 day): use :- defaults for _env and _log so
+# a failure before either is assigned does not abort the trap under
+# `set -u` and leak the FTP container. See scenario 03.
+trap 'rm -f "${_env:-}" "${_log:-}"; stop_ftp_server' EXIT
 
 _log=$(mktemp -t lock10.XXXXXX) || log_fail "mktemp log failed"
 
@@ -183,6 +220,4 @@ assert_present "${_ftp_home}" "index.html"
 assert_present "${_ftp_home}" "about.html"
 assert_present "${_ftp_home}" "assets"
 
-rm -f "${_log}"
-
-log_pass "scenario 10 passed: stale sentinel from 2026-01-01 was taken over in ${_elapsed}s (<30s; stale-recovery fired)"
+log_pass "scenario 10 passed: stale sentinel from ${_stale_ts} was taken over in ${_elapsed}s (<30s; stale-recovery fired)"

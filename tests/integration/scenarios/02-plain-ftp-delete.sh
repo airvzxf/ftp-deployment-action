@@ -54,6 +54,12 @@ lftp_build_open_script "${_script}" \
 
 _log=$(mktemp -t lftplog.XXXXXX) || log_fail "mktemp failed"
 
+# v2.11.9 (#225, #226): register _log and _script in the EXIT
+# trap so they are removed on any exit path (success, lftp error,
+# assert_present failure, signal). See scenario 01 for the
+# rationale and the F2 audit (v2.11.9 +1 day) trap-safety pattern.
+trap 'rm -f "${_log:-}" "${_script:-}"; stop_ftp_server' EXIT
+
 log_info "running mirror upload with --delete (log=${_log})"
 if lftp_run_script "${_script}" "${_log}" 60; then
   _rc=0
@@ -61,15 +67,12 @@ else
   _rc=$?
 fi
 
-rm -f "${_script}"
-
 if [ "${_rc}" -ne 0 ]; then
   printf '%s\n' "---- captured lftp log (exit ${_rc}) ----" >&2
   cat "${_log}" >&2
   printf '%s\n' "---- end of lftp log ----" >&2
   log_fail "lftp mirror --delete exited with code ${_rc}"
 fi
-rm -f "${_log}"
 
 # --- Assertions on the FTP server state --------------------------------------
 

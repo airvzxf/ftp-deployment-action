@@ -33,6 +33,14 @@
 # (HOME pinning), so the action can now talk to a real FTP server
 # end-to-end — and that includes a real FTPS server. Scenarios 03
 # and 04 are the integration-level proof.
+#
+# v2.11.9 (#232): the action's captured log (_log) and the
+# per-scenario env-file (_env) are cleaned up by the EXIT trap
+# installed below ("trap ... EXIT"). On the success path the
+# linear `rm -f "${_log}"` was previously the only cleanup; on
+# the failure path the log was dumped to stderr for debuggability
+# but then leaked on disk. The trap closes the leak on all exit
+# paths (success, assertion failure, lftp timeout, signal).
 
 set -eu
 
@@ -91,7 +99,18 @@ _env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env failed"
 # the data dir is the only per-scenario helper state). Use the
 # :- default so the trap is safe when start_ftps_server failed
 # before exporting FTP_VSFTPD_CONF (e.g. mktemp vsftpd.conf failed).
-trap 'rm -f "${_env}" "${FTP_VSFTPD_CONF:-}"; stop_ftp_server' EXIT
+# v2.11.9 (#225): _log is included so the captured action log is
+# removed on any exit path (success, assertion failure, signal),
+# not just the success branch.
+#
+# F2 audit (v2.11.9 +1 day): every variable in the trap uses the
+# `${VAR:-}` default form. The trap is installed BEFORE _log and
+# _env are assigned; if any failure fires the trap on the way to
+# those assignments, a bare `${_log}` would abort the entire trap
+# string under `set -u` before `stop_ftp_server` runs, leaking the
+# FTP container on the host. The FTP_VSFTPD_CONF:- default was
+# already this pattern; the new _log/_env entries follow it.
+trap 'rm -f "${_env:-}" "${_log:-}" "${FTP_VSFTPD_CONF:-}"; stop_ftp_server' EXIT
 
 {
   printf 'INPUT_SERVER=ftp://%s@127.0.0.1:%s\n' "${FTP_USER}" "${FTP_CONTROL_PORT}"
@@ -154,8 +173,13 @@ _ftp_home="${FTP_DATA_DIR}/${FTP_USER}"
 
 assert_present "${_ftp_home}" "index.html"
 assert_present "${_ftp_home}" "about.html"
-
-rm -f "${_log}"
+# v2.11.9 (#165): scenario 03 / 04 / 08 historically only
+# asserted the top-level files (index.html + about.html). The
+# sample-public-html fixture includes an assets/ subdirectory
+# and the mirror uploads its contents; assert it explicitly so a
+# regression in mirror's directory handling surfaces here
+# instead of being caught downstream.
+assert_present "${_ftp_home}" "assets"
 
 log_pass "scenario 03 passed: action uploaded fixtures over FTPS explicit (AUTH TLS on port ${FTP_CONTROL_PORT})"
 

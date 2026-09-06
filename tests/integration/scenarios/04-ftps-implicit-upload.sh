@@ -42,6 +42,14 @@
 # and the entrypoint's append-env-vars step preserves it. No
 # reason to drag in a second image and ~30 LoC of db_load
 # boilerplate when this works.
+#
+# v2.11.9 (#232): the action's captured log (_log) and the
+# per-scenario env-file (_env) are cleaned up by the EXIT trap
+# installed below ("trap ... EXIT"). On the success path the
+# linear `rm -f "${_log}"` was previously the only cleanup; on
+# the failure path the log was dumped to stderr for debuggability
+# but then leaked on disk. The trap closes the leak on all exit
+# paths (success, assertion failure, lftp timeout, signal).
 
 set -eu
 
@@ -89,7 +97,15 @@ _env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env failed"
 # the data dir is the only per-scenario helper state). Use the
 # :- default so the trap is safe when start_ftps_server failed
 # before exporting FTP_VSFTPD_CONF (e.g. mktemp vsftpd.conf failed).
-trap 'rm -f "${_env}" "${FTP_VSFTPD_CONF:-}"; stop_ftp_server' EXIT
+# v2.11.9 (#225): _log is included so the captured action log is
+# removed on any exit path (success, assertion failure, signal),
+# not just the success branch.
+#
+# F2 audit (v2.11.9 +1 day): every variable in the trap uses the
+# `${VAR:-}` default form so a failure before _log / _env are
+# assigned does not abort the trap under `set -u` and leak the FTP
+# container. See scenario 03 for the full rationale.
+trap 'rm -f "${_env:-}" "${_log:-}" "${FTP_VSFTPD_CONF:-}"; stop_ftp_server' EXIT
 
 {
   printf 'INPUT_SERVER=ftps://%s@127.0.0.1:%s\n' "${FTP_USER}" "${FTP_IMPLICIT_PORT}"
@@ -140,8 +156,9 @@ _ftp_home="${FTP_DATA_DIR}/${FTP_USER}"
 
 assert_present "${_ftp_home}" "index.html"
 assert_present "${_ftp_home}" "about.html"
-
-rm -f "${_log}"
+# v2.11.9 (#165): see scenario 03 — also assert the assets/
+# subdirectory landed on the server.
+assert_present "${_ftp_home}" "assets"
 
 log_pass "scenario 04 passed: action uploaded fixtures over FTPS implicit (TLS from byte 0 on port ${FTP_IMPLICIT_PORT})"
 

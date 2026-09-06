@@ -46,6 +46,24 @@ lftp_build_open_script "${_script}" \
 
 _log=$(mktemp -t lftplog.XXXXXX) || log_fail "mktemp failed"
 
+# v2.11.9 (#225, #226): register _log and _script in the EXIT
+# trap so they are removed on any exit path (success, lftp error,
+# assert_present failure, signal). Previously, only the success
+# branch ran `rm -f "${_log}" "${_script}"` linearly, so a failure
+# path left the lftp log and script on disk for the runner log to
+# scrape. The trap runs AFTER the failure dump to stderr, so the
+# log content is still debuggable; the file just does not linger
+# after the script exits.
+#
+# F2 audit (v2.11.9 +1 day): every variable in the trap uses the
+# `${VAR:-}` default form. The trap is installed BEFORE _log and
+# _script are assigned; if any failure fires the trap on the way to
+# those assignments, a bare `${_log}` would abort the entire trap
+# string under `set -u` before `stop_ftp_server` runs, leaking the
+# FTP container on the host. The :- defaults make the trap safe
+# in every early-exit path.
+trap 'rm -f "${_log:-}" "${_script:-}"; stop_ftp_server' EXIT
+
 log_info "running mirror upload (log=${_log})"
 if lftp_run_script "${_script}" "${_log}" 60; then
   _rc=0
@@ -53,18 +71,17 @@ else
   _rc=$?
 fi
 
-rm -f "${_script}"
-
 # Same fail-loud contract as assert_action_success: on non-zero rc
 # we dump the captured log to stderr before exit 1, so the failure
-# is debuggable from the runner log alone.
+# is debuggable from the runner log alone. The EXIT trap registered
+# above will remove the log file AFTER the script exits, so the
+# runner log carries the dump but no temp file is left behind.
 if [ "${_rc}" -ne 0 ]; then
   printf '%s\n' "---- captured lftp log (exit ${_rc}) ----" >&2
   cat "${_log}" >&2
   printf '%s\n' "---- end of lftp log ----" >&2
   log_fail "lftp upload exited with code ${_rc}"
 fi
-rm -f "${_log}"
 
 # --- Assertions on the FTP server state --------------------------------------
 #

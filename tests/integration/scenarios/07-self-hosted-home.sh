@@ -151,7 +151,14 @@ build_action_env_file "${_env}" "${IMAGE}" /data / \
 # The previous trap cleaned _fake_home + FTP container; the new one
 # also removes _env so the temporary INPUT_PASSWORD file does not
 # survive the test run.
-trap 'rm -f "${_env}"; rm -rf "${_fake_home}"; stop_ftp_server' EXIT
+# v2.11.9 (#225): _log is included in the trap so the captured
+# action log is removed on any exit path, not just the success
+# branch. See scenarios 01 / 03 for the rationale.
+#
+# F2 audit (v2.11.9 +1 day): use :- defaults for _env and _log so
+# a failure before either is assigned does not abort the trap under
+# `set -u` and leak the FTP container. See scenario 03.
+trap 'rm -f "${_env:-}" "${_log:-}"; rm -rf "${_fake_home:-}"; stop_ftp_server' EXIT
 
 log_info "invoking action with HOME=/github/home bind-mounted :ro (log=${_log})"
 set +e
@@ -214,7 +221,8 @@ printf '%s\n' "---- end of action log ----"
 # silent PASS. Format: "REGRESSION_FIXED: <message>" verbatim.
 printf 'REGRESSION_FIXED: action ran without the .netrc write failure from #111\n'
 
-rm -f "${_log}"
+# _log cleanup is handled by the EXIT trap installed above
+# (v2.11.9 #225).
 
 # TODO (v2.11.x): enable full upload assertion after #124 lands.
 # lftp 4.9.3 (pinned in the Dockerfile) ignores .netrc for
