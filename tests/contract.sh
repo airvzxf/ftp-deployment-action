@@ -126,24 +126,36 @@ printf '  info: %s input(s): %s\n' "${n}" "$(echo "${declared}" | tr '\n' ' ')"
 
 VER=$(cat "${ROOT}/VERSION") || fail "cannot read ${ROOT}/VERSION"
 
-# SECURITY.md line 7 carries the explicit stamp:
+# SECURITY.md carries the explicit stamp:
 #   `| Currently maintained | `v2.x` (latest = `vX.Y.Z`) | ...`
+# v2.11.12 (F2 audit): the previous shape hardcoded line 7 via
+# `sed -n '7p'`. A future maintainer who adds another row to the
+# supported-versions table (e.g. a "Preview" track) before the
+# "Currently maintained" row silently shifts line 7 to the new
+# row. Replace the line-anchor with a whole-file regex scan that
+# matches the documented stamp anywhere in SECURITY.md.
 # shellcheck disable=SC2016
-_sec_stamp=$(sed -n '7p' "${ROOT}/SECURITY.md" \
-  | sed -n 's/.*(latest = `v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)`).*/\1/p')
+_sec_stamp=$(grep -oE 'latest = `v[0-9]+\.[0-9]+\.[0-9]+`' "${ROOT}/SECURITY.md" \
+  | head -n 1 \
+  | sed -n 's/.*`v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)`.*/\1/p')
 if [ "${_sec_stamp:-}" != "${VER}" ]; then
-  fail "SECURITY.md line 7 stamp is '${_sec_stamp:-<missing>}' but VERSION is '${VER}'"
+  fail "SECURITY.md 'latest = vX.Y.Z' stamp is '${_sec_stamp:-<missing>}' but VERSION is '${VER}'"
 fi
-ok "SECURITY.md line 7 'latest = vX.Y.Z' matches VERSION (${VER})"
+ok "SECURITY.md 'latest = vX.Y.Z' matches VERSION (${VER})"
 
 # CHANGELOG.md top heading: `## [X.Y.Z] - YYYY-MM-DD`. The Keep a
 # Changelog preamble sits between line 1 and the first version
-# heading, so search the first 30 lines to be resilient to preamble
-# edits.
-_chg_stamp=$(sed -n '1,30p' "${ROOT}/CHANGELOG.md" \
-  | awk '/^## \[[0-9]+\.[0-9]+\.[0-9]+\][ ]/ { sub(/^## \[/, ""); sub(/\][ ].*$/, ""); print; exit }')
+# heading, so the awk exits at the first match. v2.11.12 (F2
+# audit): the previous shape bounded the sed read to `1,30p` to
+# be "resilient to preamble edits". A maintainer who expands the
+# preamble (extra intro / audit backlog / links) past line 30
+# silently breaks the read. Drop the bound and rely on the awk
+# `exit` after the first match; the awk never reads past the first
+# heading, so preamble length is irrelevant.
+_chg_stamp=$(awk '/^## \[[0-9]+\.[0-9]+\.[0-9]+\][ ]/ { sub(/^## \[/, ""); sub(/\][ ].*$/, ""); print; exit }' \
+  "${ROOT}/CHANGELOG.md")
 if [ -z "${_chg_stamp:-}" ]; then
-  fail "CHANGELOG.md has no '## [X.Y.Z]' heading in lines 1-30"
+  fail "CHANGELOG.md has no '## [X.Y.Z]' heading"
 fi
 if [ "${_chg_stamp}" != "${VER}" ]; then
   fail "CHANGELOG.md top '## [X.Y.Z]' heading is '${_chg_stamp}' but VERSION is '${VER}'"

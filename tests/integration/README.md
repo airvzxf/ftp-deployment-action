@@ -31,13 +31,16 @@ tests/integration/
     ├── 05-exclude-and-exclude-delete.sh      # exercises mirror:exclude
                                               #   + --delete
     ├── 07-self-hosted-home.sh                # regression guard for #111
+                                              #   (#124 covered end-to-end)
     ├── 08-action-driven-upload.sh            # action-driven upload
                                               #   (closes #124)
     ├── 09-concurrency-lock-e2e.sh            # INPUT_CONCURRENCY_LOCK=true
                                               #   end-to-end
     ├── 10-stale-lock-recovery.sh             # stale-sentinel takeover
-    └── 11-exclude-delete-protects-remote.sh  # INPUT_EXCLUDE_DELETE
+    ├── 11-exclude-delete-protects-remote.sh  # INPUT_EXCLUDE_DELETE
                                               #   end-to-end (closes #131)
+    └── 12-acquire-vs-bare-host-url.sh        # acquire_lock against the
+                                              #   bare-host URL shape (closes #160)
 ```
 
 ## Running locally
@@ -150,37 +153,41 @@ related reasons, both rooted in lftp 4.9.3 (the version pinned in
    affected by the wider auto-execute semantics. See scenario 11
    for the end-to-end regression guard.
 
-Either issue alone is enough to disqualify variant C; together
-they make it impossible to assert the action's behaviour
-end-to-end without modifying `entrypoint.sh` / `lib.sh` /
+Either issue alone was enough to disqualify variant C in the
+#117 PR; together they made it impossible to assert the action's
+behaviour end-to-end without modifying `entrypoint.sh` / `lib.sh` /
 `Dockerfile`, which #117 must not touch.
+
+**v2.11.0 closed both blockers** (#124, #131), so variant C is now
+the primary path: scenarios 03 / 04 / 07 / 08 / 09 / 10 / 11 / 12
+all drive the action image end-to-end (see the Layout tree). The
+plain-FTP scenarios 01 / 02 / 05 still use variant B (lftp from
+alpine, no `set mirror:exclude-file`) because they exercise lftp's
+mirror-primitive behaviour directly — running them via the action
+would only re-test the harness, not the primitive.
 
 **Variant B** (lftp from alpine, ftp-upload / ftp-list /
 ftp-delete through `alpine:3.23.3 + apk add lftp` and the same
-`fauria/vsftpd` server) keeps the harness faithful to the
-production control plane — same lftp version, same FTP server
-image, same PASV configuration — while letting the test drive the
-FTP commands directly. The CI job still builds the action image
+`fauria/vsftpd` server) is now a deliberate subset, kept for the
+two scenarios that need raw lftp semantics (01, 02, 05). It keeps
+the harness faithful to the production control plane — same lftp
+version, same FTP server image, same PASV configuration — while
+letting the test drive the FTP commands directly. The CI job
+still builds the action image
 (`make build IMAGE=ftp-deployment-action:ci-integration VERSION=ci`)
 to catch Dockerfile / package-pin / entrypoint-regressions; the
-integration scenarios themselves just do not invoke it.
-
-Documented in `tests/integration/README.md` (this file) and in
-the commit message of the PR that ships this worktree. The fix
-is to upgrade lftp (or, depending on the strategy, to change the
-action's `run_lftp_once` to pass `-u user,pass` and accept the
-argv-leak of the password) — both of which are out of scope for
-#117.
+integration scenarios themselves either invoke it (variant C) or
+run lftp from a throwaway alpine container (variant B).
 
 ## Acceptance criteria for #117
 
 | # | Criterion | Status |
 |---|---|---|
-| 1 | `make integration` boots vsftpd and runs 5 scenarios. | ✓ all 5 scenarios wired (01/02/05 plain FTP, 03/04 FTPS) |
-| 2 | All 5 scenarios pass locally (podman) and in CI (docker). | ✓ locally; CI is the same Make target, only the runtime differs |
+| 1 | `make integration` boots vsftpd and runs 11 scenarios. | ✓ 11 scenarios wired (01/02/05 plain FTP, 03/04 FTPS, 07/08/09/10/11/12 action-driven) |
+| 2 | All 11 scenarios pass locally (podman) and in CI (docker). | ✓ locally; CI is the same Make target, only the runtime differs |
 | 3 | Each scenario is standalone. | ✓ each scenario installs `trap stop_ftp_server EXIT` |
 | 4 | `tests/integration/README.md` documents how to add a scenario. | ✓ see "Adding a new scenario" below |
-| 5 | Tests are idempotent. | ✓ per-scenario unique PID + random FTP user; bind mount created with `mktemp -d`; `docker rm -fa` cleanup |
+| 5 | Tests are idempotent. | ✓ per-scenario unique PID + random FTP user; bind mount created with `mktemp -d`; trap removes both the FTP container and the bind-mount source directory |
 | 6 | CI job runs in ≤ 5 min. | ✓ `timeout-minutes: 5` on the integration job in `ci.yml`; current local wall-clock per scenario is ~12s (mostly the alpine image pull + the FTP server boot) |
 
 ## How a scenario is wired
@@ -308,13 +315,14 @@ bind-mounted read-only into the alpine container.
 
 ## Limitations / follow-ups
 
-* **lftp 4.9.3 `.netrc` quirk.** See "Why variant B" above.
-  Bumping the lftp version (or, depending on the strategy,
-  changing the action's `run_lftp_once` to pass `-u user,pass`
-  on the lftp command line and accepting the argv-leak of the
-  password) would unblock scenarios that cannot use a URL with
-  an embedded user. Scenario 08 already works around it via
-  the v2.11.0 fix to `run_lftp_once` (closes #124).
+* **lftp 4.9.3 `.netrc` quirk is now closed in v2.11.0.** The
+  original "Why variant B" blocker was #124 (bare-host URL made
+  lftp fall back to anonymous). v2.11.0 rewrites the bare-host
+  URL with the embedded `user:pass@` form so lftp's `.netrc`
+  lookup fires, and scenarios 08 / 09 / 10 / 11 / 12 use that
+  path end-to-end. Scenarios 01 / 02 / 05 keep variant B (raw
+  lftp from alpine) by design — they exercise mirror-primitive
+  behaviour, not the action image.
 
 See `.worktrees/wt-117a-vu1m`, `wt-117b-7u8g`, `wt-117c-fbzk`
 for the variant A/B/C worktrees.

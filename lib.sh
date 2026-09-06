@@ -162,6 +162,22 @@ validate_duration() {
       ;;
   esac
 
+  # v2.11.12 (F2 audit): reject leading zeros (e.g. `00`, `01s`),
+  # symmetric with validate_int's v2.11.7 #253 fix. Pre-fix, the
+  # allow-list above accepts `00` as a valid duration — it is
+  # numeric, no unit suffix, no bad chars — but `00` is a typo
+  # for `0` and breaks the same retry-forever sentinel contract
+  # that #253 documented for max_retries. lftp 4.9.3 happens to
+  # treat `00s` as `0s` so this is not load-bearing today; the
+  # fix is a strict-improvement consistency guard.
+  case "${_vd_value}" in
+    0[0-9]*)
+      printf 'ERROR: %s has leading zeros (must be a non-negative integer without leading zeros): %s\n' \
+        "${_vd_name}" "${_vd_value}" >&2
+      exit 2
+      ;;
+  esac
+
   # The allow-list above is necessary but not sufficient: it also admits
   # unit-only and repeated-unit values such as "s", "mhd", and "5s5m".
   # Strip one optional suffix, then require the remainder to be digits.
@@ -352,6 +368,27 @@ validate_path() {
   if [ "${_vp_lbrack}" != "${_vp_rbrack}" ]; then
     printf 'ERROR: %s has unbalanced IPv6 brackets (found %s "[" and %s "]"): %s\n' \
       "${_vp_name}" "${_vp_lbrack}" "${_vp_rbrack}" "${_vp_value}" >&2
+    exit 2
+  fi
+  # v2.11.12 (F2 audit): reject values with empty IPv6 brackets
+  # (e.g. `ftp://[]:21`, `ftp://[abc[def]:21`). Same exploit class
+  # as #295 — the bracket-balance guard above catches UNBALANCED
+  # pairs but allows garbage content between MATCHED brackets.
+  # Pre-fix, validate_path passed `ftp://[]:21` through (counts
+  # 1/1, balanced), extract_netrc_host's IPv6 sed produced empty
+  # output, write_netrc emitted `machine  login user password`
+  # (invalid .netrc) and the user saw a confusing "530 Login
+  # authentication failed" downstream instead of a precise URL-shape
+  # error. The shell-metacharacter / control-char / space checks
+  # above already catch the rest of the bracket-content threats;
+  # this guard closes the empty-content gap specifically. Use
+  # grep -oE to extract every [...] pair, then reject any whose
+  # content is empty (`[]`).
+  _vp_bad_brackets=$(printf '%s' "${_vp_value}" \
+    | grep -oE '\[\]' 2>/dev/null || true)
+  if [ -n "${_vp_bad_brackets}" ]; then
+    printf 'ERROR: %s has empty IPv6 brackets: %s\n' \
+      "${_vp_name}" "${_vp_value}" >&2
     exit 2
   fi
 }
@@ -1213,9 +1250,7 @@ acquire_lock_with_recovery() {
   # issues).
   _alwr_preamble="set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5;"
 
-  _alwr_attempt=0
   while :; do
-    _alwr_attempt=$((_alwr_attempt + 1))
 
     # v2.11.10 (#294): wall-clock check at the top of every
     # iteration. timeout=0 keeps deadline=0 and we skip this

@@ -352,7 +352,16 @@ echo "${out}" | grep -q "::notice file=action.yml,title=New major available::" \
   || fail "no ::notice:: emitted for v1.5.0; output was:\n${out}"
 echo "${out}" | grep -q "v2 is available" \
   || fail "notice text does not mention v2; output was:\n${out}"
-pass "::notice:: emitted for v1.5.0 ('v2 is available')"
+# v2.11.12 (F2 audit): the v1.4*-v1.9* branch (lib.sh:454-456) emits
+# `(image version: %s)` where `%s` is the value baked into /app/VERSION
+# at build time. If the Dockerfile build-arg wiring regressed the
+# `_edw_img_ver` fallback (`entrypoint.sh:123`) produces the literal
+# string `unknown`; pin the field so the regression surfaces in
+# smoke instead of waiting for the release-pipeline Check 3.
+if echo "${out}" | grep -qE 'image version: (unknown|\(image version:[[:space:]]*\))'; then
+  fail "image version is 'unknown' (build-arg VERSION did not reach /app/VERSION); output was:\n${out}"
+fi
+pass "::notice:: emitted for v1.5.0 ('v2 is available', image version baked)"
 
 # ----------------------------------------------------------------------------
 # Test 17: current line (v2.0.1) is silent.

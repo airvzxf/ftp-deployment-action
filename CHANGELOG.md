@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.12] - 2026-09-06
+
+Hardening batch v2.11.12 (F2 audit round post-v2.11.11). Closes the
+HIGH-class bugs from the F2 audit subagent swarm (empty-IPv6-brackets
+silent-netrc-corruption class, plus the silently-passing release-smoke
+Check 3), tightens `validate_duration` to reject leading zeros
+symmetrically with `validate_int` (#253), cleans up stale
+`FTP_DATA_DIR` leaks and `tests/integration/README.md` drift, and
+removes three small bits of dead code. See EPIC #309 for the full
+audit backlog.
+
+### Security
+
+- **`validate_path` now rejects empty IPv6 brackets — closes the v2.11.10 #295 follow-up** — pre-fix, the v2.11.10 balance-count guard accepted BALANCED-but-empty bracket pairs (`ftp://[]:21`, `ftp://[abc[def]ghi]:21`). The pre-fix pipeline passed the value through to `extract_netrc_host`, whose IPv6 sed produced empty output, then `write_netrc` emitted `machine  login user password` (invalid `.netrc`) and the user saw a confusing `530 Login authentication failed` downstream instead of a precise URL-shape error. Added a `grep -oE '\[\]'` check after the balance guard; the check fails any input containing an empty `[...]` pair. Shell-meta / control-char / space checks above already catch the rest of the bracket-content threats. Tests at `tests/unit/validate.bats:269-302` (4 new tests, including the zone-id form `[fe80::1%25eth0]` regression guard).
+- **`tests/release-smoke.sh` Check 3 now actually checks what its comment claims** — pre-fix, the check ran the image with `GITHUB_ACTION_REF=v1.3.3` (the EOL branch at `lib.sh:444-452`) and grepped the captured log for `image version: unknown`. The EOL branch does NOT emit the substring `image version:` (only the `@latest` / `@master` / `v1.4*-v1.9*` branches do, at `lib.sh:432` and `lib.sh:456`), so the grep never matched regardless of whether the build-arg VERSION reached `/app/VERSION`. Replaced with a direct read of `/app/VERSION` via `--entrypoint cat` and an explicit empty/`unknown` failure path. Catches the v2.3.0-style build-arg regression that the original Check 3 was supposed to catch.
+
+### Fixed
+
+- **`validate_duration` rejects leading zeros — symmetric with `validate_int`'s v2.11.7 #253 fix** — pre-fix, `validate_duration`'s first `case` admitted `00` and `01s` as valid durations; the validate_int fix (reject `00` / `01` / etc. to preserve the retry-forever sentinel) was never mirrored to validate_duration. lftp 4.9.3 happens to treat `00s` as `0s`, so this is not load-bearing today; the fix is a strict-improvement consistency guard. Added leading-zero branch matching validate_int's shape; tests at `tests/unit/validate.bats:425-446`.
+- **`stop_ftp_server` now removes the per-scenario bind-mount source directory** — `tests/integration/lib/common.sh:258-272`. Pre-fix, the EXIT trap (`scenario_setup` line 566: `trap stop_ftp_server EXIT`) only removed the FTP container; `FTP_DATA_DIR=$(mktemp -d -t ftpint.XXXXXX)` (line 550) was leaked on every scenario exit. Local dev and self-hosted CI accumulated one stale bind-mount source per scenario per run. The fix unlinks the directory AFTER removing the container (so the bind-mount is detached first). Order documented inline.
+- **`tests/integration/README.md` is no longer a frozen #117-era document** — the Layout tree (lines 26-44) now lists scenario 12; the acceptance table (line 178-187) now claims 11 scenarios instead of 5; the "Why variant B" section (lines 113-167) is rewritten to reflect that v2.11.0 closed both #124 and #131 (variant C is now the primary path, scenarios 03 / 04 / 07 / 08 / 09 / 10 / 11 / 12); the "Limitations / follow-ups" section (lines 316-325) no longer cites the closed #124 quirk as a blocker.
+- **`scenarios/07-self-hosted-home.sh` no longer references the deleted `scenario 06`** — the file header (lines 3-9) and three inline comments (lines 65, 95, 105-110) referred to `scenario 06` (deleted in commit 214492e once the bug it reproduced was fixed). Header rewritten to reference #111 directly. The stale "TODO (v2.11.x): enable full upload assertion after #124 lands" comment block (old lines 227-236) is removed and replaced with a real `assert_action_success` call (line 207-209) — #124 was closed in v2.11.0, so the scenario now exercises the action end-to-end instead of just narrowing on the .netrc write fix.
+- **`tests/contract.sh` stamps no longer depend on hardcoded line numbers** — `SECURITY.md` stamp now uses `grep -oE 'latest = ...'` with `head -n 1` instead of `sed -n '7p'`; a future maintainer who adds another row to the supported-versions table no longer shifts line 7 silently. `CHANGELOG.md` stamp now reads the whole file with an awk that `exit`s at the first match; the previous `1,30p` bound silently broke if a maintainer expanded the preamble past line 30.
+- **`tests/smoke.sh` Test 16 pins the image-version field** — `tests/smoke.sh:355-360`. The `v1.4*-v1.9*` branch in `lib.sh:454-456` emits `(image version: %s)` where `%s` is the value baked into `/app/VERSION` at build time. Pre-fix, Test 16 only grepped for `v2 is available`; a regression that turned `_edw_img_ver` into the literal string `unknown` would still pass. The new check fails if the captured log contains `image version: unknown`.
+
+### Chore
+
+- **`_alwr_attempt` is no longer dead code in `acquire_lock_with_recovery`** — `lib.sh:1253-1255`. The variable was initialised to 0 and `$((_alwr_attempt + 1))`-incremented at the top of every loop iteration, but no other reference existed. Removed the two lines. Harmless but the cleanup matches the project's "no dead code" hygiene posture.
+- **`tests/unit/retry.bats` setup drops the dead `BATS_TESTDIR` branch** — `BATS_TESTDIR` (no underscores) is not a bats-core variable; the correct name is `BATS_TEST_DIRNAME`. The pre-fix branch always evaluated to a non-empty but invalid path so the `BATS_TEST_DIRNAME` fallback always fired. Aligning with the other 6 .bats files.
+- **`tests/integration/scenarios/10-stale-lock-recovery.sh:194` has a space before `>&2`** — was `cat "${_log}>&2`. POSIX still parses it, but the surrounding `"${_log}" >&2` form on lines 177, 183, 205 is the idiomatic shape.
+
+### Validation
+
+- `make lint` (shellcheck + actionlint + hadolint): clean.
+- `make contract`: 5/5 ok (31 inputs match; SECURITY.md / CHANGELOG.md / README.md stamps match VERSION).
+- `make unit`: 212/212 passing (was 207 in v2.11.11, +5 for the v2.11.12 batch: 3 bracket-content tests + 1 leading-zeros test + 1 RFC 6874 zone-id test).
+- `make smoke`: all smoke tests pass (the v1.5.0 ::notice:: test now also pins the image-version field).
+
 ## [2.11.11] - 2026-09-06
 
 Hardening batch v2.11.11 (F2 audit round post-v2.11.10). Closes 5 issues with
