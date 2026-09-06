@@ -71,6 +71,12 @@ lftp_build_open_script "${_script}" \
 
 _log=$(mktemp -t lftplog.XXXXXX) || log_fail "mktemp failed"
 
+# v2.11.9 (#225, #226): register _log and _script in the EXIT
+# trap so they are removed on any exit path (success, lftp error,
+# assert_present failure, signal). See scenario 01 for the
+# rationale and the F2 audit (v2.11.9 +1 day) trap-safety pattern.
+trap 'rm -f "${_log:-}" "${_script:-}"; stop_ftp_server' EXIT
+
 log_info "running mirror with mirror:exclude + --delete"
 if lftp_run_script "${_script}" "${_log}" 60; then
   _rc=0
@@ -78,15 +84,12 @@ else
   _rc=$?
 fi
 
-rm -f "${_script}"
-
 if [ "${_rc}" -ne 0 ]; then
   printf '%s\n' "---- captured lftp log (exit ${_rc}) ----" >&2
   cat "${_log}" >&2
   printf '%s\n' "---- end of lftp log ----" >&2
   log_fail "lftp mirror exited with code ${_rc}"
 fi
-rm -f "${_log}"
 
 # --- Assertions on the FTP server state --------------------------------------
 
@@ -100,13 +103,15 @@ assert_present "${_ftp_home}" "assets"
 assert_absent "${_ftp_home}" "extra.html"
 
 # INPUT_EXCLUDE protects *.bak from being uploaded. The fixture
-# has no *.bak files, so the assertion is "no *.bak file appeared
-# in the FTP home" — we cannot enumerate the entire home from the
-# host (we'd need to ls the dir, which we already do above and see
-# only the three fixture entries). A future scenario that drops a
-# local.bak on the fixtures side and asserts the FTP home has no
-# local.bak will close the loop; for #117 we keep this minimal.
-assert_absent "${_ftp_home}" "local.bak"
+# has no *.bak files (and the previous NULL assertion that
+# checked for a specific `local.bak` filename always passed
+# vacuously — v2.11.9 (#165) removed it because it asserted against
+# a file that did not exist on either source or destination; the
+# assertion shape was inherited from the original #117 spec, where
+# the fixture layout was different). End-to-end INPUT_EXCLUDE
+# coverage for the `*.bak` glob now lives in scenario 11 (which
+# pre-seeds an `important.bak` file on the FTP home and asserts
+# it survives after a delete-mode mirror).
 
 log_pass "scenario 05 passed: --delete removed extra.html; mirror:exclude protected *.bak from upload"
 

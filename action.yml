@@ -122,7 +122,7 @@ inputs:
     required: false
     default: '300'
   concurrency_lock_poll_interval:
-    description: 'Seconds between lock acquisition attempts when `concurrency_lock` is "true". Default is 5, which gives 60 attempts over the default 300-second timeout. Lower values reduce the time-to-acquire after the holder releases; higher values reduce the number of MKD round-trips against the server.'
+    description: 'Seconds between lock acquisition attempts when `concurrency_lock` is "true". Must be > 0 (validated by lib.sh::validate_int — a 0 or empty value is rejected with exit 2 to prevent an infinite MKD loop). Default is 5, which gives 60 attempts over the default 300-second timeout. Lower values reduce the time-to-acquire after the holder releases; higher values reduce the number of MKD round-trips against the server.'
     required: false
     default: '5'
 # v2.11.3 (#197): declare the outputs that entrypoint.sh writes

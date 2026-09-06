@@ -75,7 +75,14 @@ start_ftp_server "${FTP_USER}" "${FTP_PASSWORD}" "${FTP_DATA_DIR}"
 #   * INPUT_MAX_RETRIES=1                     <-- fast failure.
 #   * INPUT_FTP_SSL_ALLOW=false               <-- plain FTP only.
 _env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env file failed"
-trap 'rm -f "${_env}"; stop_ftp_server' EXIT
+# v2.11.9 (#225): _log is included in the trap so the captured
+# action log is removed on any exit path, not just the success
+# branch. See scenarios 01 / 03 for the rationale.
+#
+# F2 audit (v2.11.9 +1 day): use :- defaults for _env and _log so
+# a failure before either is assigned does not abort the trap under
+# `set -u` and leak the FTP container. See scenario 03.
+trap 'rm -f "${_env:-}" "${_log:-}"; stop_ftp_server' EXIT
 
 build_action_env_file "${_env}" "${IMAGE}" /data /
 
@@ -124,8 +131,9 @@ _ftp_home="${FTP_DATA_DIR}/${FTP_USER}"
 
 assert_present "${_ftp_home}" "index.html"
 assert_present "${_ftp_home}" "about.html"
-
-rm -f "${_log}"
+# v2.11.9 (#165): see scenario 03 — also assert the assets/
+# subdirectory landed on the server.
+assert_present "${_ftp_home}" "assets"
 
 log_pass "scenario 08 passed: action uploaded fixtures to ftp://127.0.0.1:${FTP_CONTROL_PORT} via .netrc (bug #124 closed)"
 

@@ -124,7 +124,14 @@ assert_present "${_ftp_home}" "important.bak"
 # (plain FTP, the sample-public-html fixture mounted at /data,
 # INPUT_REMOTE_DIR=/ which maps to the FTP user's home).
 _env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env file failed"
-trap 'rm -f "${_env}"; stop_ftp_server' EXIT
+# v2.11.9 (#225): _log is included in the trap so the captured
+# action log is removed on any exit path, not just the success
+# branch. See scenarios 01 / 03 for the rationale.
+#
+# F2 audit (v2.11.9 +1 day): use :- defaults for _env and _log so
+# a failure before either is assigned does not abort the trap under
+# `set -u` and leak the FTP container. See scenario 03.
+trap 'rm -f "${_env:-}" "${_log:-}"; stop_ftp_server' EXIT
 
 build_action_env_file "${_env}" "${IMAGE}" /data / \
   "INPUT_DELETE=true" \
@@ -166,7 +173,8 @@ assert_present "${_ftp_home}" "assets"
 assert_absent "${_ftp_home}" "stale.html"
 assert_present "${_ftp_home}" "important.bak"
 
-rm -f "${_log}"
+# _log cleanup is handled by the EXIT trap installed above
+# (v2.11.9 #225).
 
 log_pass "scenario 11 passed: INPUT_EXCLUDE_DELETE='*.bak' protected important.bak from mirror --delete (closes #131)"
 

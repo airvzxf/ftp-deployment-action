@@ -83,7 +83,14 @@ build_action_env_file "${_env}" "${IMAGE}" /data / \
   "INPUT_CONCURRENCY_LOCK_POLL_INTERVAL=1" \
   "INPUT_MAX_RETRIES=1"
 
-trap 'rm -f "${_env}"; stop_ftp_server' EXIT
+# v2.11.9 (#225): _log is included in the trap so the captured
+# action log is removed on any exit path, not just the success
+# branch. See scenarios 01 / 03 for the rationale.
+#
+# F2 audit (v2.11.9 +1 day): use :- defaults for _env and _log so
+# a failure before either is assigned does not abort the trap under
+# `set -u` and leak the FTP container. See scenario 03.
+trap 'rm -f "${_env:-}" "${_log:-}"; stop_ftp_server' EXIT
 
 _log=$(mktemp -t lock12.XXXXXX) || log_fail "mktemp log failed"
 
@@ -170,6 +177,7 @@ assert_present "${_ftp_home}" "index.html"
 assert_present "${_ftp_home}" "about.html"
 assert_present "${_ftp_home}" "assets"
 
-rm -f "${_log}"
+# _log cleanup is handled by the EXIT trap installed above
+# (v2.11.9 #225).
 
 log_pass "scenario 12 passed: bare-host INPUT_SERVER + concurrency_lock acquired + released in ${_elapsed}s (URL rewrite applied to both paths, closes #132)"

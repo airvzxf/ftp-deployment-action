@@ -87,7 +87,15 @@ build_action_env_file "${_env}" "${IMAGE}" /data / \
   "INPUT_CONCURRENCY_LOCK_POLL_INTERVAL=1" \
   "INPUT_MAX_RETRIES=1"
 
-trap 'rm -f "${_env}"; stop_ftp_server' EXIT
+# v2.11.9 (#225): include both _log and _log2 in the EXIT trap
+# so the captured action logs from step 1 and step 2 are removed
+# on any exit path (success, assertion failure, signal). See
+# scenario 01 for the rationale.
+#
+# F2 audit (v2.11.9 +1 day): use :- defaults for _env, _log, _log2
+# so a failure before any of them is assigned does not abort the
+# trap under `set -u` and leak the FTP container. See scenario 03.
+trap 'rm -f "${_env:-}" "${_log:-}" "${_log2:-}"; stop_ftp_server' EXIT
 
 # --- Step 1: first action — happy path -------------------------------------
 #
@@ -136,10 +144,24 @@ fi
 mkdir -p "${_ftp_home}/.lftp-deployment.lock"
 chmod 0777 "${_ftp_home}/.lftp-deployment.lock"
 
-# Tiny extra delay so the harness's mkdir(1) is observable to
-# vsftpd before we invoke the action. (Bind-mounts can occasionally
-# need a moment to propagate writes to the in-container ftpd user.)
-sleep 1
+# v2.11.9 (#224): replaced `sleep 1` (a fragile, fixed-duration
+# delay) with a deterministic visibility poll against the FTP
+# container. The poll asks vsftpd — through `docker exec ls` — to
+# confirm the lock dir is visible at /home/vsftpd/${FTP_USER}/ before
+# the action invocation starts. The poll returns immediately on
+# success (no waiting on slow runners) and tolerates the rare
+# bind-mount propagation delay (up to a 5-second budget) without
+# introducing a flake mode. Polling at 100 ms is ten times faster
+# than the previous sleep granularity.
+_deadline=$(( $(date +%s) + 5 ))
+while [ "$(date +%s)" -lt "${_deadline}" ]; do
+  if ${RUNTIME} exec "${FTP_CONTAINER_NAME}" \
+      ls -la "/home/vsftpd/${FTP_USER}/.lftp-deployment.lock" \
+      >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
 
 _log2=$(mktemp -t lockB.XXXXXX) || log_fail "mktemp log_b failed"
 
@@ -180,7 +202,5 @@ done
 assert_present "${_ftp_home}" "index.html"
 assert_present "${_ftp_home}" "about.html"
 assert_present "${_ftp_home}" "assets"
-
-rm -f "${_log}" "${_log2}"
 
 log_pass "scenario 09 passed: lock acquire + release on a fresh server, then stale-recovery on a held lock"

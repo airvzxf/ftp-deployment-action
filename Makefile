@@ -69,6 +69,9 @@ export SMOKE_IMAGE
 # Lint: shellcheck on all .sh files, actionlint on action.yml, hadolint
 # on every Dockerfile in the repo. actionlint is installed from
 # upstream's release tarball to avoid pulling the full Go toolchain.
+# v2.11.9 (#228): tests/release-smoke.sh is included so the
+# post-build smoke check (run between image build and SBOM attach
+# in release.yml) is shellcheck-clean from the same local target.
 # ----------------------------------------------------------------------------
 .PHONY: lint
 lint: shellcheck actionlint hadolint
@@ -82,7 +85,7 @@ shellcheck:
 	# tests/integration/scenarios/*.sh source tests/integration/lib/common.sh).
 	# Pass common.sh alongside each scenario so shellcheck's source= path
 	# resolution can find the shared library.
-	shellcheck -x entrypoint.sh lib.sh tests/contract.sh tests/smoke.sh scripts/backfill-releases.sh
+	shellcheck -x entrypoint.sh lib.sh tests/contract.sh tests/smoke.sh tests/release-smoke.sh scripts/backfill-releases.sh
 	shellcheck -x tests/integration/lib/common.sh tests/integration/run-integration-tests.sh
 	shellcheck -x tests/integration/scenarios/*.sh
 

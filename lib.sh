@@ -1065,10 +1065,23 @@ run_lftp_once() {
   # B-04: redirect combined stdout+stderr to the timestamped log file
   # so the captured output can be inspected after the fact and, if
   # the user wishes, attached as a workflow artifact.
+  #
+  # v2.11.9 (#193): use >> (append) instead of > (truncate). The
+  # caller (entrypoint.sh's retry loop) computes LOG_FILE once
+  # before the loop and passes it in unchanged on every retry; with
+  # >, each retry erased the previous attempt's output and the
+  # post-mortem log only contained the LAST attempt's stderr (or
+  # nothing if all attempts failed mid-startup). With >>, the file
+  # grows by retry and the upload_log_artifact path picks up the
+  # full history. The log is timestamped once per run (entrypoint.sh
+  # uses `date -u +%Y%m%dT%H%M%SZ` in the basename) so retries
+  # within one run do NOT collide on the filename; the only
+  # consumer of the file (upload_log_artifact) uploads the whole
+  # thing, so the appended history is the desired shape.
   timeout -k "${_rlo_kill_after}" "${_rlo_timeout}" lftp \
     "${_rlo_server_eff}" \
     -e "${_rlo_settings} ${_rlo_mirror} ${_rlo_local} ${_rlo_remote}; quit;" \
-    > "${_rlo_log}" 2>&1
+    >> "${_rlo_log}" 2>&1
 }
 
 # ------------------------------------------------------------------------------
