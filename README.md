@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@v4
       # Here is the deployment action
       - name: Upload from public_html via FTP
-        uses: airvzxf/ftp-deployment-action@v2.11.13
+        uses: airvzxf/ftp-deployment-action@v2.11.14
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -91,7 +91,7 @@ jobs:
 > (notably v2.11.3 CRITICAL RCE fix, the v2.11.0 HOME/netrc fix,
 > the v2.11.6 lock hardening, and the v2.11.7 / v2.11.8
 > input-validator batch). Pin to a specific tag (the examples
-> below use `@v2.11.13`) or a full commit SHA. Always avoid
+> below use `@v2.11.14`) or a full commit SHA. Always avoid
 > `@latest`, `@main`, and `@master` — they move under you and
 > can introduce regressions.
 >
@@ -111,8 +111,8 @@ when configured); a third (ECR Public) is currently disabled — see below:
 
 | Registry | Image | How to consume |
 |---|---|---|
-| GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.11.13` | `uses: airvzxf/ftp-deployment-action@v2.11.13` (the example above) |
-| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.11.13` | `uses: docker://docker.io/airvzxf/ftp-deployment-action@v2.11.13` |
+| GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.11.14` | `uses: airvzxf/ftp-deployment-action@v2.11.14` (the example above) |
+| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.11.14` | `uses: docker://docker.io/airvzxf/ftp-deployment-action@v2.11.14` |
 
 Both carry the same OCI image bytes (one `docker buildx build`,
 one digest), the same `cosign` keyless signature
@@ -400,7 +400,7 @@ jobs:
       - uses: actions/checkout@v4
       # Here is the deployment action
   - name: Upload from public_html via FTP
-    uses: airvzxf/ftp-deployment-action@v2.11.13
+    uses: airvzxf/ftp-deployment-action@v2.11.14
     with:
       server: ${{ secrets.FTP_SERVER }}
       user: ${{ secrets.FTP_USERNAME }}
@@ -490,7 +490,7 @@ to the host:
 
 ```yaml
 - id: deploy
-  uses: airvzxf/ftp-deployment-action@v2.11.13
+  uses: airvzxf/ftp-deployment-action@v2.11.14
   with:
     server: ${{ secrets.FTP_SERVER }}
     user: ${{ secrets.FTP_USERNAME }}
@@ -555,7 +555,7 @@ jobs:
       group: ftp-deploy-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - uses: airvzxf/ftp-deployment-action@v2.11.13
+      - uses: airvzxf/ftp-deployment-action@v2.11.14
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -583,7 +583,7 @@ distinct workflows pointing to the same FTP and don't want
 to share a group name), opt in to the server-side lock:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2.11.13
+- uses: airvzxf/ftp-deployment-action@v2.11.14
   with:
     server: ${{ secrets.FTP_SERVER }}
     user: ${{ secrets.FTP_USERNAME }}
@@ -663,7 +663,7 @@ production, one for staging, each writing to a different
 remote directory), give each its own lock path:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2.11.13
+- uses: airvzxf/ftp-deployment-action@v2.11.14
   with:
     concurrency_lock: "true"
     concurrency_lock_path: ".lftp-deployment.lock.prod"
@@ -853,7 +853,7 @@ cannot yet upgrade to v2.11.0, the workaround is to pin `HOME`
 explicitly on the step:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2.11.13
+- uses: airvzxf/ftp-deployment-action@v2.11.14
   env:
     HOME: /home/lftp        # override the runner's HOME
   with:

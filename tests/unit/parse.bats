@@ -392,3 +392,15 @@ setup() {
   [ "$status" -eq 0 ]
   [ "$output" = "../../etc/" ]
 }
+
+# F2 audit (#330): build_ftp_settings default for net:max-retries is
+# 0 (was 1 before v2.11.14). The previous default of 1 caused lftp to
+# internally retry on a server "530" auth error, the second attempt
+# often timed out, and the final log only contained "max-retries
+# exceeded" — silently breaking PERMANENT classification. See #330.
+@test "build_ftp_settings: net:max-retries default is 0 (v2.11.14 #330)" {
+  unset INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS
+  out=$(build_ftp_settings)
+  echo "$out" | grep -q "set net:max-retries 0;" \
+    || { echo "FAIL: net:max-retries default is not 0; got: $out"; return 1; }
+}

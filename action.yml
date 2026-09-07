@@ -62,9 +62,9 @@ inputs:
     required: false
     default: '2'
   net_max_retries:
-    description: 'NET - Maximum number of operation without success. 0 unlimited. 1 no retries.'
+    description: 'NET - Maximum number of operation without success. 0 unlimited. 1 no retries. v2.11.14 (#330): default lowered 1 -> 0 so the FIRST attempt's server error (e.g. "530 Login authentication failed") is preserved in the lftp log for classify_permanent_error to match.'
     required: false
-    default: '1'
+    default: '0'
   net_persist_retries:
     description: 'NET - Ignore hard errors. When reply 5xx errors or there is too many users.'
     required: false

@@ -646,6 +646,15 @@ print_inputs_dump() {
 # ------------------------------------------------------------------------------
 build_ftp_settings() {
   _bfs_settings=""
+  # F2 audit (#330): net:max-retries default lowered 1 -> 0 so the
+  # FIRST attempt's server error (e.g. "530 Login authentication
+  # failed") is preserved in the lftp log for classify_permanent_error
+  # to match. With the previous default of 1, lftp internally retried
+  # once on the auth error, the second attempt often timed out, and
+  # the final log only contained "max-retries exceeded" — overwriting
+  # the original 530 and silently breaking PERMANENT classification.
+  # The action's outer INPUT_MAX_RETRIES loop still retries the entire
+  # command on transient errors, so transient handling is preserved.
   set -- \
     "ftp:ssl-allow"          "true"   "INPUT_FTP_SSL_ALLOW" \
     "ssl:verify-certificate" "true"   "INPUT_SSL_VERIFY_CERTIFICATE" \
@@ -653,7 +662,7 @@ build_ftp_settings() {
     "ftp:passive-mode"       "true"   "INPUT_FTP_PASSIVE_MODE" \
     "ftp:use-feat"           "false"  "INPUT_FTP_USE_FEAT" \
     "ftp:nop-interval"       "2"      "INPUT_FTP_NOP_INTERVAL" \
-    "net:max-retries"        "1"      "INPUT_NET_MAX_RETRIES" \
+    "net:max-retries"        "0"      "INPUT_NET_MAX_RETRIES" \
     "net:persist-retries"    "5"      "INPUT_NET_PERSIST_RETRIES" \
     "net:timeout"            "15s"    "INPUT_NET_TIMEOUT" \
     "dns:max-retries"        "8"      "INPUT_DNS_MAX_RETRIES" \

@@ -66,7 +66,7 @@ set -o pipefail
 : "${INPUT_FTP_PASSIVE_MODE:=}"
 : "${INPUT_FTP_USE_FEAT:=}"
 : "${INPUT_FTP_NOP_INTERVAL:=2}"
-: "${INPUT_NET_MAX_RETRIES:=1}"
+: "${INPUT_NET_MAX_RETRIES:=0}"   # F2 audit (#330): default lowered 1 -> 0 so the FIRST attempt's server error (e.g. "530 Login authentication failed") is preserved in the lftp log for classify_permanent_error to match. The action's outer INPUT_MAX_RETRIES loop still retries the entire command on transient errors.
 : "${INPUT_NET_PERSIST_RETRIES:=5}"
 : "${INPUT_NET_TIMEOUT:=}"
 : "${INPUT_DNS_MAX_RETRIES:=8}"
