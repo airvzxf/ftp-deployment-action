@@ -68,6 +68,21 @@ setup() {
   rm -f "$f"
 }
 
+# F2 audit (#330): when the action uses net:max-retries=0 (the
+# v2.11.14 default) lftp does NOT internally retry, so the FIRST
+# attempt's server "530 Login incorrect" error is preserved verbatim
+# in the log. The classifier must match it as PERMANENT. Before
+# v2.11.14 the default was net:max-retries=1 and lftp's internal
+# retry overwrote the 530 with "max-retries exceeded", silently
+# breaking PERMANENT classification for this entire class of errors.
+@test "classify_permanent_error: 'mirror: Login failed: 530 Login incorrect' is permanent (v2.11.14 #330 regression test)" {
+  f=$(mktemp)
+  printf 'Trying ftp://user@host:21\n---> PASS wrong\n<--- 530 Login incorrect.\nmirror: Login failed: 530 Login incorrect.\n' > "$f"
+  run classify_permanent_error "$f"
+  [ "$status" -eq 0 ]
+  rm -f "$f"
+}
+
 # ----------------------------------------------------------------------------
 # compute_backoff_seconds
 # ----------------------------------------------------------------------------

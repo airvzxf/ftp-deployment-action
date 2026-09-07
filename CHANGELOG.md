@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.14] - 2026-09-07
+
+Hardening batch v2.11.14 (F2 audit round post-v2.11.13). One
+MEDIUM-severity classification regression found during live
+GitHub Actions validation against a real FTP/FTPS server: the
+"PERMANENT" failure banner did not fire for bad-password because
+lftp's internal retry overwrote the server's "530 Login
+incorrect" with "max-retries exceeded" before
+`classify_permanent_error` could see it. See #330 for the full
+writeup and reproduction.
+
+### Fixed
+
+- **`PERMANENT` failure banner now correctly classifies bad-password** — pre-fix, `lib.sh:656` defaulted `net:max-retries` to `1`, `action.yml` defaulted `net_max_retries` to `1`, and `entrypoint.sh:69` defaulted `INPUT_NET_MAX_RETRIES` to `1`. When lftp received a server `530 Login incorrect`, it internally retried once (consuming the inner retry budget); the second attempt often timed out, and lftp's final log line became `mirror: Fatal error: max-retries exceeded` — overwriting the original 530. `classify_permanent_error` then found no `530 | login authentication failed | login incorrect` pattern and silently returned 1 (not permanent). Lowered the lftp-internal `net:max-retries` default to `0` in `lib.sh:665` (`build_ftp_settings`), `action.yml` (`net_max_retries` input default), and `entrypoint.sh:69` (`INPUT_NET_MAX_RETRIES` fallback), so the FIRST attempt's server error is preserved in the log. The action's outer `INPUT_MAX_RETRIES` loop still retries the entire command on transient errors, so transient-error handling is preserved. Added a bats regression test in `tests/unit/retry.bats` and a default-value pin in `tests/unit/parse.bats`. Closes #330.
+
 ## [2.11.13] - 2026-09-06
 
 Hardening batch v2.11.13 (F2 audit round post-v2.11.12). Closes 16
