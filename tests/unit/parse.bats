@@ -393,14 +393,30 @@ setup() {
   [ "$output" = "../../etc/" ]
 }
 
-# F2 audit (#330): build_ftp_settings default for net:max-retries is
-# 0 (was 1 before v2.11.14). The previous default of 1 caused lftp to
-# internally retry on a server "530" auth error, the second attempt
-# often timed out, and the final log only contained "max-retries
-# exceeded" — silently breaking PERMANENT classification. See #330.
-@test "build_ftp_settings: net:max-retries default is 0 (v2.11.14 #330)" {
+# F2 audit (#334, follow-up to #330): build_ftp_settings default for
+# net:max-retries is 1 (reverted from the v2.11.14 #330 default of 0).
+# The #330 default of 0 preserved the FIRST attempt's server error
+# (e.g. "530 Login authentication failed") in the lftp log for
+# classify_permanent_error, but it broke the integration tests:
+# scenarios 07 / 08 / 09 / 10 / 11 / 12 all set INPUT_REMOTE_DIR=/,
+# and lftp's `mirror -R local/ /` preflights with `MKD /` which
+# vsftpd / proftpd / pure-ftpd reject with `550 Create directory
+# operation failed`. With net:max-retries=0 lftp entered an infinite
+# `net:persist-retries=5 × reconnect` loop on that 550 and the
+# action's `run_lftp_once` wrapper hung for the 5-minute CI job
+# timeout. With net:max-retries=1 lftp's mirror aborts the retry
+# loop after the first failed MKD attempt (treats the 550 as
+# "dir already exists", which is correct for a root MKD), the
+# action's outer INPUT_MAX_RETRIES loop retries the whole command,
+# and the mirror eventually succeeds. The #330 trade-off (the FIRST
+# attempt's 530 can be overwritten by the retry's `max-retries
+# exceeded` line in the lftp log) is accepted because the integration
+# tests were red on every CI run for 21 days. TODO(#330): revisit
+# once lftp grows a flag to surface the first attempt's error AND
+# let mirror skip the MKD-on-root preflight.
+@test "build_ftp_settings: net:max-retries default is 1 (v2.11.14 #334, follow-up to #330)" {
   unset INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS
   out=$(build_ftp_settings)
-  echo "$out" | grep -q "set net:max-retries 0;" \
-    || { echo "FAIL: net:max-retries default is not 0; got: $out"; return 1; }
+  echo "$out" | grep -q "set net:max-retries 1;" \
+    || { echo "FAIL: net:max-retries default is not 1; got: $out"; return 1; }
 }
