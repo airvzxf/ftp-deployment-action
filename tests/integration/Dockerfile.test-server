@@ -59,7 +59,7 @@
 #                (same class as #135 for the FTPS server, same class
 #                as #137 for the smoke suite). Versions pinned to
 #                match the action Dockerfile (4.9.3-r0 /
-#                20260611-r0) so the integration scenarios exercise
+#                20260909-r0) so the integration scenarios exercise
 #                the same lftp the user gets.
 #
 # Filesystem prep (moved out of the per-scenario -c payload into
@@ -101,7 +101,7 @@ FROM alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943
 RUN set -eu; apk add --no-cache \
       vsftpd=3.0.5-r3 \
       lftp=4.9.3-r0 \
-      ca-certificates=20260611-r0 \
+      ca-certificates=20260909-r0 \
  && mkdir -p /etc/pam.d /var/log/vsftpd \
  && printf '%s\n' \
       'auth required pam_unix.so' \

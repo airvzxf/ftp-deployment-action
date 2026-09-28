@@ -92,7 +92,7 @@ jobs:
           # apt-get-version-pinning rule and does NOT apply to this
           # image (which uses `apk add` with every package version
           # pinned: vsftpd=3.0.5-r3, lftp=4.9.3-r0,
-          # ca-certificates=20260611-r0 at
+          # ca-certificates=20260909-r0 at
           # tests/integration/Dockerfile.test-server:101-104). The
           # `failure-threshold: error` below silently drops DL3018's
           # warning-level finding as a side effect, so there is
@@ -108,6 +108,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # v2.11.15 (#333): python3-yaml is the strict YAML 1.2 parser
+      # used by the action.yml parseability regression test in
+      # tests/contract.sh (closes #333; the previous contract.sh awk
+      # extraction missed the v2.11.14 (#330) `attempt's` apostrophe
+      # bug). Required on this job; locally the test gracefully
+      # skips when python3-yaml is missing.
+      - name: Install python3-yaml
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml
       - name: Verify action.yml ↔ entrypoint.sh/lib.sh consistency
         run: tests/contract.sh
 

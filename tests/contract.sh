@@ -31,6 +31,49 @@ LIB="${ROOT}/lib.sh"
 [ -f "${ENTRY}" ]  || { echo "missing ${ENTRY}" >&2;  exit 1; }
 [ -f "${LIB}" ]    || { echo "missing ${LIB}" >&2;    exit 1; }
 
+# 0. action.yml must parse as YAML 1.2 with a strict parser.
+#    F2 audit (#333): the v2.11.14 (#330) commit added an unescaped
+#    apostrophe in `net_max_retries.description`
+#    (`... the FIRST attempt's server error ...`) inside a
+#    single-quoted YAML string, which silently broke the file for
+#    every standard YAML parser (PyYAML, js-yaml, go-yaml, Ruby's
+#    Psych, etc.). The actionlint and hadolint linters in CI use
+#    tolerant parsers and did NOT surface it; contract.sh's awk
+#    extraction above works on raw text and also missed it. The
+#    three Dependabot runs `github_actions in /.` on 2026-09-14 /
+#    2026-09-21 / 2026-09-28 (`34793783905`, `35548633747`,
+#    `36363269826`) failed with `dependency_file_not_parseable`
+#    because of this. Pin python3-yaml as a contract-test
+#    prerequisite (CI installs it on the `contract` job via apt-get
+#    in .github/workflows/ci.yml) and require it here so a future
+#    description-edit that breaks YAML parsing fails before the
+#    release pipeline does.
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
+  if ! python3 - "$ACTION" <<'PYEOF'
+import sys, yaml
+try:
+    with open(sys.argv[1], 'r', encoding='utf-8') as f:
+        yaml.safe_load(f)
+except yaml.YAMLError as e:
+    sys.stderr.write('action.yml does not parse as YAML 1.2:\n')
+    sys.stderr.write(str(e) + '\n')
+    sys.exit(1)
+PYEOF
+  then
+    fail "action.yml does not parse as YAML 1.2 (see python3 stderr above)"
+  fi
+  ok "action.yml parses as YAML 1.2 (regression: v2.11.14 #333)"
+elif command -v yq >/dev/null 2>&1; then
+  # Fallback: `yq` from mikefarah/yq reads YAML 1.2 strictly enough
+  # to catch the same apostrophe bug. If installed, use it.
+  if ! yq eval '.' "${ACTION}" >/dev/null 2>&1; then
+    fail "action.yml does not parse as YAML (yq eval failed; install python3-yaml in CI for a clearer error)"
+  fi
+  ok "action.yml parses as YAML (yq fallback)"
+else
+  printf '  skip: action.yml YAML parseability check skipped (install python3-yaml in CI to enable this regression test)\n' >&2
+fi
+
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 ok()   { printf '  ok: %s\n' "$*"; }
 
