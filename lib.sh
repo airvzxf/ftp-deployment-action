@@ -659,18 +659,14 @@ print_inputs_dump() {
 #     <lftp-key>  <default-value>  <INPUT_var_name>
 #   The default applies when the INPUT is unset or empty.
 #
-#   v2.11.2: INPUT_EXCLUDE is NO LONGER emitted here. The pre-fix
-#   code emitted `set mirror:exclude` / `set mirror:exclude-file`
-#   directives, but neither variable is actually queried by
-#   lftp 4.9.3's MirrorJob when the mirror command runs
-#   (MirrorJob::AddPattern only consults `mirror:exclude-regex` as
-#   a *default* when the user passes `mirror -x`; a bare
-#   `set mirror:exclude-file` is a silent no-op). The v2.11.2 fix
-#   moves the exclude value onto the mirror command line itself
-#   (see build_mirror_command below, which appends one `-X <item>`
-#   per comma-separated item). The action's behaviour-preserving
-#   contract for the default case (input empty -> no `set` or `-X`
-#   emitted) is preserved. See #131, #167.
+#   Defaults here must equal action.yml (the bats parity test in
+#   tests/acceptance/static.sh enforces this). GitHub injects every
+#   action.yml default as INPUT_* on real runs; local smoke and
+#   integration tests do not, so the entrypoint.sh `:=` fallback
+#   chain is the only thing keeping tests and users in sync.
+#
+#   INPUT_EXCLUDE is NO LONGER emitted here; it lives on the
+#   `mirror -X` command line via build_mirror_command.
 #
 #   The function still emits:
 #     * the 11 standard `set <lftp-key> <value>;` directives for
@@ -681,31 +677,6 @@ print_inputs_dump() {
 # ------------------------------------------------------------------------------
 build_ftp_settings() {
   _bfs_settings=""
-  # F2 audit (#334, follow-up to #330): net:max-retries default raised
-  # 0 -> 1 so lftp's mirror command exits its a-finite-time on the
-  # FTP-root MKD scenario that scenarios 07 / 08 / 09 / 10 / 11 / 12
-  # hit when INPUT_REMOTE_DIR=/. Reproducer (workflow run 36381107484,
-  # scenario 07): lftp does `MKD /` to ensure the target dir exists;
-  # vsftpd / proftpd / pure-ftpd answer `550 Create directory operation
-  # failed` for the root because the root already exists. With
-  # net:max-retries=0 (post-c866afb #330) lftp enters a
-  # `net:persist-retries=5 × reconnect` loop and never returns, so the
-  # action's `run_lftp_once` wrapper hangs for the 5-minute CI job
-  # timeout. With net:max-retries=1 (pre-c866afb, workflow run
-  # 34072185163) lftp's `mirror` aborts the retry loop after the first
-  # failed MKD attempt, the action's outer INPUT_MAX_RETRIES loop
-  # retries the whole command, and the mirror eventually succeeds
-  # (verified: scenario 07 ran for 17s with no failure on be6d8f8).
-  # The #330 trade-off (the FIRST attempt's 530 gets overwritten by
-  # the retry's `max-retries exceeded`) is accepted here because
-  # leaving it in place makes the integration tests fail and the
-  # action unusable end-to-end; #330's classification logic still
-  # works correctly when the first attempt's error is the same as
-  # the retry's error (the common case for an auth 530), and only
-  # misses when lftp's internal retry masks a transient error as
-  # permanent — a narrower failure surface than the container hang.
-  # TODO(#330): revisit once lftp grows a flag to surface the first
-  # attempt's error AND let mirror skip the MKD-on-root preflight.
   set -- \
     "ftp:ssl-allow"          "true"   "INPUT_FTP_SSL_ALLOW" \
     "ssl:verify-certificate" "true"   "INPUT_SSL_VERIFY_CERTIFICATE" \
@@ -714,7 +685,7 @@ build_ftp_settings() {
     "ftp:use-feat"           "false"  "INPUT_FTP_USE_FEAT" \
     "ftp:nop-interval"       "2"      "INPUT_FTP_NOP_INTERVAL" \
     "net:max-retries"        "1"      "INPUT_NET_MAX_RETRIES" \
-    "net:persist-retries"    "5"      "INPUT_NET_PERSIST_RETRIES" \
+    "net:persist-retries"    "0"      "INPUT_NET_PERSIST_RETRIES" \
     "net:timeout"            "15s"    "INPUT_NET_TIMEOUT" \
     "dns:max-retries"        "8"      "INPUT_DNS_MAX_RETRIES" \
     "dns:fatal-timeout"      "10s"    "INPUT_DNS_FATAL_TIMEOUT"
