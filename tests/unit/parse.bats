@@ -294,6 +294,27 @@ setup() {
   [ "$output" = "mirror --continue --reverse --verbose=3 --no-symlinks --delete --dry-run" ]
 }
 
+@test "build_mirror_command: glob-expansion trap — INPUT_EXCLUDE='*.map' stays literal even when cwd has a.map" {
+  # v2.12 (#131): the comma-split loop in build_mirror_command is
+  # bracketed by `set -f` / `set +f` so the shell does not expand an
+  # unquoted `*.map` against the cwd. Without the brackets the for
+  # loop sees the cwd's `a.map` file and silently turns
+  # ` -X *.map` into ` -X a.map`. Run from a tmpdir that has `a.map`
+  # in it; if `set -f` ever regresses, the output will contain
+  # `a.map` instead of `*.map` and this test fails.
+  _trap_dir=$(mktemp -d)
+  touch "${_trap_dir}/a.map"
+  cd "${_trap_dir}"
+  unset INPUT_MIRROR_VERBOSE INPUT_NO_SYMLINKS INPUT_DELETE INPUT_DRY_RUN
+  INPUT_EXCLUDE='*.map'
+  run build_mirror_command
+  cd "${BATS_TEST_DIRNAME}/../.."
+  rm -rf "${_trap_dir}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" -X *.map"* ]]
+  [[ "$output" != *"a.map"* ]]
+}
+
 # ----------------------------------------------------------------------------
 # normalize_dir
 # ----------------------------------------------------------------------------
