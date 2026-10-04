@@ -36,6 +36,10 @@ TEST_SERVER_IMAGE ?= ftp-deployment-action-test-server:ci-integration
 # runtime the user gets.
 SMOKE_IMAGE ?= ftp-deployment-action-smoke:local
 
+# Used by the acceptance suite (tests/acceptance/static.sh). Override
+# locally when system python lacks PyYAML.
+PYTHON ?= python3
+
 # Container runtime detection (matches the runtime-detection logic in
 # tests/integration/lib/common.sh: docker first, podman fallback).
 # Used by `clean` so a rootless-podman-only developer gets their
@@ -85,7 +89,7 @@ shellcheck:
 	# tests/integration/scenarios/*.sh source tests/integration/lib/common.sh).
 	# Pass common.sh alongside each scenario so shellcheck's source= path
 	# resolution can find the shared library.
-	shellcheck -x entrypoint.sh lib.sh tests/contract.sh tests/smoke.sh tests/release-smoke.sh scripts/backfill-releases.sh
+	shellcheck -x entrypoint.sh lib.sh tests/contract.sh tests/smoke.sh tests/release-smoke.sh scripts/backfill-releases.sh tests/acceptance/static.sh
 	shellcheck -x tests/integration/lib/common.sh tests/integration/run-integration-tests.sh
 	shellcheck -x tests/integration/scenarios/*.sh
 	# v2.11.13 (#317): include the FTPS-cert helper and the
@@ -152,6 +156,13 @@ contract:
 .PHONY: smoke
 smoke:
 	$(SH) tests/smoke.sh
+
+# Acceptance suite: static.sh plus the behaviour bats. PYTHON override
+# lets local devs without PyYAML point at a venv (CI installs it natively).
+.PHONY: acceptance
+acceptance:
+	PYTHON=$(PYTHON) $(SH) tests/acceptance/static.sh
+	bats tests/acceptance
 
 # ----------------------------------------------------------------------------
 # Unit tests: bats tests for the pure functions in lib.sh. Faster

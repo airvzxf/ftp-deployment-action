@@ -196,3 +196,24 @@ jobs:
         run: make build-test-server-image TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
       - name: Run integration scenarios against a real vsftpd
         run: make integration IMAGE=ftp-deployment-action:ci-integration TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
+
+  # Acceptance suite (WP-00): static checks (tests/acceptance/static.sh)
+  # plus the behaviour bats (tests/acceptance/behavior.bats). Wired as
+  # a separate job so a red bats cannot mask the static findings (the
+  # static step would otherwise be skipped under `if: always()`).
+  acceptance:
+    name: Acceptance (static + bats)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install bats and python3-yaml
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats python3-yaml
+      - name: Static acceptance checks
+        run: sh tests/acceptance/static.sh
+      - name: Behaviour acceptance tests
+        if: always()
+        run: bats tests/acceptance
