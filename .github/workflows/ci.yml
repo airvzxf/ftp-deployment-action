@@ -172,15 +172,11 @@ jobs:
   # against the 20s wait_for_port deadline in CI. Building the
   # FTPS test server image in this job (rather than per-scenario)
   # eliminates that race.
-  # The timeout-minutes: 5 reflects the budget defined in #117's
-  # acceptance criteria; previously this section had no explicit
-  # timeout (default 360 min), which let regressions hide behind
-  # GH Actions' default budget. Pinning it to 5 minutes forces the
-  # harness to stay fast.
+  # 15 minutes covers both image builds plus every scenario.
   integration:
     name: Integration tests
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -196,3 +192,20 @@ jobs:
         run: make build-test-server-image TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
       - name: Run integration scenarios against a real vsftpd
         run: make integration IMAGE=ftp-deployment-action:ci-integration TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
+
+  acceptance:
+    name: Acceptance (static + bats)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install bats and python3-yaml
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats python3-yaml
+      - name: Static acceptance checks
+        run: sh tests/acceptance/static.sh
+      - name: Behaviour acceptance tests
+        if: always()
+        run: bats tests/acceptance
