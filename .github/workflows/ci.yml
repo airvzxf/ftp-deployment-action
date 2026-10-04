@@ -175,12 +175,12 @@ jobs:
   # The timeout-minutes: 5 reflects the budget defined in #117's
   # acceptance criteria; previously this section had no explicit
   # timeout (default 360 min), which let regressions hide behind
-  # GH Actions' default budget. Pinning it to 5 minutes forces the
-  # harness to stay fast.
+  # GH Actions' default budget. Pinning it forces the harness to stay fast.
   integration:
     name: Integration tests
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 16 scenarios + image builds exceed the previous 5-minute budget (scenario 20 alone is ~90 s).
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -197,10 +197,6 @@ jobs:
       - name: Run integration scenarios against a real vsftpd
         run: make integration IMAGE=ftp-deployment-action:ci-integration TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
 
-  # Acceptance suite (WP-00): static checks (tests/acceptance/static.sh)
-  # plus the behaviour bats (tests/acceptance/behavior.bats). Wired as
-  # a separate job so a red bats cannot mask the static findings (the
-  # static step would otherwise be skipped under `if: always()`).
   acceptance:
     name: Acceptance (static + bats)
     runs-on: ubuntu-latest

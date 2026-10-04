@@ -42,7 +42,7 @@ jobs:
           persist-credentials: false
 
       - name: Deploy with only the required inputs
-        timeout-minutes: 5
+        timeout-minutes: 2
         uses: ./
         with:
           server: ftp://ftp:21

@@ -36,8 +36,7 @@ TEST_SERVER_IMAGE ?= ftp-deployment-action-test-server:ci-integration
 # runtime the user gets.
 SMOKE_IMAGE ?= ftp-deployment-action-smoke:local
 
-# Used by the acceptance suite (tests/acceptance/static.sh). Override
-# locally when system python lacks PyYAML.
+# Used by the acceptance suite (override locally when pyyaml is missing).
 PYTHON ?= python3
 
 # Container runtime detection (matches the runtime-detection logic in
@@ -157,8 +156,7 @@ contract:
 smoke:
 	$(SH) tests/smoke.sh
 
-# Acceptance suite: static.sh plus the behaviour bats. PYTHON override
-# lets local devs without PyYAML point at a venv (CI installs it natively).
+# Acceptance suite: static.sh + behaviour bats (PYTHON lets devs point at a venv).
 .PHONY: acceptance
 acceptance:
 	PYTHON=$(PYTHON) $(SH) tests/acceptance/static.sh
