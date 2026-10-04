@@ -358,8 +358,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | dns_max_retries        | DNS - 0 no limit trying to lookup an address otherwise try only this number of times. | No       | 8       | N/A                                                                                               |
 | dns_fatal_timeout      | DNS - Time for DNS queries.<br> Set to "never" to disable.                            | No       | 10s     | N/A                                                                                               |
 | lftp_settings          | Any other settings that you find in the MAN pages for the LFTP package.               | No       | ""      | "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';" |
-| exclude                | POSIX ERE pattern passed to `mirror -x`. Matching files are **not uploaded** and **not deleted**. | No       | ""      | `.*\.map\|node_modules/.*\|\.git/.*` |
-| exclude_delete         | lftp `PatternSet::Glob` pattern passed to `mirror -X`. Matching files are **not uploaded** and **not deleted**. | No       | ""      | "*.log"                                                                                          |
+| exclude                | Comma-separated shell globs. Matching files are **not uploaded** and **not deleted**. | No       | ""      | "*.map, *.bak, node_modules/" |
 | debug                  | If "true", print resolved input values to the log.                                    | No       | false   | N/A                                                                                               |
 | fail_on_deprecated     | If "true", exit 1 when the pinned ref is end-of-life (v1.x).                         | No       | false   | N/A                                                                                               |
 | dry_run                | If "true", compute the mirror plan but do not transfer or delete any file.           | No       | false   | N/A                                                                                               |
@@ -420,42 +419,22 @@ jobs:
       dns_max_retries: "17"
       dns_fatal_timeout: "never"
       lftp_settings: "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';"
-      exclude: ".*\\.map|node_modules/.*|\\.git/.*"
-      exclude_delete: "*.log"
+      exclude: "*.map, *.bak, node_modules/"
       dry_run: "false"
 ```
 
 ### Pattern exclusions
 
-Two inputs control which files participate in the mirror. `exclude`
-is passed to lftp as `mirror -x <regex>` and uses POSIX ERE syntax.
-`exclude_delete` is passed as `mirror -X <glob>` and uses lftp's
-`PatternSet::Glob` syntax. In lftp 4.9.3, both options apply to
-uploads and deletions; there is no separate delete-only exclusion.
-See the [lftp manual](https://lftp.yar.ru/lftp-man.html) for the
-exact pattern syntax.
+`exclude` is a comma-separated list of shell globs, for example
+`"*.map, *.bak, node_modules/"`. Spaces around the commas are
+ignored. Each glob is passed to lftp as one `mirror -X <glob>`
+option, so every matching file or directory, at any depth, is
+**neither uploaded nor deleted**. With `delete: "true"`, this is how
+you protect server-only files such as logs or user uploads.
 
-| Input | Effect |
-|---|---|
-| `exclude` | POSIX ERE passed to `mirror -x`. Matching files are **not uploaded** and **not deleted**. Use this for patterns such as `node_modules/.*`, `\.git/.*`, `.*\.map`, or `.*\.bak`. |
-| `exclude_delete` | lftp `PatternSet::Glob` pattern passed to `mirror -X`. Matching files are **not uploaded** and **not deleted**. Use this for patterns such as `*.log` or `uploads/**`. |
-
-Both inputs default to empty (no exclusion). The inputs are
-independent: both patterns may be supplied, and a file must match the
-corresponding `mirror -x` or `mirror -X` pattern to be excluded.
-
-The action builds the mirror command as follows:
-
-1. It adds the standard lftp settings.
-2. It appends `-x <regex>` when `exclude` is non-empty.
-3. It appends `-X <glob>` when `exclude_delete` is non-empty.
-4. It appends the local and remote directories to the mirror command.
-
-Both inputs are validated by the action's `validate_glob_pattern`
-validator. It rejects control characters, newlines, a leading dash,
-and lftp command-separator characters (`;`, `&`, `|`, and `"`)
-while allowing pattern metacharacters such as `!`, backticks, and
-`$` where they are valid in the selected regex or glob syntax.
+Each glob must not start with `-` or contain a space; the whole value
+must not contain control characters, newlines, `;`, `&`, `|` or `"`.
+Otherwise the action exits with code `2` before connecting.
 
 ## Concurrency / deployment lock
 
@@ -718,7 +697,7 @@ non-buildable image) **before** a tag is pushed.
 |------|---------|
 | `0`  | Upload finished successfully. |
 | `1`  | Upload failed after all retries; the last lftp error is printed above. |
-| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` — v2.11.8 #195 closes the credential-source bypass); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives; an `exclude` / `exclude_delete` value rejected by `validate_glob_pattern` (control chars, leading dash, `;`, `&`, `|`, or `"`). |
+| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` — v2.11.8 #195 closes the credential-source bypass); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives; an `exclude` value rejected by `validate_glob_pattern` (control chars, `;`, `&`, `|`, `"`, or an item that starts with a dash or contains a space). |
 
 When the global 5-hour timeout is reached the lftp process is killed and the
 action exits with `1` (the most recent lftp exit code is also printed to the
@@ -821,13 +800,13 @@ control characters, newlines, backtick, dollar, and `!` are
 rejected, and no more than three semicolon-chained directives
 are allowed.
 
-The `exclude` and `exclude_delete` inputs use a separate
-`validate_glob_pattern` validator because their values are passed to
-the lftp `mirror` command. It rejects control characters, newlines, a
-leading dash, and command-separator characters (`;`, `&`, `|`, and
-`"`), while allowing valid regex/glob metacharacters such as `!`,
-backticks, and `$`. The action exits with code `2` and a clear error
-when validation fails.
+The `exclude` input uses a separate `validate_glob_pattern`
+validator because its globs are passed to the lftp `mirror` command.
+It rejects control characters, newlines and command-separator
+characters (`;`, `&`, `|`, and `"`), and any glob that starts with a
+dash or contains a space, while allowing glob metacharacters such as
+`!`, backticks, and `$`. The action exits with code `2` and a clear
+error when validation fails.
 
 ## Changelog
 

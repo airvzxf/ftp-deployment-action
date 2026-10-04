@@ -72,7 +72,6 @@ set -o pipefail
 : "${INPUT_DNS_FATAL_TIMEOUT:=}"
 : "${INPUT_LFTP_SETTINGS:=}"
 : "${INPUT_EXCLUDE:=}"
-: "${INPUT_EXCLUDE_DELETE:=}"
 : "${INPUT_DEBUG:=}"
 : "${INPUT_FAIL_ON_DEPRECATED:=}"
 : "${INPUT_DRY_RUN:=}"
@@ -167,12 +166,9 @@ validate_lftp_settings "${INPUT_LFTP_SETTINGS}"
 # (v2.11.8 #174) ASCII space. None of those are valid in an lftp
 # URL. Valid bare-host and bracketed-IPv6 URLs all pass.
 validate_path "server" "${INPUT_SERVER}"
-# v2.11.3 (#160): the exclude inputs flow onto the `mirror -x` /
-# `mirror -X` command line (not into the lftp `-e` script body,
-# since v2.11.2), so they need a lighter validator that allows
-# glob/regex metacharacters like `!`, `;`, `$`, backtick.
-validate_glob_pattern "exclude"        "${INPUT_EXCLUDE}"
-validate_glob_pattern "exclude_delete" "${INPUT_EXCLUDE_DELETE}"
+# exclude is a comma-separated glob list: validate_glob_pattern
+# allows glob metacharacters but rejects lftp command separators.
+validate_glob_pattern "exclude" "${INPUT_EXCLUDE}"
 # Concurrency lock: validate path and integers only when enabled,
 # to keep the validation surface tight for the common case
 # (concurrency_lock=false). validate_int already rejects negatives

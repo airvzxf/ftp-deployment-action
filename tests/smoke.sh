@@ -460,7 +460,7 @@ fi
 pass "dry_run=true adds --dry-run to the mirror command and the DRY RUN banner"
 
 # ----------------------------------------------------------------------------
-# Test 25: INPUT_EXCLUDE=*.map — `mirror -x *.map` appears in the
+# Test 25: INPUT_EXCLUDE=*.map — `mirror -X *.map` appears in the
 # resolved MIRROR_COMMAND, and NO `mirror:exclude*` directive is
 # in FTP_SETTINGS (the v2.11.2 fix moved the exclude onto the
 # mirror command itself; the previous `set mirror:exclude <value>`
@@ -472,33 +472,15 @@ pass "dry_run=true adds --dry-run to the mirror command and the DRY RUN banner"
 # to surface the resolved-command dump.
 # ----------------------------------------------------------------------------
 out=$(run_init "INPUT_DRY_RUN=true" "INPUT_DEBUG=true" "INPUT_EXCLUDE=*.map" 30)
-echo "${out}" | grep -qE 'MIRROR_COMMAND.*-x [*].map' \
-  || fail "INPUT_EXCLUDE=*.map was not injected into MIRROR_COMMAND as -x flag; output was:\n${out}"
+echo "${out}" | grep -qE 'MIRROR_COMMAND.*-X [*].map' \
+  || fail "INPUT_EXCLUDE=*.map was not injected into MIRROR_COMMAND as -X flag; output was:\n${out}"
 # mirror:exclude* must NOT appear in FTP_SETTINGS (was a silent
 # no-op; v2.11.2 fix removed it).
 if echo "${out}" | grep -qE 'set mirror:exclude'; then
   fail "INPUT_EXCLUDE should not produce any set mirror:exclude* directive in FTP_SETTINGS (was a silent no-op in lftp 4.9.3); output was:\n${out}"
 fi
-pass 'INPUT_EXCLUDE=*.map injects "mirror -x *.map" into MIRROR_COMMAND (v2.11.2 fix)'
+pass 'INPUT_EXCLUDE=*.map injects "mirror -X *.map" into MIRROR_COMMAND'
 
-# ----------------------------------------------------------------------------
-# Test 26: INPUT_EXCLUDE_DELETE=*.bak — `mirror -X *.bak` appears in
-# the resolved MIRROR_COMMAND, and NO `mirror:exclude*` directive is
-# in FTP_SETTINGS (the v2.11.2 fix moved the exclude onto the
-# mirror command itself; the previous `set mirror:exclude-file
-# *.bak;` was a silent no-op because `mirror:exclude-file` does
-# not exist in lftp 4.9.3 — verified against MirrorJob.cc::AddPattern,
-# which only queries `mirror:exclude-regex` as a default).
-# v2.11.8 (#194): INPUT_DEBUG=true for the resolved-config dump.
-# ----------------------------------------------------------------------------
-out=$(run_init "INPUT_DRY_RUN=true" "INPUT_DEBUG=true" "INPUT_EXCLUDE_DELETE=*.bak" 30)
-echo "${out}" | grep -qE 'MIRROR_COMMAND.*-X [*].bak' \
-  || fail "INPUT_EXCLUDE_DELETE=*.bak was not injected into MIRROR_COMMAND as -X flag; output was:\n${out}"
-# mirror:exclude* must NOT appear in FTP_SETTINGS.
-if echo "${out}" | grep -qE 'set mirror:exclude'; then
-  fail "INPUT_EXCLUDE_DELETE should not produce any set mirror:exclude* directive in FTP_SETTINGS (no such variable in lftp 4.9.3); output was:\n${out}"
-fi
-pass 'INPUT_EXCLUDE_DELETE=*.bak injects "mirror -X *.bak" into MIRROR_COMMAND (v2.11.2 fix)'
 out=$(run_init "INPUT_DRY_RUN=true" "INPUT_DEBUG=true" 30)
 if echo "${out}" | grep -qE 'set mirror:exclude'; then
   fail "default FTP_SETTINGS unexpectedly contains mirror:exclude; output was:\n${out}"

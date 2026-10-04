@@ -37,8 +37,6 @@ tests/integration/
     ├── 09-concurrency-lock-e2e.sh            # INPUT_CONCURRENCY_LOCK=true
                                               #   end-to-end
     ├── 10-stale-lock-recovery.sh             # stale-sentinel takeover
-    ├── 11-exclude-delete-protects-remote.sh  # INPUT_EXCLUDE_DELETE
-                                              #   end-to-end (closes #131)
     └── 12-acquire-vs-bare-host-url.sh        # acquire_lock against the
                                               #   bare-host URL shape (closes #160)
 ```

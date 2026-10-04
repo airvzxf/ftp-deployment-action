@@ -149,14 +149,14 @@ second-line-password"
   [[ "$output" == *"password:"*"(using default)"* ]]
 }
 
-@test "print_inputs_dump: the dump loop covers all 30 declared inputs (v2.11.8 #257 + #227)" {
+@test "print_inputs_dump: the dump loop covers all 29 declared inputs (v2.11.8 #257 + #227)" {
   unset INPUT_SERVER INPUT_USER INPUT_PASSWORD INPUT_LOCAL_DIR INPUT_REMOTE_DIR \
         INPUT_DELETE INPUT_NO_SYMLINKS INPUT_MAX_RETRIES INPUT_MIRROR_VERBOSE \
         INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME \
         INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
         INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
         INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS \
-        INPUT_EXCLUDE INPUT_EXCLUDE_DELETE INPUT_DEBUG INPUT_FAIL_ON_DEPRECATED \
+        INPUT_EXCLUDE INPUT_DEBUG INPUT_FAIL_ON_DEPRECATED \
         INPUT_DRY_RUN INPUT_CONCURRENCY_LOCK \
         INPUT_CONCURRENCY_LOCK_PATH INPUT_CONCURRENCY_LOCK_TIMEOUT \
         INPUT_CONCURRENCY_LOCK_POLL_INTERVAL
@@ -166,7 +166,7 @@ second-line-password"
               no_symlinks mirror_verbose ftp_ssl_allow ssl_verify_certificate \
               ssl_check_hostname ftp_passive_mode ftp_use_feat ftp_nop_interval \
               net_max_retries net_persist_retries net_timeout dns_max_retries \
-              dns_fatal_timeout lftp_settings exclude exclude_delete debug \
+              dns_fatal_timeout lftp_settings exclude debug \
               fail_on_deprecated dry_run concurrency_lock \
               concurrency_lock_path concurrency_lock_timeout \
               concurrency_lock_poll_interval; do
@@ -174,7 +174,7 @@ second-line-password"
   done
 }
 
-@test "print_inputs_dump: debug=true covers all 30 declared inputs (v2.11.8 #181)" {
+@test "print_inputs_dump: debug=true covers all 29 declared inputs (v2.11.8 #181)" {
   # Previously the debug=true printf block was silently missing
   # fail_on_deprecated and dry_run (29 entries vs 31). A regression
   # that drops either from the printf block would have slipped
@@ -185,7 +185,7 @@ second-line-password"
         INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
         INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
         INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS \
-        INPUT_EXCLUDE INPUT_EXCLUDE_DELETE INPUT_DEBUG INPUT_FAIL_ON_DEPRECATED \
+        INPUT_EXCLUDE INPUT_DEBUG INPUT_FAIL_ON_DEPRECATED \
         INPUT_DRY_RUN INPUT_CONCURRENCY_LOCK \
         INPUT_CONCURRENCY_LOCK_PATH INPUT_CONCURRENCY_LOCK_TIMEOUT \
         INPUT_CONCURRENCY_LOCK_POLL_INTERVAL
@@ -195,7 +195,7 @@ second-line-password"
               no_symlinks mirror_verbose ftp_ssl_allow ssl_verify_certificate \
               ssl_check_hostname ftp_passive_mode ftp_use_feat ftp_nop_interval \
               net_max_retries net_persist_retries net_timeout dns_max_retries \
-              dns_fatal_timeout lftp_settings exclude exclude_delete debug \
+              dns_fatal_timeout lftp_settings exclude debug \
               fail_on_deprecated dry_run concurrency_lock \
               concurrency_lock_path concurrency_lock_timeout \
               concurrency_lock_poll_interval; do
