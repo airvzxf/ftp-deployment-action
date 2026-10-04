@@ -11,7 +11,6 @@ FROM alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec7
 RUN apk add --no-cache \
       lftp~4.9.3 \
       ca-certificates \
-      curl~8.22.0 \
  && addgroup -S lftp \
  && adduser -S lftp -G lftp -h /home/lftp
 

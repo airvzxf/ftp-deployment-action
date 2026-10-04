@@ -89,7 +89,7 @@ body:
     id: log
     attributes:
       label: Log excerpt
-      description: Paste the lftp log excerpt or the failure banner from the runner output. If `upload_log_on_failure` is left at its default (`true`) and the step exposes `GITHUB_TOKEN`, the full log is also auto-uploaded as the artifact `ftp-deployment-action-log-<run-attempt>` (90-day retention) — download it from the run page for the complete trace.
+      description: Paste the lftp log excerpt or the failure banner from the runner output.
       placeholder: |
         ---- FTP UPLOAD START ----
         ...

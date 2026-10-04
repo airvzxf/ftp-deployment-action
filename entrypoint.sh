@@ -20,8 +20,7 @@
 #      EXIT trap that removes the file.
 #  11. Retry loop with exponential backoff + jitter, capturing
 #      lftp's combined stdout+stderr to a timestamped log file.
-#  12. Expose the log file path via $GITHUB_OUTPUT.
-#  13. Print the success or failure banner.
+#  12. Print the success or failure banner.
 #
 # The split between this file and lib.sh is the only architectural
 # change vs. the pre-v2.5.0 single-file layout; the behaviour is
@@ -77,12 +76,11 @@ set -o pipefail
 : "${INPUT_DEBUG:=}"
 : "${INPUT_FAIL_ON_DEPRECATED:=}"
 : "${INPUT_DRY_RUN:=}"
-: "${INPUT_UPLOAD_LOG_ON_FAILURE:=}"
 : "${INPUT_CONCURRENCY_LOCK:=false}"
 : "${INPUT_CONCURRENCY_LOCK_PATH:=.lftp-deployment.lock}"
 : "${INPUT_CONCURRENCY_LOCK_TIMEOUT:=300}"
 : "${INPUT_CONCURRENCY_LOCK_POLL_INTERVAL:=5}"
-# v2.11.7 (#252): validate and canonicalise the 7 gate bool inputs so
+# v2.11.7 (#252): validate and canonicalise the 6 gate bool inputs so
 # non-canonical aliases (yes/no/on/off/0/1/...) flow into the gate
 # checks the documented way. Pre-fix the gates used a literal
 # `[ ... = "true" ]` compare, so `concurrency_lock: yes` was silently
@@ -91,7 +89,6 @@ set -o pipefail
 INPUT_DELETE=$(normalize_bool                  "delete"                "${INPUT_DELETE}")
 INPUT_NO_SYMLINKS=$(normalize_bool             "no_symlinks"           "${INPUT_NO_SYMLINKS}")
 INPUT_DRY_RUN=$(normalize_bool                 "dry_run"               "${INPUT_DRY_RUN}")
-INPUT_UPLOAD_LOG_ON_FAILURE=$(normalize_bool   "upload_log_on_failure" "${INPUT_UPLOAD_LOG_ON_FAILURE}")
 INPUT_CONCURRENCY_LOCK=$(normalize_bool        "concurrency_lock"      "${INPUT_CONCURRENCY_LOCK}")
 INPUT_DEBUG=$(normalize_bool                   "debug"                 "${INPUT_DEBUG}")
 INPUT_FAIL_ON_DEPRECATED=$(normalize_bool      "fail_on_deprecated"    "${INPUT_FAIL_ON_DEPRECATED}")
@@ -351,12 +348,11 @@ LFTP_TIMEOUT="5h"
 LFTP_KILL_AFTER="30s"
 
 # B-04: capture every lftp invocation's combined stdout+stderr to a
-# timestamped log file under ~/.lftp-logs/. The path is exported via
-# the GITHUB_OUTPUT file so a downstream step can upload it as a
-# workflow artifact (or just download it from the runner). The
-# directory is created here rather than at the top of the script
-# so test runs that exit before the loop (validate_int / deprecated
-# ref) do not leave an empty .lftp-logs directory behind.
+# timestamped log file under ~/.lftp-logs/; classify_permanent_error
+# reads it to decide whether a retry can help. The directory is
+# created here rather than at the top of the script so test runs
+# that exit before the loop (validate_int / deprecated ref) do not
+# leave an empty .lftp-logs directory behind.
 mkdir -p "/home/lftp/.lftp-logs"
 LOG_FILE="/home/lftp/.lftp-logs/run-$(date -u +%Y%m%dT%H%M%SZ).log"
 
@@ -415,37 +411,10 @@ while true; do
 done
 printf '::endgroup::\n'
 
-# B-04: expose the log file path as an action output so a follow-up
-# step can attach it as a workflow artifact. Only do this if the
-# runner set GITHUB_OUTPUT (i.e. the user invoked us with `id:` in
-# their step and declared `log_file` in the step's outputs).
-# F2 audit (#313): if the write fails (file unwritable, disk full,
-# leaked fd on a dead runner worker, read-only fs on a self-hosted
-# runner, etc.) the action must not abort AFTER a successful mirror.
-# The output is best-effort metadata; bracket with set +e / set -e /
-# capture rc / warn, mirroring upload_log_artifact at
-# lib.sh:1743-1759.
-if [ -n "${GITHUB_OUTPUT:-}" ]; then
-  set +e
-  printf 'log_file=%s\n' "${LOG_FILE}" >> "${GITHUB_OUTPUT}"
-  _gho_rc=$?
-  set -e
-  if [ "${_gho_rc}" -ne 0 ]; then
-    printf 'WARNING: could not write log_file output to %s (rc=%s); continuing.\n' \
-      "${GITHUB_OUTPUT}" "${_gho_rc}" >&2
-  fi
-fi
-
 # ------------------------------------------------------------------------------
 # Display the status of the LFTP actions.
 # ------------------------------------------------------------------------------
 if [ -z "${SUCCESS}" ]; then
-  # v2.7.0: try to upload the captured lftp log to the current
-  # workflow run as a workflow artifact. The function is fail-soft:
-  # if GITHUB_TOKEN is missing or the upload request fails, it logs
-  # a warning / notice and returns 0, so the failure banner below
-  # still runs.
-  upload_log_artifact "${LOG_FILE}"
   print_failure_banner "${LFTP_RC}" "${PERMANENT_ERROR}" \
     "${LOG_FILE}" "${LFTP_TIMEOUT}" "${LFTP_KILL_AFTER}"
 fi

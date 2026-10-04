@@ -68,7 +68,7 @@ body:
           ssl_check_hostname: "true"
 
         What I ran: my workflow (link or pasted YAML, redacted).
-        Observed: the action exited with code 1 and printed "ERROR: UPLOAD FAILED". The artifact ftp-deployment-action-log-<run-attempt> shows: <paste the relevant lines>.
+        Observed: the action exited with code 1 and printed "ERROR: UPLOAD FAILED". The lftp output above the banner shows: <paste the relevant lines>.
     validations:
       required: true
 
