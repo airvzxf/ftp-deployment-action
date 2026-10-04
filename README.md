@@ -699,6 +699,9 @@ non-buildable image) **before** a tag is pushed.
 | `1`  | Upload failed after all retries; the last lftp error is printed above. |
 | `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` — v2.11.8 #195 closes the credential-source bypass); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives; an `exclude` value rejected by `validate_glob_pattern` (control chars, `;`, `&`, `|`, `"`, or an item that starts with a dash or contains a space). |
 
+lftp's own output (transferred files, the `dry_run` plan, server errors) is
+printed in the step log; there is nothing else to download.
+
 When the global 5-hour timeout is reached the lftp process is killed and the
 action exits with `1` (the most recent lftp exit code is also printed to the
 log for debugging).

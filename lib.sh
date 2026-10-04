@@ -1096,9 +1096,12 @@ run_lftp_once() {
   # B-03: no -u USER,PASS — lftp reads the password from ${NETRC}.
   # The user embedded in the URL above is what triggers lftp's
   # NetRC::LookupHost call (see commands.cc:1055 in upstream).
-  # B-04: redirect combined stdout+stderr to the timestamped log file
-  # so the captured output can be inspected after the fact and, if
-  # the user wishes, attached as a workflow artifact.
+  # B-04: lftp's combined stdout+stderr goes to the step log (so the
+  # user sees transferred files, the dry-run plan and server errors)
+  # and is appended to the timestamped log file that
+  # classify_permanent_error reads. pipefail makes the function return
+  # lftp's exit code, not tee's; it is also set here because bats
+  # calls this function without entrypoint.sh.
   #
   # v2.11.9 (#193): use >> (append) instead of > (truncate). The
   # caller (entrypoint.sh's retry loop) computes LOG_FILE once
@@ -1110,10 +1113,12 @@ run_lftp_once() {
   # history. The log is timestamped once per run (entrypoint.sh
   # uses `date -u +%Y%m%dT%H%M%SZ` in the basename) so retries
   # within one run do NOT collide on the filename.
+  # shellcheck disable=SC3040
+  set -o pipefail
   timeout -k "${_rlo_kill_after}" "${_rlo_timeout}" lftp \
     "${_rlo_server_eff}" \
     -e "${_rlo_settings} ${_rlo_mirror} ${_rlo_local} ${_rlo_remote}; quit;" \
-    >> "${_rlo_log}" 2>&1
+    2>&1 | tee -a "${_rlo_log}"
 }
 
 # ------------------------------------------------------------------------------
@@ -1596,11 +1601,12 @@ print_resolved_config() {
 #   Print the "ERROR: UPLOAD FAILED" banner, mention whether the
 #   failure was classified as permanent, list common lftp exit codes
 #   for debugging, and exit 1. The function does not return.
+#   LOG_FILE is not printed: the container is gone after the step, and
+#   lftp's output is already in the step log.
 # ------------------------------------------------------------------------------
 print_failure_banner() {
   _pfb_rc=$1
   _pfb_permanent=$2
-  _pfb_log=$3
   _pfb_timeout=$4
   _pfb_kill_after=$5
 
@@ -1611,7 +1617,7 @@ print_failure_banner() {
   if [ -n "${_pfb_permanent}" ]; then
     echo "Failure type: PERMANENT (no point retrying with the same inputs)."
     echo "Check credentials, the remote_dir path, and the FTP user's"
-    echo "permissions; see the log file below for the server's message."
+    echo "permissions; the server's message is in the lftp output above."
   fi
   if [ -n "${_pfb_rc}" ]; then
     echo "Last lftp exit code: ${_pfb_rc}"
@@ -1621,7 +1627,7 @@ print_failure_banner() {
     echo "  124  timeout reached (max wall-clock ${_pfb_timeout})"
     echo "  137  process killed (SIGKILL after ${_pfb_kill_after} grace)"
   fi
-  echo "Full lftp output: ${_pfb_log}"
+  echo "The server's reply is in the lftp output above."
   exit 1
 }
 

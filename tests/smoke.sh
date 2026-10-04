@@ -414,15 +414,16 @@ echo "${out}" | grep -q "^EXIT=1" \
 pass "fail_on_deprecated=true on current ref does not error out"
 
 # ----------------------------------------------------------------------------
-# Test 22: A6 — failure banner mentions the log file path (B-04).
+# Test 22: A6 — failure banner points to the lftp output above it.
 # ----------------------------------------------------------------------------
 # We use max_retries=1 to keep the test fast (a single lftp attempt
-# + a quick classification pass). The failure banner must include
-# the captured lftp log path so the user can find it for debugging.
+# + a quick classification pass). The log file inside the container
+# is unreachable for the user, so the banner must point to the lftp
+# output already printed in the step log instead.
 out=$(run_init "INPUT_MAX_RETRIES=1" 30)
-echo "${out}" | grep -qE "Full lftp output: /.+\.lftp-logs/run-[0-9TZ]+\.log" \
-  || fail "failure banner did not mention the log file path; output was:\n${out}"
-pass "failure banner includes the captured lftp log file path"
+echo "${out}" | grep -q "The server's reply is in the lftp output above." \
+  || fail "failure banner did not point to the lftp output; output was:\n${out}"
+pass "failure banner points to the lftp output in the step log"
 
 # ----------------------------------------------------------------------------
 # Test 23: B-04 — lftp stdout+stderr is captured to the log file.

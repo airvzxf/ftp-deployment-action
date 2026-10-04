@@ -300,12 +300,13 @@ second-line-password"
 # print_failure_banner
 # ----------------------------------------------------------------------------
 
-@test "print_failure_banner: emits ERROR: UPLOAD FAILED and the lftp log path" {
+@test "print_failure_banner: emits ERROR: UPLOAD FAILED and points to the lftp output" {
   run print_failure_banner "1" "" "/home/lftp/.lftp-logs/run-20260706T193427Z.log" "5h" "30s"
   [ "$status" -eq 1 ]
   [[ "$output" == *"ERROR: UPLOAD FAILED"* ]]
   [[ "$output" == *"Last lftp exit code: 1"* ]]
-  [[ "$output" == *"Full lftp output: /home/lftp/.lftp-logs/run-20260706T193427Z.log"* ]]
+  [[ "$output" == *"The server's reply is in the lftp output above."* ]]
+  [[ "$output" != *"/home/lftp/.lftp-logs"* ]]
 }
 
 @test "print_failure_banner: PERMANENT error is mentioned when set" {
