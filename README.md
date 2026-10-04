@@ -315,7 +315,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 > `ftp_ssl_allow`, `ssl_verify_certificate`,
 > `ssl_check_hostname`, `ftp_passive_mode`, `ftp_use_feat`,
 > `debug`, `fail_on_deprecated`, `dry_run`,
-> `upload_log_on_failure`, `concurrency_lock`) accepts the
+> `concurrency_lock`) accepts the
 > case-sensitive set `true`, `false`, `yes`, `no`, `on`, `off`,
 > `0`, and `1`. Anything else — including capitalised variants
 > such as `True`, `YES`, or `On` — is rejected with exit code
@@ -363,7 +363,6 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | debug                  | If "true", print resolved input values to the log.                                    | No       | false   | N/A                                                                                               |
 | fail_on_deprecated     | If "true", exit 1 when the pinned ref is end-of-life (v1.x).                         | No       | false   | N/A                                                                                               |
 | dry_run                | If "true", compute the mirror plan but do not transfer or delete any file.           | No       | false   | N/A                                                                                               |
-| upload_log_on_failure  | **BROKEN** (do not rely on). If "true" (default), the action attempts to POST the log to a non-existent GitHub REST endpoint on exit 1 and always prints `WARNING: failed to upload log artifact`. Set to "false" to silence the warning, then read `outputs.log_file` and upload the log yourself with `actions/upload-artifact` (see "Workflow artifacts" below). | No       | true    | N/A                                                                                               |
 | concurrency_lock       | If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory. See "Concurrency / deployment lock" below. | No       | false   | N/A                                                                                               |
 | concurrency_lock_path  | Path of the sentinel directory used by `concurrency_lock`. Must be a valid FTP path (no `..`, no shell metacharacters, no leading dash, no `!`, no `"`). | No       | .lftp-deployment.lock | N/A                                                                                |
 | concurrency_lock_timeout | Maximum seconds to wait for the lock when `concurrency_lock` is "true" and another run is currently holding it. `0` means fail immediately when held. | No | 300  | N/A                                                                                               |
@@ -424,7 +423,6 @@ jobs:
       exclude: ".*\\.map|node_modules/.*|\\.git/.*"
       exclude_delete: "*.log"
       dry_run: "false"
-      upload_log_on_failure: "true"
 ```
 
 ### Pattern exclusions
@@ -458,78 +456,6 @@ validator. It rejects control characters, newlines, a leading dash,
 and lftp command-separator characters (`;`, `&`, `|`, and `"`)
 while allowing pattern metacharacters such as `!`, backticks, and
 `$` where they are valid in the selected regex or glob syntax.
-
-## Workflow artifacts (manual upload on failure)
-
-> **⚠️ BROKEN as of v2.11.10**: the action's documented
-> `upload_log_on_failure: "true"` feature uses a non-existent
-> GitHub REST endpoint
-> (`POST /repos/<owner>/<repo>/actions/runs/<run_id>/artifacts`).
-> GitHub's REST API does not expose a create/POST endpoint for
-> artifacts — creation flows through the Actions Runtime API
-> (`ACTIONS_RUNTIME_TOKEN` + `ACTIONS_RESULTS_URL`), which
-> `GITHUB_TOKEN` cannot substitute for. The call always returns
-> a non-2xx, the action logs `WARNING: failed to upload log
-> artifact`, and the user never sees an artifact in the run.
-> This has been silently broken since v2.7.0; a follow-up
-> release will switch the upload to the runtime-token API.
-> Adding `GITHUB_TOKEN` to the step as the docs previously
-> suggested is harmless but pointless.
-
-The supported flow today is to read the `log_file` action
-output (declared in `action.yml`; the path inside the
-container, written before the failure banner) and pass it to
-`actions/upload-artifact` in a follow-up step. **Caveat**:
-`outputs.log_file` is an in-container path
-(`/home/lftp/.lftp-logs/run-<UTC-timestamp>.log`) — when the
-Docker-action step finishes, the container is destroyed and
-the path no longer exists on the host runner, so a vanilla
-follow-up `actions/upload-artifact` step will fail with
-`if-no-files-found: error`. To make the path survive, mount it
-to the host:
-
-```yaml
-- id: deploy
-  uses: airvzxf/ftp-deployment-action@v2.11.14
-  with:
-    server: ${{ secrets.FTP_SERVER }}
-    user: ${{ secrets.FTP_USERNAME }}
-    password: ${{ secrets.FTP_PASSWORD }}
-    local_dir: "./public_html"
-
-- if: failure()
-  uses: actions/upload-artifact@v4
-  with:
-    name: ftp-deployment-action-log-${{ github.run_attempt }}
-    path: /tmp/ftp-deployment-action-logs
-    retention-days: 90
-```
-
-```yaml
-# Job-level volumes mount for the action container (works for both
-# container and composite / docker actions in GH-hosted runners).
-# The container must be launched with a writable host path mapped
-# to its /home/lftp/.lftp-logs directory.
-```
-
-**Practical alternative while the upload is being redesigned**
-(tracked alongside #296): set `INPUT_DEBUG=true` and read the
-captured log from the run's standard log — `print_resolved_config`
-prints the configuration on success and lftp's stderr is also
-captured. This avoids the cross-container-file dance but loses
-the structured-artifact ergonomics.
-
-The log file is always written to
-`/home/lftp/.lftp-logs/run-<UTC-timestamp>.log` inside the
-container (the `log_file` output), regardless of
-`upload_log_on_failure`. Set `upload_log_on_failure: "false"`
-to silence the misleading `WARNING: failed to upload log
-artifact` notice printed by the broken code path.
-
-The artifact name uses `<run-attempt>` (the attempt number
-within the workflow run) so that re-running a failed job
-produces a separate artifact per attempt instead of
-overwriting the previous one.
 
 ## Concurrency / deployment lock
 
@@ -735,13 +661,6 @@ remote directory), give each its own lock path:
 |      max_retries=0..N)   |   + releases lock via `quote RMD` + EXIT trap
 |                          |     if it was acquired
 |                          |
-|  7. Upload log artifact  |--- BROKEN since v2.7.0 (uses a non-existent REST POST
-|     (upload_log_artifact)|    endpoint — see "Workflow artifacts (manual upload
-|                          |    on failure)" below). The log is still captured at
-|                          |    /home/lftp/.lftp-logs/run-<UTC>.log inside the
-|                          |    container; a follow-up release will switch the
-|                          |    upload to the Actions Runtime API.
-|                          |
 |  8. Result banner        |--- ERROR: UPLOAD FAILED + last lftp exit code
 |     (print_failure_      |    FTP UPLOADED FINISHED! on success
 |      banner / print_     |    FTP DRY RUN COMPLETED on dry run
@@ -909,15 +828,6 @@ leading dash, and command-separator characters (`;`, `&`, `|`, and
 `"`), while allowing valid regex/glob metacharacters such as `!`,
 backticks, and `$`. The action exits with code `2` and a clear error
 when validation fails.
-
-The `upload_log_on_failure` input is currently a no-op end-to-end:
-see "Workflow artifacts (manual upload on failure)" above for the
-supported replacement using the `log_file` output and a follow-up
-`actions/upload-artifact` step. The action does not store or
-forward `GITHUB_TOKEN` anywhere outside the broken POST request
-it issues today; that request does not interpolate the token
-into the URL, so it does not leak into the runner log even if
-`curl -v` were used.
 
 ## Changelog
 

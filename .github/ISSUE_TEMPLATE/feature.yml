@@ -47,7 +47,7 @@ body:
     id: problem
     attributes:
       label: "What are you trying to accomplish?"
-      description: "One paragraph. State the goal, the deploy pipeline it slots into, and why the current 31 inputs cannot express it. Reference specific inputs by name (server, lftp_settings, exclude, exclude_delete, dry_run, concurrency_lock, the FTP/SSL inputs, the retry/timeout inputs, upload_log_on_failure, ...) when they are close but missing the behaviour you need."
+      description: "One paragraph. State the goal, the deploy pipeline it slots into, and why the current 30 inputs cannot express it. Reference specific inputs by name (server, lftp_settings, exclude, exclude_delete, dry_run, concurrency_lock, the FTP/SSL inputs, the retry/timeout inputs, ...) when they are close but missing the behaviour you need."
       placeholder: |
         I want to ...
         Today I work around this with ... but ...
@@ -59,7 +59,7 @@ body:
     id: alternatives-tried
     attributes:
       label: "Workarounds you already tried"
-      description: "List the combinations of existing inputs you tried before filing the request. `lftp_settings` is the most common escape hatch — if you tried it, show what it missed. Other inputs worth mentioning if relevant: exclude, exclude_delete, dry_run, delete, the FTP/SSL inputs (ftp_ssl_allow, ssl_verify_certificate, ssl_check_hostname), the retry/timeout inputs (max_retries, net_*, dns_*, net_timeout), concurrency_lock, and upload_log_on_failure."
+      description: "List the combinations of existing inputs you tried before filing the request. `lftp_settings` is the most common escape hatch — if you tried it, show what it missed. Other inputs worth mentioning if relevant: exclude, exclude_delete, dry_run, delete, the FTP/SSL inputs (ftp_ssl_allow, ssl_verify_certificate, ssl_check_hostname), the retry/timeout inputs (max_retries, net_*, dns_*, net_timeout), and concurrency_lock."
       placeholder: |
         - `lftp_settings: "set ... ;"` -> result / why it did not work
         - `exclude: "..."` / `exclude_delete: "..."` -> result

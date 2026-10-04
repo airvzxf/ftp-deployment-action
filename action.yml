@@ -105,10 +105,6 @@ inputs:
     description: 'If "true", perform a dry run: lftp will compute the mirror plan but not transfer or delete any file. Useful to preview what the action would change before a destructive run. The action still exits 0 on success (i.e. on a clean dry-run plan) and 1 on a hard error.'
     required: false
     default: 'false'
-  upload_log_on_failure:
-    description: '**BROKEN** (do not rely on). If "true" (default), when the action is about to exit 1 it attempts to POST the captured lftp log to a non-existent GitHub REST endpoint and always prints `WARNING: failed to upload log artifact`. Set to "false" to silence the warning. The log file is always written to `~/.lftp-logs/run-<UTC-timestamp>.log` inside the container regardless; read it with `outputs.log_file` and upload via a follow-up `actions/upload-artifact` step (see README "Workflow artifacts (manual upload on failure)"). A follow-up release will switch the upload to the Actions Runtime API (`ACTIONS_RUNTIME_TOKEN` + `ACTIONS_RESULTS_URL`).'
-    required: false
-    default: 'true'
   concurrency_lock:
     description: 'If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory before the mirror. Implementation: lftp issues the high-level `mkdir <path>` (v2.11.0, closes #121) before the mirror and `quote RMD <path>` after; while mkdir returns 550 (lock held), the action polls up to `concurrency_lock_timeout` seconds. Uses RFC 959 MKD/RMD which every FTP server supports. The lock is released on any exit path (success, error, SIGINT, 5h timeout) by the cleanup trap. Default is "false" (no cross-runner serialization). For zero-config serialization, prefer the GitHub Actions `concurrency:` block in your workflow. Stale-lock auto-recovery (v2.9.0): if the previous holder died before RMD (runner OOM, SIGKILL, 6h job limit), a timestamp-encoded sentinel file is left at the FTP root; the next runner detects it as stale (older than `concurrency_lock_timeout`) and takes over automatically. See README "Concurrency / deployment lock" for details.'
     required: false
@@ -125,16 +121,6 @@ inputs:
     description: 'Seconds between lock acquisition attempts when `concurrency_lock` is "true". Must be > 0 (validated by lib.sh::validate_int — a 0 or empty value is rejected with exit 2 to prevent an infinite MKD loop). Default is 5, which gives 60 attempts over the default 300-second timeout. Lower values reduce the time-to-acquire after the holder releases; higher values reduce the number of MKD round-trips against the server.'
     required: false
     default: '5'
-# v2.11.3 (#197): declare the outputs that entrypoint.sh writes
-# to $GITHUB_OUTPUT. For Docker actions the runner surfaces the
-# keys regardless of whether they're declared here, but the
-# declaration (a) matches GitHub's "strongly recommended" metadata
-# guidance, (b) gives IDE autocomplete + typed-actions consumers a
-# schema, and (c) lets future contract tests catch drift between
-# action.yml outputs and the keys entrypoint.sh actually writes.
-outputs:
-  log_file:
-    description: 'Path inside the container to the captured lftp log file (e.g. /home/lftp/.lftp-logs/run-<UTC-timestamp>.log). Read it with a follow-up step that uses `actions/upload-artifact` to attach it to the run for debugging failed deployments.'
 runs:
   using: 'docker'
   image: 'Dockerfile'
