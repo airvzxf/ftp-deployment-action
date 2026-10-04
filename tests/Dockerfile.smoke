@@ -15,7 +15,7 @@
 #     did not produce lftp exit code message" instead of an apk
 #     error, making the actual problem hard to diagnose.
 #   * pulled alpine:3.23.3 + un-pinned lftp, drifting from the
-#     action image's pinned alpine@sha256:28bd5… + lftp=4.9.3-r0
+#     action image's pinned alpine@sha256:28bd5… + lftp~4.9.3
 #     so the smoke tests validated entrypoint.sh against a
 #     different runtime than the production image.
 #
@@ -35,8 +35,8 @@
 FROM alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
 RUN set -eu; apk add --no-cache \
-      lftp=4.9.3-r0 \
-      ca-certificates=20260909-r0 \
+      lftp~4.9.3 \
+      ca-certificates \
  && addgroup -S lftp \
  && adduser -S lftp -G lftp -h /home/lftp \
  && mkdir -p /home/lftp \
