@@ -91,8 +91,7 @@ jobs:
           # DL3018 as an apk rule — DL3018 is hadolint's
           # apt-get-version-pinning rule and does NOT apply to this
           # image (which uses `apk add` with every package version
-          # pinned: vsftpd=3.0.5-r3, lftp=4.9.3-r0,
-          # ca-certificates=20260909-r0 at
+          # pinned by minor at
           # tests/integration/Dockerfile.test-server:101-104). The
           # `failure-threshold: error` below silently drops DL3018's
           # warning-level finding as a side effect, so there is
@@ -179,7 +178,6 @@ jobs:
   integration:
     name: Integration tests
     runs-on: ubuntu-latest
-    # 16 scenarios + image builds exceed the previous 5-minute budget (scenario 20 alone is ~90 s).
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
