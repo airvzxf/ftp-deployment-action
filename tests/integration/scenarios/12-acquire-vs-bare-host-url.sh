@@ -28,8 +28,7 @@
 #   4. The lock dir `.lftp-deployment.lock` is absent after the
 #      EXIT trap (proves the release path also worked with the
 #      rewritten URL — release_lock_safely embeds the user too, so
-#      the EXIT trap's `run_lftp_lock_release` does not silently
-#      fail to RMD the dir).
+#      the EXIT trap does not silently fail to RMD the dir).
 #   5. The mirror's fixture files are present (proves the mirror
 #      itself ran end-to-end — the URL rewrite also affects the
 #      main mirror call, so this is the integration-level smoke

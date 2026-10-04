@@ -688,9 +688,7 @@ pass "INPUT_CONCURRENCY_LOCK=true + unreachable server fails fast with lock-acqu
 # Test 35 (v2.9.0): INPUT_CONCURRENCY_LOCK=false (default) on an
 # unreachable server must reach the mirror phase and exit with
 # the regular "UPLOAD FAILED" banner. Regression: ensures the
-# refactor of build_lock_acquire_script/build_lock_release_script
-# to no-ops in v2.9.0 did not change the disabled-lock code
-# path.
+# disabled-lock code path stays unchanged.
 # ----------------------------------------------------------------------------
 out=$(run_init "INPUT_CONCURRENCY_LOCK=false" "INPUT_MAX_RETRIES=1" 30)
 echo "${out}" | grep -q "ERROR: UPLOAD FAILED" \

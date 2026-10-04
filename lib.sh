@@ -731,46 +731,6 @@ build_mirror_command() {
 }
 
 # ------------------------------------------------------------------------------
-# build_lock_acquire_script
-#   DEPRECATED in v2.9.0. Returns empty string unconditionally.
-#
-#   In v2.8.0 this function emitted the inline `repeat --until-ok
-#   quote MKD ...` lftp script fragment that was concatenated into
-#   the mirror's lftp `-e` command. In v2.9.0 the lock work moved
-#   out of the mirror lftp invocation and into the shell-driven
-#   `acquire_lock_with_recovery` helper, so the stale-lock auto-
-#   recovery can do its LIST / parse / DELE / RMD sequence without
-#   fighting lftp's flow-control primitives (the `repeat --until-ok`
-#   retry loop has no clean way to branch into a stale-recovery
-#   sub-flow on each MKD failure).
-#
-#   The function is kept as a no-op so entrypoint.sh (which assigns
-#   its output to LOCK_ACQUIRE) does not need to change, and so the
-#   unit tests can verify the deprecation cleanly.
-#
-#   Reads: INPUT_CONCURRENCY_LOCK (ignored; always empty).
-# ------------------------------------------------------------------------------
-build_lock_acquire_script() {
-  return 0
-}
-
-# ------------------------------------------------------------------------------
-# build_lock_release_script
-#   DEPRECATED in v2.9.0. Returns empty string unconditionally.
-#
-#   In v2.8.0 this emitted `quote RMD <path>; ` to be appended to
-#   the mirror's lftp `-e` command. In v2.9.0 the release moved to
-#   `release_lock_safely` (best-effort standalone lftp invocation
-#   from the EXIT trap), which also DELEs the sentinel file (a
-#   sibling of the lock dir) — see acquire_lock_with_recovery.
-#
-#   Reads: INPUT_CONCURRENCY_LOCK (ignored; always empty).
-# ------------------------------------------------------------------------------
-build_lock_release_script() {
-  return 0
-}
-
-# ------------------------------------------------------------------------------
 # _lock_sentinel_name TIMESTAMP PID
 #   Build the canonical sentinel filename for the lock. Format:
 #
@@ -1529,40 +1489,6 @@ release_lock_safely() {
   fi
   set -e
   return 0
-}
-
-# ------------------------------------------------------------------------------
-# run_lftp_lock_release SERVER NETRC_PATH LOCK_PATH [SENTINEL] [USER]
-#   Backward-compatibility shim. Used by the EXIT trap in
-#   entrypoint.sh to release the server-side concurrency lock if
-#   the main pipeline was killed before reaching the explicit
-#   release_lock_safely call (signal, OOM, hard timeout).
-#
-#   When the lock is disabled (LOCK_PATH empty) or the netrc file
-#   is missing (the EXIT trap may run after the netrc was already
-#   removed), this function is a no-op. Otherwise it delegates to
-#   release_lock_safely with the optional SENTINEL and USER
-#   arguments.
-#
-#   Failures are silently swallowed because at this point the
-#   script is already on the way out; we do not want the cleanup
-#   itself to print spurious noise. Logs to /dev/null.
-# ------------------------------------------------------------------------------
-run_lftp_lock_release() {
-  _rlr_server=$1
-  _rlr_netrc=$2
-  _rlr_lock_path=$3
-  _rlr_sentinel=${4:-}
-  _rlr_user=${5:-}
-
-  if [ -z "${_rlr_lock_path}" ]; then
-    return 0
-  fi
-  if [ ! -f "${_rlr_netrc}" ]; then
-    return 0
-  fi
-
-  release_lock_safely "${_rlr_server}" "${_rlr_lock_path}" "${_rlr_sentinel}" "${_rlr_user}"
 }
 
 # ------------------------------------------------------------------------------

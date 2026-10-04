@@ -204,19 +204,6 @@ INPUT_REMOTE_DIR=$(normalize_dir "${INPUT_REMOTE_DIR}")
 validate_path "local_dir"  "${INPUT_LOCAL_DIR}"
 validate_path "remote_dir" "${INPUT_REMOTE_DIR}"
 MIRROR_COMMAND=$(build_mirror_command)
-# v2.11.8 (#259): LOCK_ACQUIRE / LOCK_RELEASE removed entirely.
-# The two build_lock_*_script helpers have been unconditional
-# no-ops since v2.9.0; the lock work moved out of the lftp -e
-# fragment to shell-driven helpers (acquire_lock_with_recovery
-# and release_lock_safely). The two empty positional args in
-# run_lftp_once (positions 9-10 in the old signature) were
-# always interpolated as empty into the lftp script body. The
-# helpers themselves are kept in lib.sh as no-ops so anyone
-# sourcing lib.sh continues to find the documented names.
-# Build them only to preserve the deprecation-by-print pattern
-# of the source-level compat. Output is discarded.
-build_lock_acquire_script >/dev/null
-build_lock_release_script >/dev/null
 
 # ------------------------------------------------------------------------------
 # Display the resolved configuration only when INPUT_DEBUG=true.
@@ -261,7 +248,7 @@ write_netrc "${NETRC}" "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
 #
 # v2.9.0: pass the sentinel name (if any was acquired during this
 # run) so the trap can also DELE the sentinel file. We use the
-# empty string as the default — run_lftp_lock_release falls back
+# empty string as the default — release_lock_safely falls back
 # to $ACQUIRED_LOCK_SENTINEL, which is set by acquire_lock_with_recovery.
 #
 # v2.11.2: only register the lock-release portion of the EXIT trap
@@ -278,7 +265,7 @@ write_netrc "${NETRC}" "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
 # and lock path. See tests/integration/scenarios/09-concurrency-
 # lock-e2e.sh which now also covers the default-mode trap shape.
 if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
-  trap 'run_lftp_lock_release "${INPUT_SERVER}" "${NETRC}" "${INPUT_CONCURRENCY_LOCK_PATH}" "${ACQUIRED_LOCK_SENTINEL:-}" "${INPUT_USER}"; rm -f "${NETRC}"' EXIT
+  trap 'release_lock_safely "${INPUT_SERVER}" "${INPUT_CONCURRENCY_LOCK_PATH}" "${ACQUIRED_LOCK_SENTINEL:-}" "${INPUT_USER}"; rm -f "${NETRC}"' EXIT
 else
   trap 'rm -f "${NETRC}"' EXIT
 fi
