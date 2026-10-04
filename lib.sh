@@ -200,32 +200,37 @@ validate_duration() {
 
 # ------------------------------------------------------------------------------
 # validate_glob_pattern NAME VALUE
-#   Light validation for inputs that flow into lftp's `mirror -x`
-#   / `mirror -X` command line (the regex/glob exclude inputs). v2.11.3
-#   (#160): those inputs were being validated by validate_lftp_settings
-#   since v2.11.2, which rejects `!`, backtick, `$`, and limits `;` to
-#   3. v2.11.3 closed #160 by switching to a lighter validator.
+#   Light validation for the INPUT_EXCLUDE comma-separated glob
+#   input. v2.11.3 (#160): the input was being validated by
+#   validate_lftp_settings since v2.11.2, which rejects `!`,
+#   backtick, `$`, and limits `;` to 3. v2.11.3 closed #160 by
+#   switching to a lighter validator.
 #
 #   v2.11.3.1 (post-release F2 audit): the original #160 docstring
 #   claimed the value is "a single argv slot to `mirror`, never
 #   parsed by a shell". That premise is FALSE — `build_mirror_command`
-#   concatenates the value unquoted into MIRROR_COMMAND (lib.sh:546,
-#   lib.sh:557), and `run_lftp_once` then concatenates MIRROR_COMMAND
-#   into the `lftp -e` script body (lib.sh:919). lftp 4.9.3's `-e`
-#   parser treats `;`, `&`, `|` as command separators even when they
-#   appear mid-token (verified with `lftp -e '... -x foo;echo X;...'`).
-#   Re-introduce the command-separator rejection. `!`, backtick, `$`,
-#   `"` remain allowed because they are valid PatternSet / regex
-#   metacharacters that lftp's glob / regex parser handles without
-#   command-separator semantics.
+#   concatenates the value unquoted into MIRROR_COMMAND, and
+#   `run_lftp_once` then concatenates MIRROR_COMMAND into the
+#   `lftp -e` script body. lftp 4.9.3's `-e` parser treats `;`,
+#   `&`, `|` as command separators even when they appear mid-token
+#   (verified with `lftp -e '... -X foo;echo X;...'`). So the
+#   whole-value checks reject `;`, `&`, `|`, `"`, control chars,
+#   and a leading `-` (would be misread as a `mirror` option).
+#
+#   After the whole-value checks pass, the value is split on `,`
+#   (with `set -f` brackets to disable shell globbing during the
+#   split, mirroring build_mirror_command) and each item is
+#   trimmed. An item that starts with `-` is rejected with
+#   `ERROR: <name> item <n> ...`. An item that contains an ASCII
+#   space is rejected — paths with spaces never worked
+#   (`validate_path` rejects them everywhere else; this is just
+#   consistent, not new policy). Empty items are skipped
+#   (matches build_mirror_command's behaviour).
 # ------------------------------------------------------------------------------
 validate_glob_pattern() {
   _vgp_name=$1
   _vgp_value=$2
   # Newline check via case (grep [[:cntrl:]] never matches \n).
-  # The case pattern below embeds a literal LF; this is portable
-  # POSIX and avoids the shellcheck SC3003 (bash-only $'\n')
-  # warning that the runtime (busybox ash) does not understand.
   case "${_vgp_value}" in
     *"
 "*)
@@ -249,6 +254,37 @@ validate_glob_pattern() {
       exit 2
       ;;
   esac
+  # Per-item checks after the whole-value checks so their error
+  # messages stay the same. set -f / set +f brackets the comma
+  # split so an unquoted `*.map` in the for loop does not expand
+  # against the cwd (the test for this lives in the bats suite).
+  set -f
+  _vgp_old_ifs=${IFS}
+  IFS=','
+  _vgp_idx=0
+  for _vgp_item in ${_vgp_value}; do
+    _vgp_idx=$((_vgp_idx + 1))
+    _vgp_item_trimmed=$(printf '%s' "${_vgp_item}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    [ -z "${_vgp_item_trimmed}" ] && continue
+    case "${_vgp_item_trimmed}" in
+      -*)
+        printf 'ERROR: %s item %d "%s" starts with a dash (would be misread as mirror option)\n' \
+          "${_vgp_name}" "${_vgp_idx}" "${_vgp_item_trimmed}" >&2
+        IFS=${_vgp_old_ifs}
+        set +f
+        exit 2
+        ;;
+      *' '*|*'	'*)
+        printf 'ERROR: %s item %d "%s" contains whitespace (paths with spaces never worked)\n' \
+          "${_vgp_name}" "${_vgp_idx}" "${_vgp_item_trimmed}" >&2
+        IFS=${_vgp_old_ifs}
+        set +f
+        exit 2
+        ;;
+    esac
+  done
+  IFS=${_vgp_old_ifs}
+  set +f
 }
 
 # ------------------------------------------------------------------------------
@@ -578,7 +614,6 @@ print_inputs_dump() {
     printf '  %-26s %s\n' "dns_fatal_timeout:"       "$(_indirection INPUT_DNS_FATAL_TIMEOUT)"
     printf '  %-26s %s\n' "lftp_settings:"           "$(_indirection INPUT_LFTP_SETTINGS)"
     printf '  %-26s %s\n' "exclude:"                 "$(_indirection INPUT_EXCLUDE)"
-    printf '  %-26s %s\n' "exclude_delete:"          "$(_indirection INPUT_EXCLUDE_DELETE)"
     printf '  %-26s %s\n' "debug:"                   "$(_indirection INPUT_DEBUG)"
     printf '  %-26s %s\n' "fail_on_deprecated:"      "$(_indirection INPUT_FAIL_ON_DEPRECATED)"
     printf '  %-26s %s\n' "dry_run:"                 "$(_indirection INPUT_DRY_RUN)"
@@ -594,7 +629,7 @@ print_inputs_dump() {
       NO_SYMLINKS MIRROR_VERBOSE FTP_SSL_ALLOW SSL_VERIFY_CERTIFICATE \
       SSL_CHECK_HOSTNAME FTP_PASSIVE_MODE FTP_USE_FEAT FTP_NOP_INTERVAL \
       NET_MAX_RETRIES NET_PERSIST_RETRIES NET_TIMEOUT DNS_MAX_RETRIES \
-      DNS_FATAL_TIMEOUT LFTP_SETTINGS EXCLUDE EXCLUDE_DELETE DEBUG \
+      DNS_FATAL_TIMEOUT LFTP_SETTINGS EXCLUDE DEBUG \
       FAIL_ON_DEPRECATED DRY_RUN \
       CONCURRENCY_LOCK CONCURRENCY_LOCK_PATH CONCURRENCY_LOCK_TIMEOUT \
       CONCURRENCY_LOCK_POLL_INTERVAL; do
@@ -622,18 +657,17 @@ print_inputs_dump() {
 #     <lftp-key>  <default-value>  <INPUT_var_name>
 #   The default applies when the INPUT is unset or empty.
 #
-#   v2.11.2: INPUT_EXCLUDE / INPUT_EXCLUDE_DELETE are NO LONGER
-#   emitted here. The pre-fix code emitted `set mirror:exclude` /
-#   `set mirror:exclude-file` directives, but neither variable
-#   is actually queried by lftp 4.9.3's MirrorJob when the mirror
-#   command runs (MirrorJob::AddPattern only consults
-#   `mirror:exclude-regex` as a *default* when the user passes
-#   `mirror -x`; a bare `set mirror:exclude-file` is a silent
-#   no-op). The v2.11.2 fix moves the exclude values onto the
-#   mirror command line itself (see build_mirror_command below,
-#   which appends `-x <regex>` / `-X <glob>` based on the same
-#   inputs). The action's behaviour-preserving contract for the
-#   default case (both inputs empty -> no `set` or `-x`/`-X`
+#   v2.11.2: INPUT_EXCLUDE is NO LONGER emitted here. The pre-fix
+#   code emitted `set mirror:exclude` / `set mirror:exclude-file`
+#   directives, but neither variable is actually queried by
+#   lftp 4.9.3's MirrorJob when the mirror command runs
+#   (MirrorJob::AddPattern only consults `mirror:exclude-regex` as
+#   a *default* when the user passes `mirror -x`; a bare
+#   `set mirror:exclude-file` is a silent no-op). The v2.11.2 fix
+#   moves the exclude value onto the mirror command line itself
+#   (see build_mirror_command below, which appends one `-X <item>`
+#   per comma-separated item). The action's behaviour-preserving
+#   contract for the default case (input empty -> no `set` or `-X`
 #   emitted) is preserved. See #131, #167.
 #
 #   The function still emits:
@@ -693,10 +727,10 @@ build_ftp_settings() {
     fi
     _bfs_settings="${_bfs_settings}set ${_bfs_key} ${_bfs_val};"
   done
-  # v2.11.2: INPUT_EXCLUDE / INPUT_EXCLUDE_DELETE removed from
-  # this function (no-op directives, see comment above). They are
-  # now applied via `mirror -x` / `mirror -X` in build_mirror_command.
-  # Any manual settings (B-16, already validated).
+  # v2.11.2: INPUT_EXCLUDE removed from this function (no-op
+  # directives, see comment above). It is now applied via `-X <item>`
+  # in build_mirror_command. Any manual settings (B-16, already
+  # validated).
   _bfs_extra=$(_indirection "INPUT_LFTP_SETTINGS")
   if [ -n "${_bfs_extra}" ]; then
     _bfs_settings="${_bfs_settings} ${_bfs_extra};"
@@ -745,34 +779,33 @@ build_mirror_command() {
     _bmc_command="${_bmc_command} --delete"
   fi
 
-  # v2.11.2: INPUT_EXCLUDE / INPUT_EXCLUDE_DELETE. lftp's `mirror`
-  # command takes `-x <regex>` to exclude files matching a POSIX
-  # regex. The pre-fix code emitted `set mirror:exclude-regex ...`
-  # into FTP_SETTINGS, but that variable is only consulted by lftp
-  # when `mirror -x` is also given — a `set` alone is a silent
-  # no-op in lftp 4.9.3. So the action's INPUT_EXCLUDE /
-  # INPUT_EXCLUDE_DELETE inputs have been broken since v2.5.0.
-  # The fix moves the exclude values onto the mirror command line
-  # itself, which is what actually applies them. See #131, #167.
+  # INPUT_EXCLUDE: comma-separated shell globs, one `mirror -X <item>`
+  # per item, in order. lftp's `-X` flag applies the pattern to BOTH
+  # upload and delete operations, which is what the original docs
+  # promised for both the upload and delete directions.
+  # No `-x` (regex) anywhere: the regex semantics were a footgun for
+  # users who expected `*.bak` to "just work".
   #
-  # INPUT_EXCLUDE -> `mirror -x <regex>` (POSIX ERE, NOT a shell
-  # glob). Users who currently pass `*.bak` etc. will need to
-  # convert to `.*\.bak` (documented in CHANGELOG and the
-  # action.yml input descriptions below).
+  # `set -f` / `set +f` brackets the comma split: without it, an
+  # unquoted `*.map` in a `for` loop expands against the files in the
+  # current directory (the build dir has `tests/`, `Makefile`, etc.),
+  # which silently turns `-X *.map` into `-X tests-folder.Makefile`.
+  # See #131, #167.
   _bmc_exclude=$(_indirection "INPUT_EXCLUDE")
   if [ -n "${_bmc_exclude}" ]; then
-    _bmc_command="${_bmc_command} -x ${_bmc_exclude}"
-  fi
-
-  # INPUT_EXCLUDE_DELETE -> `mirror -X <glob>` (POSIX glob syntax,
-  # lftp's PatternSet::Glob). The action surface keeps the
-  # INPUT_EXCLUDE vs INPUT_EXCLUDE_DELETE naming for API stability,
-  # but lftp 4.9.3's `-X` flag applies the pattern to BOTH upload
-  # and delete operations (same as `-x`) — there is no separate
-  # delete-only-exclude variable in lftp 4.9.3.
-  _bmc_exclude_delete=$(_indirection "INPUT_EXCLUDE_DELETE")
-  if [ -n "${_bmc_exclude_delete}" ]; then
-    _bmc_command="${_bmc_command} -X ${_bmc_exclude_delete}"
+    set -f
+    _bmc_old_ifs=${IFS}
+    IFS=','
+    for _bmc_item in ${_bmc_exclude}; do
+      # Trim leading/trailing whitespace; skip empty items (",," or
+      # trailing ",").
+      _bmc_item_trimmed=$(printf '%s' "${_bmc_item}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+      if [ -n "${_bmc_item_trimmed}" ]; then
+        _bmc_command="${_bmc_command} -X ${_bmc_item_trimmed}"
+      fi
+    done
+    IFS=${_bmc_old_ifs}
+    set +f
   fi
 
   # Dry run: compute the mirror plan but do not transfer or delete

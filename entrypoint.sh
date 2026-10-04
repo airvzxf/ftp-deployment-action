@@ -72,7 +72,6 @@ set -o pipefail
 : "${INPUT_DNS_FATAL_TIMEOUT:=}"
 : "${INPUT_LFTP_SETTINGS:=}"
 : "${INPUT_EXCLUDE:=}"
-: "${INPUT_EXCLUDE_DELETE:=}"
 : "${INPUT_DEBUG:=}"
 : "${INPUT_FAIL_ON_DEPRECATED:=}"
 : "${INPUT_DRY_RUN:=}"
@@ -172,7 +171,6 @@ validate_path "server" "${INPUT_SERVER}"
 # since v2.11.2), so they need a lighter validator that allows
 # glob/regex metacharacters like `!`, `;`, `$`, backtick.
 validate_glob_pattern "exclude"        "${INPUT_EXCLUDE}"
-validate_glob_pattern "exclude_delete" "${INPUT_EXCLUDE_DELETE}"
 # Concurrency lock: validate path and integers only when enabled,
 # to keep the validation surface tight for the common case
 # (concurrency_lock=false). validate_int already rejects negatives

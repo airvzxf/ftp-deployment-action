@@ -471,7 +471,7 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "validate_glob_pattern accepts a glob with backtick, dollar, !, space" {
+@test "validate_glob_pattern accepts a glob with backtick, dollar and !" {
   # v2.11.3.1 (post-release F2 audit): the v2.11.3 fix accepted `;`
   # and `"` on the premise that the value is "a single argv slot
   # to mirror, never parsed by a shell". That premise was wrong:
@@ -479,10 +479,11 @@ setup() {
   # `lftp -e` script body, and lftp 4.9.3's parser treats `;`, `&`,
   # `|`, and `"` as command separators / string delimiters even
   # mid-token. So `;`, `&`, `|`, `"` are now rejected (alongside
-  # leading-dash and control chars); backtick, dollar, `!`, and
-  # space remain accepted as legitimate PatternSet / regex
-  # metacharacters.
-  run validate_glob_pattern "exclude" 'foo$bar`baz!qux and a space'
+  # leading-dash and control chars); backtick, dollar, and `!`
+  # remain accepted as legitimate PatternSet metacharacters.
+  # Whitespace is rejected per-item in v2.12 (paths with spaces
+  # never worked — validate_path rejects them everywhere else).
+  run validate_glob_pattern "exclude" 'foo$bar`baz!qux'
   [ "$status" -eq 0 ]
 }
 

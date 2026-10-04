@@ -204,20 +204,23 @@ setup() {
 }
 
 # ----------------------------------------------------------------------------
-# build_ftp_settings: pattern-exclusion inputs (exclude / exclude_delete)
+# build_ftp_settings: pattern-exclusion inputs (INPUT_EXCLUDE only;
+# INPUT_EXCLUDE_DELETE removed in v2.12 — lftp -X applies to both
+# upload and delete, so the old "upload-but-never-delete" promise
+# was never achievable)
 # ----------------------------------------------------------------------------
 
-@test "build_ftp_settings: with empty INPUT_EXCLUDE and empty INPUT_EXCLUDE_DELETE produces 11 directives (no exclude injection)" {
+@test "build_ftp_settings: with empty INPUT_EXCLUDE produces 11 directives (no exclude injection)" {
   unset INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME \
         INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
         INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
         INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS \
-        INPUT_EXCLUDE INPUT_EXCLUDE_DELETE
+        INPUT_EXCLUDE
   run build_ftp_settings
   [ "$status" -eq 0 ]
   n=$(printf '%s' "$output" | grep -oE 'set ' | wc -l | tr -d ' ')
   [ "$n" -eq 11 ]
-  # mirror:exclude and mirror:exclude-file must NOT appear.
+  # mirror:exclude / mirror:exclude-file / mirror:exclude-regex must NOT appear.
   [[ "$output" != *"mirror:exclude"* ]]
 }
 
@@ -226,41 +229,8 @@ setup() {
   unset INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME \
         INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
         INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
-        INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS \
-        INPUT_EXCLUDE_DELETE
-  INPUT_EXCLUDE=".*\.map"
-  run build_ftp_settings
-  [ "$status" -eq 0 ]
-  [[ "$output" != *"mirror:exclude"* ]]
-  [[ "$output" != *"mirror:exclude-file"* ]]
-  [[ "$output" != *"mirror:exclude-regex"* ]]
-  n=$(printf '%s' "$output" | grep -oE 'set ' | wc -l | tr -d ' ')
-  [ "$n" -eq 11 ]
-}
-
-@test "build_ftp_settings: INPUT_EXCLUDE_DELETE no longer emits a `set mirror:exclude*` directive (moved to build_mirror_command)" {
-  unset INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME \
-        INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
-        INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
-        INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS \
-        INPUT_EXCLUDE
-  INPUT_EXCLUDE_DELETE=".*\.bak"
-  run build_ftp_settings
-  [ "$status" -eq 0 ]
-  [[ "$output" != *"mirror:exclude"* ]]
-  [[ "$output" != *"mirror:exclude-file"* ]]
-  [[ "$output" != *"mirror:exclude-regex"* ]]
-  n=$(printf '%s' "$output" | grep -oE 'set ' | wc -l | tr -d ' ')
-  [ "$n" -eq 11 ]
-}
-
-@test "build_ftp_settings: with both INPUT_EXCLUDE and INPUT_EXCLUDE_DELETE, neither appears in the output" {
-  unset INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME \
-        INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
-        INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
         INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS
-  INPUT_EXCLUDE=".*\.map"
-  INPUT_EXCLUDE_DELETE=".*\.bak"
+  INPUT_EXCLUDE="*.map"
   run build_ftp_settings
   [ "$status" -eq 0 ]
   [[ "$output" != *"mirror:exclude"* ]]
@@ -268,37 +238,6 @@ setup() {
   [[ "$output" != *"mirror:exclude-regex"* ]]
   n=$(printf '%s' "$output" | grep -oE 'set ' | wc -l | tr -d ' ')
   [ "$n" -eq 11 ]
-}
-
-# ----------------------------------------------------------------------------
-# build_mirror_command (v2.11.2 INPUT_EXCLUDE / INPUT_EXCLUDE_DELETE)
-# ----------------------------------------------------------------------------
-
-@test "build_mirror_command: INPUT_EXCLUDE=.*\\.map appends '-x .*\\.map'" {
-  unset INPUT_MIRROR_VERBOSE INPUT_NO_SYMLINKS INPUT_DELETE INPUT_DRY_RUN
-  INPUT_EXCLUDE='.*\.map'
-  run build_mirror_command
-  [ "$status" -eq 0 ]
-  [ "$output" = "mirror --continue --reverse --verbose=1 -x .*\\.map" ]
-}
-
-@test "build_mirror_command: INPUT_EXCLUDE_DELETE=.*\\.bak appends '-X .*\\.bak'" {
-  unset INPUT_MIRROR_VERBOSE INPUT_NO_SYMLINKS INPUT_DELETE INPUT_DRY_RUN INPUT_EXCLUDE
-  INPUT_EXCLUDE_DELETE='.*\.bak'
-  run build_mirror_command
-  [ "$status" -eq 0 ]
-  [ "$output" = "mirror --continue --reverse --verbose=1 -X .*\\.bak" ]
-}
-
-@test "build_mirror_command: both exclude flags appear with INPUT_DELETE=true combo" {
-  unset INPUT_MIRROR_VERBOSE INPUT_NO_SYMLINKS
-  INPUT_DELETE="true"
-  INPUT_EXCLUDE='.*\.tmp'
-  INPUT_EXCLUDE_DELETE='.*\.bak'
-  unset INPUT_DRY_RUN
-  run build_mirror_command
-  [ "$status" -eq 0 ]
-  [ "$output" = "mirror --continue --reverse --verbose=1 --delete -x .*\\.tmp -X .*\\.bak" ]
 }
 # ----------------------------------------------------------------------------
 # build_mirror_command
