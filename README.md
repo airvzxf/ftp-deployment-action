@@ -84,16 +84,11 @@ jobs:
           local_dir: "./public_html"
 ```
 
-> **Pin to a specific tag (recommended)**: The `@v2` floating
-> major alias is **stale** — it still points at the v2.0.x-era
-> image and the release pipeline does not move it, so following
-> it silently skips every fix between v2.1.0 and the present
-> (notably v2.11.3 CRITICAL RCE fix, the v2.11.0 HOME/netrc fix,
-> the v2.11.6 lock hardening, and the v2.11.7 / v2.11.8
-> input-validator batch). Pin to a specific tag (the examples
-> below use `@v2.11.14`) or a full commit SHA. Always avoid
-> `@latest`, `@main`, and `@master` — they move under you and
-> can introduce regressions.
+> **Pin to a specific tag (recommended)**: use an exact release
+> such as `@v2.11.14` (the examples below use it) or a full commit
+> SHA. Floating refs (`@v2`, `@v1`, `@latest`, `@main`, `@master`)
+> are not moved by the release pipeline, so they can lag behind
+> the latest release.
 >
 > **Verify a tag's signature before pinning to it**:
 > `scripts/verify-tag.sh <tag>` checks the tag against the
@@ -104,6 +99,19 @@ jobs:
 > release pipeline's `verify-tag-signature` job runs the same
 > check on every push before any image is published.
 
+## Upgrading from v1.x or @latest
+
+v1.x accepted any TLS certificate. Since v2.0.0 `ssl_verify_certificate`
+defaults to `true`. Plain FTP to an IP address works unchanged. FTPS to
+an IP address, or to a server with a self-signed certificate, needs one
+extra input:
+
+```yaml
+ssl_verify_certificate: 'false'
+```
+
+The `@latest` tag now points to the current v2 release.
+
 ## Publishing targets (v2.10.0+)
 
 Every tag is published to **two registries by default** (ghcr.io + Docker Hub
@@ -112,7 +120,7 @@ when configured); a third (ECR Public) is currently disabled — see below:
 | Registry | Image | How to consume |
 |---|---|---|
 | GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.11.14` | `uses: airvzxf/ftp-deployment-action@v2.11.14` (the example above) |
-| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.11.14` | `uses: docker://docker.io/airvzxf/ftp-deployment-action@v2.11.14` |
+| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.11.14` | `uses: docker://docker.io/airvzxf/ftp-deployment-action:v2.11.14` |
 
 Both carry the same OCI image bytes (one `docker buildx build`,
 one digest), the same `cosign` keyless signature
@@ -343,7 +351,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | local_dir              | Local directory.                                                                      | No       | "./"    | "./public_html"                                                                                   |
 | remote_dir             | Remote directory.                                                                     | No       | "./"    | "/www/user/home"                                                                                  |
 | max_retries            | Number of retries on error. `0` = retry forever; `1` = no retries.                  | No       | 10      | N/A                                                                                               |
-| delete                 | Delete all the files inside of the remote directory before the upload process.        | No       | false   | N/A                                                                                               |
+| delete                 | Delete remote files that do not exist locally (files matching `exclude` are kept).   | No       | false   | N/A                                                                                               |
 | no_symlinks            | Do not create symbolic links.                                                         | No       | true    | N/A                                                                                               |
 | mirror_verbose         | Mirror verbosity level.                                                               | No       | 1       | N/A                                                                                               |
 | ftp_ssl_allow          | FTP - Allow SSL encryption.                                                           | No       | true    | N/A                                                                                               |
@@ -397,30 +405,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Here is the deployment action
-  - name: Upload from public_html via FTP
-    uses: airvzxf/ftp-deployment-action@v2.11.14
-    with:
-      server: ${{ secrets.FTP_SERVER }}
-      user: ${{ secrets.FTP_USERNAME }}
-      password: ${{ secrets.FTP_PASSWORD }}
-      local_dir: "./public_html"
-      remote_dir: "/www/sub-domain/games/myself"
-      delete: "true"
-      max_retries: "7"
-      no_symlinks: "false"
-      ftp_ssl_allow: "false"
-      ssl_verify_certificate: "true"
-      ssl_check_hostname: "false"
-      ftp_use_feat: "true"
-      ftp_nop_interval: "9"
-      net_max_retries: "0"
-      net_persist_retries: "11"
-      net_timeout: "13s"
-      dns_max_retries: "17"
-      dns_fatal_timeout: "never"
-      lftp_settings: "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';"
-      exclude: "*.map, *.bak, node_modules/"
-      dry_run: "false"
+      - name: Upload from public_html via FTP
+        uses: airvzxf/ftp-deployment-action@v2.11.14
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          user: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local_dir: "./public_html"
+          remote_dir: "/www/sub-domain/games/myself"
+          delete: "true"
+          max_retries: "7"
+          no_symlinks: "false"
+          ftp_ssl_allow: "false"
+          ssl_verify_certificate: "true"
+          ssl_check_hostname: "false"
+          ftp_use_feat: "true"
+          ftp_nop_interval: "9"
+          net_max_retries: "3"
+          net_persist_retries: "2"
+          net_timeout: "13s"
+          dns_max_retries: "17"
+          dns_fatal_timeout: "never"
+          lftp_settings: "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';"
+          exclude: "*.map, *.bak, node_modules/"
+          dry_run: "false"
 ```
 
 ### Pattern exclusions
@@ -659,7 +667,7 @@ remote directory), give each its own lock path:
 Main features:
 
 - Copy all the files inside the specific folder from your GitHub repository to the specific folder in your server.
-- Option to delete all the files in the specific remote folder before the upload.
+- Option to delete remote files that no longer exist in the local folder.
 - Using Alpine container means small size and faster creation of the container.
 - Show messages in the console logs for every executed command.
 
