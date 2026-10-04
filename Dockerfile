@@ -2,10 +2,11 @@ FROM alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec7
 
 # B-13: pin the base image by digest. Bump via the release pipeline.
 #
-# Pin package versions by minor (pkg~X.Y) or not at all (ca-certificates
-# follows the alpine index). The '-rN' alpine revisions retire out of
-# band; pinning by prefix keeps the build reproducible without forcing a
-# release for every revision bump.
+# Pin package versions by version prefix (pkg~X.Y.Z), not by Alpine -rN
+# revision; or not pinned at all (ca-certificates follows the alpine
+# index). The '-rN' alpine revisions retire out of band; pinning by
+# prefix keeps the build reproducible without forcing a release for
+# every revision bump.
 RUN apk add --no-cache \
       lftp~4.9.3 \
       ca-certificates \

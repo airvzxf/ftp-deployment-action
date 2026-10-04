@@ -39,8 +39,8 @@
 #     goes away.
 # Bump this digest in lockstep with Dockerfile:1.
 #
-# Packages installed at build time (hadolint DL3018 — package versions
-# pinned by minor, same pattern the action Dockerfile uses):
+# Packages installed at build time (hadolint DL3018 — versions pinned
+# by version prefix, same pattern the action Dockerfile uses):
 #   * vsftpd   — the FTP/FTPS daemon the scenarios exercise.
 #                vsftpd pulls libssl as a package dep, which is
 #                all the FTPS server image needs at runtime; we

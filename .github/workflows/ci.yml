@@ -91,7 +91,7 @@ jobs:
           # DL3018 as an apk rule — DL3018 is hadolint's
           # apt-get-version-pinning rule and does NOT apply to this
           # image (which uses `apk add` with every package version
-          # pinned by minor at
+          # pinned by version prefix, not by Alpine -rN revision, at
           # tests/integration/Dockerfile.test-server:101-104). The
           # `failure-threshold: error` below silently drops DL3018's
           # warning-level finding as a side effect, so there is
@@ -171,10 +171,7 @@ jobs:
   # against the 20s wait_for_port deadline in CI. Building the
   # FTPS test server image in this job (rather than per-scenario)
   # eliminates that race.
-  # The timeout-minutes: 5 reflects the budget defined in #117's
-  # acceptance criteria; previously this section had no explicit
-  # timeout (default 360 min), which let regressions hide behind
-  # GH Actions' default budget. Pinning it forces the harness to stay fast.
+  # 16 scenarios plus image builds need more than 5 minutes.
   integration:
     name: Integration tests
     runs-on: ubuntu-latest
