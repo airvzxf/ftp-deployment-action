@@ -1,8 +1,7 @@
 name: 'FTP Deployment'
 author: 'Israel Roldan <israel.alberto.rv@gmail.com>'
 description: >-
-  Copy all the files and folders via FTP from your Git project to your server in a specific path,
-  delete remote folder before.
+  Copy all the files and folders via FTP from your Git project to your server in a specific path.
 inputs:
   server:
     description: 'FTP Server.'
@@ -22,7 +21,7 @@ inputs:
     required: false
     default: './'
   delete:
-    description: 'Delete all the files inside of the remote directory.'
+    description: 'If "true", remove remote files that do not exist in `local_dir` (lftp `mirror --delete`); files matching `exclude` are kept.'
     required: false
     default: 'false'
   max_retries:
@@ -82,11 +81,11 @@ inputs:
     required: false
     default: '10s'
   lftp_settings:
-    description: 'Additional raw lftp settings, e.g. "set cache:cache-empty-listings true; set cmd:status-interval 1s;". Appended to the lftp `-e` command; rejected if it contains control characters, backtick, `$`, `!`, more than 3 `;`-chained directives, or a newline (see lib.sh::validate_lftp_settings; newline rejection added in v2.11.3.1 / PR #246 — grep [[:cntrl:]] does not match \n, the case-based check is the load-bearing one). `exclude` uses the lighter `validate_glob_pattern` instead (v2.11.3, #160) since it flows onto the `mirror` command line as one argv slot per comma-separated item, not into the `-e` script body.'
+    description: 'Additional raw lftp settings, e.g. "set cache:cache-empty-listings true; set cmd:status-interval 1s;". Appended to the lftp `-e` command; rejected if it contains control characters, backtick, `$`, `!`, more than 3 `;`-chained directives, or a newline. `exclude` uses a lighter validator since it flows onto the `mirror` command line as one argv slot per comma-separated item, not into the `-e` script body.'
     required: false
     default: ''
   exclude:
-    description: 'Comma-separated shell globs (e.g. `*.map, *.bak, node_modules/`). Matching files are neither uploaded nor deleted. Validated by `validate_glob_pattern`: rejects `;`, `&`, `|`, `"` as lftp `-e` command separators even mid-token, plus embedded newlines, other `[[:cntrl:]]` control characters, and a leading `-`. Per-item (v2.12): rejects an item that contains whitespace or starts with a dash. Allowed metacharacters are `!`, backtick, and `$`.'
+    description: 'Comma-separated shell globs (e.g. `*.map, *.bak, node_modules/`). Matching files are neither uploaded nor deleted. Items must not contain spaces or start with `-`.'
     required: false
     default: ''
   debug:
@@ -102,7 +101,7 @@ inputs:
     required: false
     default: 'false'
   concurrency_lock:
-    description: 'If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory before the mirror. Implementation: lftp issues the high-level `mkdir <path>` (v2.11.0, closes #121) before the mirror and `quote RMD <path>` after; while mkdir returns 550 (lock held), the action polls up to `concurrency_lock_timeout` seconds. Uses RFC 959 MKD/RMD which every FTP server supports. The lock is released on any exit path (success, error, SIGINT, 5h timeout) by the cleanup trap. Default is "false" (no cross-runner serialization). For zero-config serialization, prefer the GitHub Actions `concurrency:` block in your workflow. Stale-lock auto-recovery (v2.9.0): if the previous holder died before RMD (runner OOM, SIGKILL, 6h job limit), a timestamp-encoded sentinel file is left at the FTP root; the next runner detects it as stale (older than `concurrency_lock_timeout`) and takes over automatically. See README "Concurrency / deployment lock" for details.'
+    description: 'If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory before the mirror. Implementation: lftp issues the high-level `mkdir <path>` before the mirror and `quote RMD <path>` after; while mkdir returns 550 (lock held), the action polls up to `concurrency_lock_timeout` seconds. Uses RFC 959 MKD/RMD which every FTP server supports. The lock is released on any exit path (success, error, SIGINT, 5h timeout) by the cleanup trap. Default is "false" (no cross-runner serialization). For zero-config serialization, prefer the GitHub Actions `concurrency:` block in your workflow. Stale-lock auto-recovery: if the previous holder died before RMD (runner OOM, SIGKILL, 6h job limit), a timestamp-encoded sentinel file is left at the FTP root; the next runner detects it as stale (older than `concurrency_lock_timeout`) and takes over automatically. See README "Concurrency / deployment lock" for details.'
     required: false
     default: 'false'
   concurrency_lock_path:

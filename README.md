@@ -118,7 +118,7 @@ workflow silently.
 > release pipeline's `verify-tag-signature` job runs the same
 > check on every push before any image is published.
 
-## Publishing targets (v2.10.0+)
+## Publishing targets
 
 Every tag is published to **two registries by default** (ghcr.io + Docker Hub
 when configured); a third (ECR Public) is currently disabled — see below:
@@ -126,7 +126,7 @@ when configured); a third (ECR Public) is currently disabled — see below:
 | Registry | Image | How to consume |
 |---|---|---|
 | GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.11.14` | `uses: airvzxf/ftp-deployment-action@v2.11.14` (the example above) |
-| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.11.14` | `uses: docker://docker.io/airvzxf/ftp-deployment-action@v2.11.14` |
+| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.11.14` | `uses: docker://docker.io/airvzxf/ftp-deployment-action:v2.11.14` |
 
 Both carry the same OCI image bytes (one `docker buildx build`,
 one digest), the same `cosign` keyless signature
@@ -140,14 +140,13 @@ release pipeline emits a `::notice::` and skips that registry —
 the v2.9.0 behaviour (ghcr.io only) is preserved bit-for-bit.
 
 > **Note on ECR Public**: A third registry (`public.ecr.aws/m2z1h0m9/...`)
-> was added in v2.10.0 for enterprise visibility. It is **temporarily
-> disabled** as of the post-v2.11.1 commits because the AWS IAM
-> role's OIDC trust policy is no longer aligned with this repo,
-> and the maintainer does not currently have access to the AWS
-> account. The `release.yml` ECR Public steps are commented out
-> (not deleted) so re-enabling is a one-line change in two places
-> when the trust policy is fixed. See the "Re-enable ECR Public"
-> section below for the exact diff.
+> exists for enterprise visibility but is **currently disabled** —
+> the AWS IAM role's OIDC trust policy is no longer aligned with
+> this repo, and the maintainer does not currently have access to
+> the AWS account. The `release.yml` ECR Public steps are
+> commented out (not deleted) so re-enabling is a one-line change
+> in two places when the trust policy is fixed. See the "Re-enable
+> ECR Public" section below for the exact diff.
 
 ### Maintainer setup: publishing to Docker Hub
 
@@ -355,7 +354,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | local_dir              | Local directory.                                                                      | No       | "./"    | "./public_html"                                                                                   |
 | remote_dir             | Remote directory.                                                                     | No       | "./"    | "/www/user/home"                                                                                  |
 | max_retries            | Number of retries on error. `0` = retry forever; `1` = no retries.                  | No       | 10      | N/A                                                                                               |
-| delete                 | Delete all the files inside of the remote directory before the upload process.        | No       | false   | N/A                                                                                               |
+| delete                 | If "true", remove remote files that do not exist in `local_dir` (lftp `mirror --delete`); files matching `exclude` are kept. | No       | false   | N/A                                                                                               |
 | no_symlinks            | Do not create symbolic links.                                                         | No       | true    | N/A                                                                                               |
 | mirror_verbose         | Mirror verbosity level.                                                               | No       | 1       | N/A                                                                                               |
 | ftp_ssl_allow          | FTP - Allow SSL encryption.                                                           | No       | true    | N/A                                                                                               |
@@ -425,8 +424,8 @@ jobs:
       ssl_check_hostname: "false"
       ftp_use_feat: "true"
       ftp_nop_interval: "9"
-      net_max_retries: "0"
-      net_persist_retries: "11"
+      net_max_retries: "1"
+      net_persist_retries: "0"
       net_timeout: "13s"
       dns_max_retries: "17"
       dns_fatal_timeout: "never"
@@ -689,7 +688,7 @@ remote directory), give each its own lock path:
 Main features:
 
 - Copy all the files inside the specific folder from your GitHub repository to the specific folder in your server.
-- Option to delete all the files in the specific remote folder before the upload.
+- Optional mirror `--delete` to drop files that exist on the server but not in `local_dir`; files matching `exclude` are kept.
 - Using Alpine container means small size and faster creation of the container.
 - Show messages in the console logs for every executed command.
 
@@ -766,19 +765,14 @@ Self-hosted runners forward environment variables from the host
 into the container by default. In practice this means `HOME` is
 copied from the runner process, which is usually `/github/home`
 (the GitHub Actions Runner service) or `/home/runner` (bare-metal).
-Since **v2.11.0**, the action ignores the inherited `HOME` and pins
-`HOME=/home/lftp` unconditionally — `entrypoint.sh` writes the
-credentials to `/home/lftp/.netrc` (the path the `Dockerfile`
-guarantees to be writable for the `lftp` user), so the deployment
-succeeds even when the host `HOME` is read-only or owned by a
-different uid.
+The action ignores the inherited `HOME` and pins `HOME=/home/lftp`
+unconditionally — `entrypoint.sh` writes the credentials to
+`/home/lftp/.netrc` (the path the `Dockerfile` guarantees to be
+writable for the `lftp` user), so the deployment succeeds even
+when the host `HOME` is read-only or owned by a different uid.
 
-On older versions (`v2.10.0` and below) the action wrote the
-credentials to `${HOME}/.netrc`, which made the `.netrc` write
-fail with `can't create /<HOME>/.netrc: Permission denied` on
-self-hosted runners with the default `HOME` forwarding. If you
-cannot yet upgrade to v2.11.0, the workaround is to pin `HOME`
-explicitly on the step:
+If you need the action to honour a different home for any reason, pin
+`HOME` explicitly on the step:
 
 ```yaml
 - uses: airvzxf/ftp-deployment-action@v2.11.14
@@ -794,8 +788,7 @@ explicitly on the step:
 
 The `env` block on the action step ships only `HOME` to the
 container, leaving every other environment variable forwarded
-normally. This is the documented escape hatch for v2.10.0 and
-remains valid on v2.11.0+.
+normally.
 
 See also `SECURITY.md` → "Self-hosted runners" for the security
 implications of environment forwarding and how the action's
@@ -819,16 +812,15 @@ are all validated against the same deny-list: `..` path-traversal
 components, leading dashes (which `lftp` would misread as options),
 control characters, newlines, double quotes, shell metacharacters
 (`;`, `&`, `|`, backtick, and dollar), `!` (lftp's shell escape),
-and (since v2.11.8) ASCII space — a value like `/my data/site/`
-used to silently break the lftp `-e` tokeniser, now exits `2`.
-The `server` input additionally rejects URL userinfo that
-embeds a password (the `ftp://user:pass@host` form, v2.11.8
-#195 — lftp 4.9.3 would otherwise authenticate with the embedded
-credentials and silently bypass the action's documented
-credential source). `lftp_settings` is lightly sanitised:
-control characters, newlines, backtick, dollar, and `!` are
-rejected, and no more than three semicolon-chained directives
-are allowed.
+and ASCII space — a value like `/my data/site/` exits `2` instead
+of silently breaking the lftp `-e` tokeniser. The `server` input
+additionally rejects URL userinfo that embeds a password (the
+`ftp://user:pass@host` form — lftp would otherwise authenticate
+with the embedded credentials and silently bypass the action's
+documented credential source). `lftp_settings` is lightly
+sanitised: control characters, newlines, backtick, dollar, and
+`!` are rejected, and no more than three semicolon-chained
+directives are allowed.
 
 The `exclude` input uses a separate `validate_glob_pattern`
 validator because its value is passed to the lftp `mirror`
