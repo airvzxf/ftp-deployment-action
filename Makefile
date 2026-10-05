@@ -88,7 +88,7 @@ shellcheck:
 	# tests/integration/scenarios/*.sh source tests/integration/lib/common.sh).
 	# Pass common.sh alongside each scenario so shellcheck's source= path
 	# resolution can find the shared library.
-	shellcheck -x entrypoint.sh lib.sh tests/contract.sh tests/smoke.sh tests/release-smoke.sh scripts/backfill-releases.sh tests/acceptance/static.sh
+	shellcheck -x entrypoint.sh lib.sh tests/contract.sh tests/smoke.sh tests/release-smoke.sh tests/acceptance/static.sh
 	shellcheck -x tests/integration/lib/common.sh tests/integration/run-integration-tests.sh
 	shellcheck -x tests/integration/scenarios/*.sh
 	# v2.11.13 (#317): include the FTPS-cert helper and the
