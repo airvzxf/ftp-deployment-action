@@ -771,25 +771,6 @@ unconditionally — `entrypoint.sh` writes the credentials to
 writable for the `lftp` user), so the deployment succeeds even
 when the host `HOME` is read-only or owned by a different uid.
 
-If you need the action to honour a different home for any reason, pin
-`HOME` explicitly on the step:
-
-```yaml
-- uses: airvzxf/ftp-deployment-action@v2.11.14
-  env:
-    HOME: /home/lftp        # override the runner's HOME
-  with:
-    server: ftp://example.com
-    user: ${{ secrets.FTP_USERNAME }}
-    password: ${{ secrets.FTP_PASSWORD }}
-    local_dir: .
-    remote_dir: /www
-```
-
-The `env` block on the action step ships only `HOME` to the
-container, leaving every other environment variable forwarded
-normally.
-
 See also `SECURITY.md` → "Self-hosted runners" for the security
 implications of environment forwarding and how the action's
 `.netrc` path pin keeps the password out of argv in every
