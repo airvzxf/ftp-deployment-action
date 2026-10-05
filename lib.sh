@@ -659,8 +659,8 @@ print_inputs_dump() {
 #     <lftp-key>  <default-value>  <INPUT_var_name>
 #   The default applies when the INPUT is unset or empty.
 #
-#   Defaults here must equal action.yml (the bats parity test in
-#   tests/acceptance/static.sh enforces this). GitHub injects every
+#   Defaults here must equal action.yml (enforced by tests/acceptance
+#   — static.sh S2 and behavior.bats test 1). GitHub injects every
 #   action.yml default as INPUT_* on real runs; local smoke and
 #   integration tests do not, so the entrypoint.sh `:=` fallback
 #   chain is the only thing keeping tests and users in sync.

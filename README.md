@@ -84,16 +84,30 @@ jobs:
           local_dir: "./public_html"
 ```
 
+## Upgrading from v1.x or `@latest`
+
+v1.x accepted any TLS certificate. `ssl_verify_certificate` now
+defaults to `true`, so plain FTP to an IP address works unchanged but
+FTPS to an IP address or to a self-signed certificate needs:
+
+```yaml
+        with:
+          ssl_verify_certificate: 'false'
+```
+
+The `@latest` tag now points to the current v2 release. Pin a specific
+tag (e.g. `@v2.11.14`) so a future major version does not break your
+workflow silently.
+
 > **Pin to a specific tag (recommended)**: The `@v2` floating
 > major alias is **stale** — it still points at the v2.0.x-era
 > image and the release pipeline does not move it, so following
 > it silently skips every fix between v2.1.0 and the present
-> (notably v2.11.3 CRITICAL RCE fix, the v2.11.0 HOME/netrc fix,
-> the v2.11.6 lock hardening, and the v2.11.7 / v2.11.8
-> input-validator batch). Pin to a specific tag (the examples
-> below use `@v2.11.14`) or a full commit SHA. Always avoid
-> `@latest`, `@main`, and `@master` — they move under you and
-> can introduce regressions.
+> (notably the CRITICAL RCE fix, the HOME/netrc fix, the
+> lock hardening, and the input-validator batch). Pin to a
+> specific tag (the examples below use `@v2.11.14`) or a full
+> commit SHA. Always avoid `@latest`, `@main`, and `@master`
+> — they move under you and can introduce regressions.
 >
 > **Verify a tag's signature before pinning to it**:
 > `scripts/verify-tag.sh <tag>` checks the tag against the
@@ -160,10 +174,9 @@ have secrets configured. The ghcr.io path is unaffected.
 
 ### Re-enable ECR Public (when AWS access is restored)
 
-ECR Public publishing is **disabled by default** as of
-v2.11.11 (#216). All four ECR Public sites in
-`.github/workflows/release.yml` are under `# DISABLED:`
-preambles:
+ECR Public publishing is **disabled by default**. All four ECR
+Public sites in `.github/workflows/release.yml` are under
+`# DISABLED:` preambles:
 
 1. The ECR Public block inside the
    `Resolve tag, version and enabled registries` step
@@ -182,7 +195,7 @@ preambles:
    which is dead while `ecr_enabled=false`.
 4. The `Attach SBOM attestation to ECR Public image` step at
    the end of the `build` job — commented out, with a
-   `v2.11.11 (#216): DISABLED.` preamble.
+   `# DISABLED:` preamble.
 
 To re-enable, do **three things** (canonical runbook
 tracked in #212):
@@ -328,12 +341,11 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 > `concurrency_lock_poll_interval` accept a non-negative
 > integer without leading zeros. `max_retries: "00"` (and any
 > other `0`-prefixed integer) exits `2` rather than being
-> silently treated as `0`. v2.11.12 (F2 audit) extended the
-> same guard to the two duration inputs (`net_timeout`,
-> `dns_fatal_timeout`) so `net_timeout: "00s"` and
-> `dns_fatal_timeout: "00"` are also rejected with exit `2`
-> — they are silent typos of the `0` retry-forever sentinel,
-> not distinct values.
+> silently treated as `0`. The same guard applies to the
+> two duration inputs (`net_timeout`, `dns_fatal_timeout`):
+> `net_timeout: "00s"` and `dns_fatal_timeout: "00"` are
+> rejected with exit `2` — they are silent typos of the `0`
+> retry-forever sentinel, not distinct values.
 
 | Option                 | Description                                                                           | Required | Default | Example                                                                                           |
 |------------------------|---------------------------------------------------------------------------------------|----------|---------|---------------------------------------------------------------------------------------------------|
@@ -352,7 +364,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | ftp_passive_mode       | FTP - This can be useful if you are behind a firewall or a dumb masquerading router.  | No       | true    | N/A                                                                                               |
 | ftp_use_feat           | FTP - FEAT: Determining what extended features the FTP server supports.               | No       | false   | N/A                                                                                               |
 | ftp_nop_interval       | FTP - Delay in seconds between NOOP commands when downloading tail of a file.         | No       | 2       | N/A                                                                                               |
-| net_max_retries        | NET - Maximum number of operation without success.                                          | No       | 1       | N/A                                                                                               |
+| net_max_retries        | NET - Maximum number of operation without success.                                           | No       | 1       | N/A                                                                                               |
 | net_persist_retries    | NET - Ignore hard errors.<br> When reply 5xx errors or there is too many users.       | No       | 0       | N/A                                                                                               |
 | net_timeout            | NET - Sets the network protocol timeout.                                              | No       | 15s     | N/A                                                                                               |
 | dns_max_retries        | DNS - 0 no limit trying to lookup an address otherwise try only this number of times. | No       | 8       | N/A                                                                                               |
@@ -397,8 +409,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Here is the deployment action
-  - name: Upload from public_html via FTP
-    uses: airvzxf/ftp-deployment-action@v2.11.14
+      - name: Upload from public_html via FTP
+        uses: airvzxf/ftp-deployment-action@v2.11.14
     with:
       server: ${{ secrets.FTP_SERVER }}
       user: ${{ secrets.FTP_USERNAME }}
@@ -715,7 +727,7 @@ non-buildable image) **before** a tag is pushed.
 |------|---------|
 | `0`  | Upload finished successfully. |
 | `1`  | Upload failed after all retries; the last lftp error is printed above. |
-| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` — v2.11.8 #195 closes the credential-source bypass); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives; an `exclude` value rejected by `validate_glob_pattern` (control chars, leading dash, `;`, `&`, `|`, or `"`, or an item that contains whitespace or starts with a dash). |
+| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` — the userinfo password is rejected); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives; an `exclude` value rejected by `validate_glob_pattern` (control chars, leading dash, `;`, `&`, `|`, or `"`, or an item that contains whitespace or starts with a dash). |
 
 When the global 5-hour timeout is reached the lftp process is killed and the
 action exits with `1` (the most recent lftp exit code is also printed to the
@@ -732,7 +744,7 @@ log for debugging).
 | `mirror: Access failed: 550 ... No such file or directory` | The remote path does not exist or the FTP user has no permission to create it. | Create the `remote_dir` manually (or set `delete: false` and accept a partial mirror) and confirm the FTP user owns it. |
 | `getpeername: Connection refused` on `ftps://host:990` | The server is **not** speaking implicit FTPS — it is almost certainly explicit FTPS on port 21. The `ftps://` URL forces TLS from byte 0, which the server rejects. | Switch `server` to `ftp://host:21` and keep `ftp_ssl_allow: "true"`. See the "Plain FTP vs FTPS" table in [Security and SSL](#security-and-ssl). |
 | lftp logs `PROT command not understood` then drops the data connection | Some legacy FTPS servers do not support `PROT P` even though they accept `AUTH TLS`. lftp falls back to `PROT C` (clear data channel) by default; if the server closes the data connection instead, the action exits 1. | Add `lftp_settings: "set ftps:initial-prot C;"` to the step, or ask the hoster to enable `PROT P` server-side. |
-| `can't create /<some-path>/.netrc: Permission denied` (or `Read-only file system`) on self-hosted runners | The runner is forwarding its host `HOME` into the container. The action tried to write `<HOME>/.netrc`, but the directory is read-only or owned by a different uid than the in-container `lftp` user. | **Fixed in v2.11.0** — `entrypoint.sh` now pins `NETRC=/home/lftp/.netrc` and `export HOME=/home/lftp` regardless of any inherited `HOME`. On older versions, add `env: HOME: /home/lftp` to the step. See [Self-hosted runners](#self-hosted-runners) below for the full picture. |
+| `can't create /<some-path>/.netrc: Permission denied` (or `Read-only file system`) on self-hosted runners | The runner is forwarding its host `HOME` into the container. The action tried to write `<HOME>/.netrc`, but the directory is read-only or owned by a different uid than the in-container `lftp` user. | `entrypoint.sh` pins `NETRC=/home/lftp/.netrc` and `export HOME=/home/lftp` regardless of any inherited `HOME`. If you must keep an inherited `HOME` mapping, add `env: HOME: /home/lftp` to the step. See [Self-hosted runners](#self-hosted-runners) below for the full picture. |
 
 > **The job is still running for hours**: `lftp` is probably waiting on a
 > half-open TCP connection. Since v1.5.0 the action wraps every

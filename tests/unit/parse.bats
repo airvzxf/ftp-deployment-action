@@ -295,13 +295,10 @@ setup() {
 }
 
 @test "build_mirror_command: glob-expansion trap — INPUT_EXCLUDE='*.map' stays literal even when cwd has a.map" {
-  # v2.12 (#131): the comma-split loop in build_mirror_command is
-  # bracketed by `set -f` / `set +f` so the shell does not expand an
-  # unquoted `*.map` against the cwd. Without the brackets the for
-  # loop sees the cwd's `a.map` file and silently turns
-  # ` -X *.map` into ` -X a.map`. Run from a tmpdir that has `a.map`
-  # in it; if `set -f` ever regresses, the output will contain
-  # `a.map` instead of `*.map` and this test fails.
+  # The comma-split loop in build_mirror_command is bracketed by
+  # `set -f` / `set +f` so the shell does not expand `*.map` against
+  # the cwd. Run from a tmpdir that has `a.map`; if `set -f` ever
+  # regresses the output becomes ` -X a.map` and this test fails.
   _trap_dir=$(mktemp -d)
   touch "${_trap_dir}/a.map"
   cd "${_trap_dir}"
