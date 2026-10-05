@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@v4
       # Here is the deployment action
       - name: Upload from public_html via FTP
-        uses: airvzxf/ftp-deployment-action@v2.11.14
+        uses: airvzxf/ftp-deployment-action@v2.12.0
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -96,7 +96,7 @@ FTPS to an IP address or to a self-signed certificate needs:
 ```
 
 The `@latest` tag now points to the current v2 release. Pin a specific
-tag (e.g. `@v2.11.14`) so a future major version does not break your
+tag (e.g. `@v2.12.0`) so a future major version does not break your
 workflow silently.
 
 > **Pin to a specific tag (recommended)**: The `@v2` floating
@@ -105,7 +105,7 @@ workflow silently.
 > it silently skips every fix between v2.1.0 and the present
 > (notably the CRITICAL RCE fix, the HOME/netrc fix, the
 > lock hardening, and the input-validator batch). Pin to a
-> specific tag (the examples below use `@v2.11.14`) or a full
+> specific tag (the examples below use `@v2.12.0`) or a full
 > commit SHA. Always avoid `@latest`, `@main`, and `@master`
 > — they move under you and can introduce regressions.
 >
@@ -125,8 +125,8 @@ when configured); a third (ECR Public) is currently disabled — see below:
 
 | Registry | Image | How to consume |
 |---|---|---|
-| GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.11.14` | `uses: airvzxf/ftp-deployment-action@v2.11.14` (the example above) |
-| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.11.14` | `uses: docker://docker.io/airvzxf/ftp-deployment-action:v2.11.14` |
+| GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.12.0` | `uses: airvzxf/ftp-deployment-action@v2.12.0` (the example above) |
+| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.12.0` | `uses: docker://docker.io/airvzxf/ftp-deployment-action:v2.12.0` |
 
 Both carry the same OCI image bytes (one `docker buildx build`,
 one digest), the same `cosign` keyless signature
@@ -409,7 +409,7 @@ jobs:
       - uses: actions/checkout@v4
       # Here is the deployment action
       - name: Upload from public_html via FTP
-        uses: airvzxf/ftp-deployment-action@v2.11.14
+        uses: airvzxf/ftp-deployment-action@v2.12.0
     with:
       server: ${{ secrets.FTP_SERVER }}
       user: ${{ secrets.FTP_USERNAME }}
@@ -489,7 +489,7 @@ jobs:
       group: ftp-deploy-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - uses: airvzxf/ftp-deployment-action@v2.11.14
+      - uses: airvzxf/ftp-deployment-action@v2.12.0
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -517,7 +517,7 @@ distinct workflows pointing to the same FTP and don't want
 to share a group name), opt in to the server-side lock:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2.11.14
+- uses: airvzxf/ftp-deployment-action@v2.12.0
   with:
     server: ${{ secrets.FTP_SERVER }}
     user: ${{ secrets.FTP_USERNAME }}
@@ -597,7 +597,7 @@ production, one for staging, each writing to a different
 remote directory), give each its own lock path:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2.11.14
+- uses: airvzxf/ftp-deployment-action@v2.12.0
   with:
     concurrency_lock: "true"
     concurrency_lock_path: ".lftp-deployment.lock.prod"

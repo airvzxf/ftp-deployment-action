@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] - 2026-10-05
+
+### Fixed
+
+- The image builds again on every runner (apk packages pinned by version, not by Alpine revision).
+- The action no longer hangs with the default settings (`net_max_retries` default `1`).
+- A wrong password is reported as `530 Login incorrect` and classified as permanent (`net_persist_retries` default `0`).
+- lftp output (transferred files, server errors, the `dry_run` plan) is shown in the step log.
+
+### Changed
+
+- `exclude` is a comma-separated list of shell globs (`*.map, *.bak, node_modules/`); matching files are neither uploaded nor deleted. *Breaking for anyone using the regex syntax introduced in v2.11.2.*
+
+### Removed
+
+- `upload_log_on_failure` (it posted to a GitHub endpoint that does not exist and never uploaded anything).
+- `exclude_delete` (use `exclude`).
+- The `log_file` output (it pointed inside the destroyed container).
+- `curl` from the image.
+
+[2.11.14]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.13...v2.11.14
 ## [2.11.14] - 2026-09-07
 
 Hardening batch v2.11.14 (F2 audit round post-v2.11.13). One
@@ -992,6 +1013,7 @@ sigstore/cosign-installer repo does not publish a floating
   conscious decision rather than a silent major-version
   change that may or may not resolve.
 
+[2.12.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.14...v2.12.0
 [2.4.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.4.0...v2.4.1
 
 ## [2.3.1] - 2026-07-05
