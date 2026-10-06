@@ -29,9 +29,26 @@ setup() {
   [[ "$output" == *"::add-mask::secret"* ]]
   [[ "$output" == *"::add-mask::me"* ]]
   [[ "$output" == *"::add-mask::ftp://example.com"* ]]
-  # Exactly 3 lines.
+  [[ "$output" == *"::add-mask::example.com"* ]]
+  # Exactly 4 lines (password, user, server, server host).
   n=$(printf '%s\n' "$output" | grep -c '^::add-mask::')
-  [ "$n" -eq 3 ]
+  [ "$n" -eq 4 ]
+}
+
+@test "add_masks: masks the bare server host that lftp prints in its URLs" {
+  INPUT_SERVER="ftp://ftp.example.com:2121/www"
+  unset INPUT_PASSWORD INPUT_USER
+  run add_masks
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qx '::add-mask::ftp.example.com'
+}
+
+@test "add_masks: a bare-host server is masked once" {
+  INPUT_SERVER="ftp.example.com"
+  unset INPUT_PASSWORD INPUT_USER
+  run add_masks
+  [ "$status" -eq 0 ]
+  [ "$output" = "::add-mask::ftp.example.com" ]
 }
 
 @test "add_masks: empty inputs are skipped" {
@@ -48,7 +65,7 @@ setup() {
   run add_masks
   [ "$status" -eq 0 ]
   n=$(printf '%s\n' "$output" | grep -c '^::add-mask::')
-  [ "$n" -eq 2 ]
+  [ "$n" -eq 3 ]
 }
 
 # F2 audit (#314): ::add-mask:: is a SINGLE-LINE workflow command.
@@ -65,9 +82,9 @@ second-line-password"
   INPUT_SERVER="ftp://example.com"
   run add_masks
   [ "$status" -eq 0 ]
-  # Exactly 3 lines (one per non-empty input).
+  # Exactly 4 lines (one per non-empty input plus the server host).
   n=$(printf '%s\n' "$output" | grep -c '^::add-mask::')
-  [ "$n" -eq 3 ]
+  [ "$n" -eq 4 ]
   # The post-newline portion must NOT appear on its own line —
   # a bare `second-line-password` line would be the partial-leak
   # signature the runner's single-line parser would expose.
@@ -97,10 +114,11 @@ second-line-password"
   INPUT_SERVER="ftp://example.com"
   run add_masks
   [ "$status" -eq 0 ]
-  # Exactly 3 masked lines; the bare "alice" must appear, with no
-  # CR / NUL / BEL residue and no post-newline leakage.
+  # Exactly 4 masked lines (the server host is the 4th); the bare
+  # "alice" must appear, with no CR / NUL / BEL residue and no
+  # post-newline leakage.
   n=$(printf '%s\n' "$output" | grep -c '^::add-mask::')
-  [ "$n" -eq 3 ]
+  [ "$n" -eq 4 ]
   printf '%s\n' "$output" | grep -q "::add-mask::alice"
   if printf '%s' "$output" | grep -q $'\r'; then
     echo "CR survived add_masks stripping (issue #314 regression)"

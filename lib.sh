@@ -513,6 +513,10 @@ emit_deprecation_warning() {
 #   emitting the directive so a multi-line secret collapses into a
 #   single masked line.
 #
+#   The server host is masked on its own as well: lftp prints URLs
+#   as `ftp://user@host:port/...`, which never contains the full
+#   `server` value verbatim.
+#
 #   Reads: INPUT_PASSWORD, INPUT_USER, INPUT_SERVER.
 # ------------------------------------------------------------------------------
 add_masks() {
@@ -528,6 +532,11 @@ add_masks() {
       fi
     fi
   done
+  _am_server=$(_indirection INPUT_SERVER)
+  _am_host=$(extract_netrc_host "${_am_server}" | tr -d '[:cntrl:]')
+  if [ -n "${_am_host}" ] && [ "${_am_host}" != "${_am_server}" ]; then
+    printf '::add-mask::%s\n' "${_am_host}"
+  fi
 }
 
 # ------------------------------------------------------------------------------
