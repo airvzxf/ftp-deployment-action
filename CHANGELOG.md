@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.12.0] - 2026-10-04
 
-Repair release. Every v2.x tag up to v2.11.14 fails to build on the
+Repair release. Tags v2.0.1 through v2.11.14 fail to build on the
 user's runner; this release builds again and makes the defaults work.
 
 ### Fixed
