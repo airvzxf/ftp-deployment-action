@@ -2,7 +2,7 @@ name: 'FTP Deployment'
 author: 'Israel Roldan <israel.alberto.rv@gmail.com>'
 description: >-
   Copy all the files and folders via FTP from your Git project to your server in a specific path,
-  delete remote folder before.
+  optionally deleting remote files that no longer exist locally.
 inputs:
   server:
     description: 'FTP Server.'
@@ -22,7 +22,7 @@ inputs:
     required: false
     default: './'
   delete:
-    description: 'Delete all the files inside of the remote directory.'
+    description: 'If "true", delete remote files that do not exist in local_dir (files matching `exclude` are kept).'
     required: false
     default: 'false'
   max_retries:
@@ -62,13 +62,13 @@ inputs:
     required: false
     default: '2'
   net_max_retries:
-    description: 'NET - Maximum number of operation without success. 0 unlimited. 1 no retries. v2.11.14 (#330): default lowered 1 -> 0 so the FIRST attempt''s server error (e.g. "530 Login authentication failed") is preserved in the lftp log for classify_permanent_error to match.'
+    description: 'NET - Maximum number of attempts per lftp operation; 1 means no retries, 0 means unlimited (not recommended).'
+    required: false
+    default: '1'
+  net_persist_retries:
+    description: 'NET - Number of times lftp retries hard (5xx) errors such as "530 Login incorrect" before giving up; 0 reports them immediately.'
     required: false
     default: '0'
-  net_persist_retries:
-    description: 'NET - Ignore hard errors. When reply 5xx errors or there is too many users.'
-    required: false
-    default: '5'
   net_timeout:
     description: 'NET - Sets the network protocol timeout.'
     required: false
@@ -82,15 +82,11 @@ inputs:
     required: false
     default: '10s'
   lftp_settings:
-    description: 'Additional raw lftp settings, e.g. "set cache:cache-empty-listings true; set cmd:status-interval 1s;". Appended to the lftp `-e` command; rejected if it contains control characters, backtick, `$`, `!`, more than 3 `;`-chained directives, or a newline (see lib.sh::validate_lftp_settings; newline rejection added in v2.11.3.1 / PR #246 — grep [[:cntrl:]] does not match \n, the case-based check is the load-bearing one). `exclude` and `exclude_delete` use the lighter `validate_glob_pattern` instead (v2.11.3, #160) since they flow onto the `mirror` command line as a single argv slot, not into the `-e` script body.'
+    description: 'Additional raw lftp settings, e.g. "set cache:cache-empty-listings true; set cmd:status-interval 1s;". Appended to the lftp `-e` command; rejected if it contains control characters, backtick, `$`, `!`, more than 3 `;`-chained directives, or a newline.'
     required: false
     default: ''
   exclude:
-    description: 'POSIX ERE pattern (e.g. `.*\.map`, `node_modules/.*`) passed to `mirror -x` (regex exclude). Files matching the pattern are neither uploaded nor deleted. v2.11.2: switched from the previous (silent-no-op) `set mirror:exclude` to `mirror -x`, which is what lftp 4.9.3 actually applies. v2.11.3 (#160): validated by `validate_glob_pattern`. v2.11.3.1 (#246): the validator also rejects `;`, `&`, `|`, `"` as lftp `-e` command separators even mid-token, plus embedded newlines, other `[[:cntrl:]]` control characters, and a leading `-` (would be misread as a `mirror` option). Allowed metacharacters are `!`, backtick, and `$` (these are valid PatternSet / regex characters and are NOT parsed as command separators by lftp''s `-e` handler). See #131, #167.'
-    required: false
-    default: ''
-  exclude_delete:
-    description: 'Shell glob pattern (lftp PatternSet::Glob syntax, e.g. `*.log`, `uploads/**`) passed to `mirror -X` (glob exclude-delete). Independent of `exclude`: same `mirror -X` semantics as `mirror -x` (both apply to upload AND delete). v2.11.2: switched from the previous (silent-no-op) `set mirror:exclude-file` (no such variable in lftp 4.9.3) to `mirror -X`. v2.11.3 (#160): validated by `validate_glob_pattern`. v2.11.3.1 (#246): the validator also rejects `;`, `&`, `|`, `"` as lftp `-e` command separators even mid-token, plus embedded newlines, other `[[:cntrl:]]` control characters, and a leading `-` (would be misread as a `mirror` option). Allowed metacharacters are `!`, backtick, and `$` (these are valid PatternSet / regex characters and are NOT parsed as command separators by lftp''s `-e` handler). See #131, #167.'
+    description: 'Comma-separated shell globs (e.g. `*.map, *.bak, node_modules/`). Matching files are neither uploaded nor deleted. Items must not contain spaces or start with `-`.'
     required: false
     default: ''
   debug:
@@ -105,12 +101,8 @@ inputs:
     description: 'If "true", perform a dry run: lftp will compute the mirror plan but not transfer or delete any file. Useful to preview what the action would change before a destructive run. The action still exits 0 on success (i.e. on a clean dry-run plan) and 1 on a hard error.'
     required: false
     default: 'false'
-  upload_log_on_failure:
-    description: '**BROKEN** (do not rely on). If "true" (default), when the action is about to exit 1 it attempts to POST the captured lftp log to a non-existent GitHub REST endpoint and always prints `WARNING: failed to upload log artifact`. Set to "false" to silence the warning. The log file is always written to `~/.lftp-logs/run-<UTC-timestamp>.log` inside the container regardless; read it with `outputs.log_file` and upload via a follow-up `actions/upload-artifact` step (see README "Workflow artifacts (manual upload on failure)"). A follow-up release will switch the upload to the Actions Runtime API (`ACTIONS_RUNTIME_TOKEN` + `ACTIONS_RESULTS_URL`).'
-    required: false
-    default: 'true'
   concurrency_lock:
-    description: 'If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory before the mirror. Implementation: lftp issues the high-level `mkdir <path>` (v2.11.0, closes #121) before the mirror and `quote RMD <path>` after; while mkdir returns 550 (lock held), the action polls up to `concurrency_lock_timeout` seconds. Uses RFC 959 MKD/RMD which every FTP server supports. The lock is released on any exit path (success, error, SIGINT, 5h timeout) by the cleanup trap. Default is "false" (no cross-runner serialization). For zero-config serialization, prefer the GitHub Actions `concurrency:` block in your workflow. Stale-lock auto-recovery (v2.9.0): if the previous holder died before RMD (runner OOM, SIGKILL, 6h job limit), a timestamp-encoded sentinel file is left at the FTP root; the next runner detects it as stale (older than `concurrency_lock_timeout`) and takes over automatically. See README "Concurrency / deployment lock" for details.'
+    description: 'If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory before the mirror. Implementation: lftp issues the high-level `mkdir <path>` before the mirror and `quote RMD <path>` after; while mkdir returns 550 (lock held), the action polls up to `concurrency_lock_timeout` seconds. Uses RFC 959 MKD/RMD which every FTP server supports. The lock is released on any exit path (success, error, SIGINT, 5h timeout) by the cleanup trap. Default is "false" (no cross-runner serialization). For zero-config serialization, prefer the GitHub Actions `concurrency:` block in your workflow. Stale-lock auto-recovery: if the previous holder died before RMD (runner OOM, SIGKILL, 6h job limit), a timestamp-encoded sentinel file is left at the FTP root; the next runner detects it as stale (older than `concurrency_lock_timeout`) and takes over automatically. See README "Concurrency / deployment lock" for details.'
     required: false
     default: 'false'
   concurrency_lock_path:
@@ -125,16 +117,6 @@ inputs:
     description: 'Seconds between lock acquisition attempts when `concurrency_lock` is "true". Must be > 0 (validated by lib.sh::validate_int — a 0 or empty value is rejected with exit 2 to prevent an infinite MKD loop). Default is 5, which gives 60 attempts over the default 300-second timeout. Lower values reduce the time-to-acquire after the holder releases; higher values reduce the number of MKD round-trips against the server.'
     required: false
     default: '5'
-# v2.11.3 (#197): declare the outputs that entrypoint.sh writes
-# to $GITHUB_OUTPUT. For Docker actions the runner surfaces the
-# keys regardless of whether they're declared here, but the
-# declaration (a) matches GitHub's "strongly recommended" metadata
-# guidance, (b) gives IDE autocomplete + typed-actions consumers a
-# schema, and (c) lets future contract tests catch drift between
-# action.yml outputs and the keys entrypoint.sh actually writes.
-outputs:
-  log_file:
-    description: 'Path inside the container to the captured lftp log file (e.g. /home/lftp/.lftp-logs/run-<UTC-timestamp>.log). Read it with a follow-up step that uses `actions/upload-artifact` to attach it to the run for debugging failed deployments.'
 runs:
   using: 'docker'
   image: 'Dockerfile'

@@ -1,0 +1,63 @@
+name: E2E
+
+# Runs the action exactly the way a user does: `uses: ./` with only the
+# required inputs, so GitHub parses action.yml, builds the Dockerfile on
+# the runner and injects every action.yml default. This is the only test
+# that would have caught v2.11.14 (invalid action.yml, apk pins that no
+# longer resolve, net_max_retries=0 hang).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  uses-dot:
+    name: E2E · uses ./ against vsftpd
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      ftp:
+        image: docker.io/fauria/vsftpd@sha256:6d71d7c7f1b0ab2844ec7dc7999a30aef6d758b6d8179cf5967513f87c79c177
+        env:
+          FTP_USER: e2euser
+          FTP_PASS: e2epass
+          PASV_ADDRESS: ftp
+          PASV_ADDR_RESOLVE: 'YES'
+          PASV_ENABLE: 'YES'
+          PASV_MIN_PORT: '21100'
+          PASV_MAX_PORT: '21110'
+          REVERSE_LOOKUP_ENABLE: 'NO'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Deploy with only the required inputs
+        timeout-minutes: 2
+        uses: ./
+        with:
+          server: ftp://ftp:21
+          user: e2euser
+          password: e2epass
+          local_dir: tests/integration/fixtures/sample-public-html
+          remote_dir: /
+
+      - name: Assert the files landed on the server
+        env:
+          FTP_CID: ${{ job.services.ftp.id }}
+        run: |
+          set -eu
+          docker exec "${FTP_CID}" ls -laR /home/vsftpd/e2euser
+          for f in index.html about.html assets; do
+            docker exec "${FTP_CID}" test -e "/home/vsftpd/e2euser/${f}" \
+              || { echo "::error::${f} missing on the FTP server"; exit 1; }
+          done

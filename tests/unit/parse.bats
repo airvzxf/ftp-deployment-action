@@ -271,36 +271,6 @@ setup() {
 }
 
 # ----------------------------------------------------------------------------
-# build_mirror_command (v2.11.2 INPUT_EXCLUDE / INPUT_EXCLUDE_DELETE)
-# ----------------------------------------------------------------------------
-
-@test "build_mirror_command: INPUT_EXCLUDE=.*\\.map appends '-x .*\\.map'" {
-  unset INPUT_MIRROR_VERBOSE INPUT_NO_SYMLINKS INPUT_DELETE INPUT_DRY_RUN
-  INPUT_EXCLUDE='.*\.map'
-  run build_mirror_command
-  [ "$status" -eq 0 ]
-  [ "$output" = "mirror --continue --reverse --verbose=1 -x .*\\.map" ]
-}
-
-@test "build_mirror_command: INPUT_EXCLUDE_DELETE=.*\\.bak appends '-X .*\\.bak'" {
-  unset INPUT_MIRROR_VERBOSE INPUT_NO_SYMLINKS INPUT_DELETE INPUT_DRY_RUN INPUT_EXCLUDE
-  INPUT_EXCLUDE_DELETE='.*\.bak'
-  run build_mirror_command
-  [ "$status" -eq 0 ]
-  [ "$output" = "mirror --continue --reverse --verbose=1 -X .*\\.bak" ]
-}
-
-@test "build_mirror_command: both exclude flags appear with INPUT_DELETE=true combo" {
-  unset INPUT_MIRROR_VERBOSE INPUT_NO_SYMLINKS
-  INPUT_DELETE="true"
-  INPUT_EXCLUDE='.*\.tmp'
-  INPUT_EXCLUDE_DELETE='.*\.bak'
-  unset INPUT_DRY_RUN
-  run build_mirror_command
-  [ "$status" -eq 0 ]
-  [ "$output" = "mirror --continue --reverse --verbose=1 --delete -x .*\\.tmp -X .*\\.bak" ]
-}
-# ----------------------------------------------------------------------------
 # build_mirror_command
 # ----------------------------------------------------------------------------
 
@@ -353,6 +323,21 @@ setup() {
   run build_mirror_command
   [ "$status" -eq 0 ]
   [ "$output" = "mirror --continue --reverse --verbose=3 --no-symlinks --delete --dry-run" ]
+}
+
+@test "build_mirror_command: INPUT_EXCLUDE='*.map' stays literal when the cwd has a.map" {
+  # Without `set -f` around the comma split, `*.map` expands against
+  # the cwd and the command becomes `-X a.map`.
+  _trap_dir=$(mktemp -d)
+  touch "${_trap_dir}/a.map"
+  cd "${_trap_dir}"
+  unset INPUT_MIRROR_VERBOSE INPUT_NO_SYMLINKS INPUT_DELETE INPUT_DRY_RUN
+  INPUT_EXCLUDE='*.map'
+  run build_mirror_command
+  cd "${BATS_TEST_DIRNAME}/../.."
+  rm -rf "${_trap_dir}"
+  [ "$status" -eq 0 ]
+  [ "$output" = "mirror --continue --reverse --verbose=1 -X *.map" ]
 }
 
 # ----------------------------------------------------------------------------

@@ -5,24 +5,12 @@ FROM alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec7
 # release pipeline; the digest is recorded in the corresponding tag
 # message.
 #
-# Pin the package versions too (resolves hadolint DL3018).
-# lftp=4.9.3-r0, ca-certificates=20260909-r0, and curl=8.22.0-r0 are
-# the current versions in alpine 3.24; bump them together with the
-# base image. curl is required by v2.7.0 to upload the captured lftp
-# log to the workflow run as a workflow artifact (B-04 follow-up).
-# curl was bumped from 8.21.0-r0 to 8.22.0-r0 on the v2.11.0 branch:
-# the 8.21.0-r0 pin was retired from the alpine 3.24 repos and
-# started breaking the action-image build under the new CI integration
-# job (#117). ca-certificates was bumped from 20260611-r0 to 20260909-r0
-# on a follow-up to v2.11.14: the 20260611-r0 pin was retired from the
-# alpine 3.24 repos and started breaking the action-image, smoke-image,
-# and test-server-image builds (#333 — see also the broken YAML in
-# action.yml that the same PR fixed). lftp was re-verified to still
-# be resolvable from the same alpine 3.24 index.
+# Pin apk packages by version (pkg~X.Y.Z), never by Alpine revision (-rN):
+# GitHub builds this file on every run and Alpine deletes old revisions.
+# ca-certificates is unpinned on purpose: the newest CA bundle is correct.
 RUN apk add --no-cache \
-      lftp=4.9.3-r0 \
-      ca-certificates=20260909-r0 \
-      curl=8.22.0-r0 \
+      lftp~4.9.3 \
+      ca-certificates \
  && addgroup -S lftp \
  && adduser -S lftp -G lftp -h /home/lftp
 

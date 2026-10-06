@@ -99,8 +99,8 @@ validate_bool() {
 # normalize_bool NAME VALUE
 #   Echo the canonical lftp-style "true" or "false" for VALUE, after
 #   validating it through `validate_bool`. Used for the GATE inputs
-#   (`delete`, `no_symlinks`, `dry_run`, `upload_log_on_failure`,
-#   `concurrency_lock`, plus `debug` and `fail_on_deprecated`) which
+#   (`delete`, `no_symlinks`, `dry_run`, `concurrency_lock`, plus
+#   `debug` and `fail_on_deprecated`) which
 #   the script compares with a literal `[ ... = "true" ]` to decide
 #   whether to append a flag / take a branch.
 #
@@ -200,24 +200,13 @@ validate_duration() {
 
 # ------------------------------------------------------------------------------
 # validate_glob_pattern NAME VALUE
-#   Light validation for inputs that flow into lftp's `mirror -x`
-#   / `mirror -X` command line (the regex/glob exclude inputs). v2.11.3
-#   (#160): those inputs were being validated by validate_lftp_settings
-#   since v2.11.2, which rejects `!`, backtick, `$`, and limits `;` to
-#   3. v2.11.3 closed #160 by switching to a lighter validator.
-#
-#   v2.11.3.1 (post-release F2 audit): the original #160 docstring
-#   claimed the value is "a single argv slot to `mirror`, never
-#   parsed by a shell". That premise is FALSE — `build_mirror_command`
-#   concatenates the value unquoted into MIRROR_COMMAND (lib.sh:546,
-#   lib.sh:557), and `run_lftp_once` then concatenates MIRROR_COMMAND
-#   into the `lftp -e` script body (lib.sh:919). lftp 4.9.3's `-e`
-#   parser treats `;`, `&`, `|` as command separators even when they
-#   appear mid-token (verified with `lftp -e '... -x foo;echo X;...'`).
-#   Re-introduce the command-separator rejection. `!`, backtick, `$`,
-#   `"` remain allowed because they are valid PatternSet / regex
-#   metacharacters that lftp's glob / regex parser handles without
-#   command-separator semantics.
+#   Validate a comma-separated list of shell globs (the `exclude`
+#   input). The whole value flows into the `lftp -e` script body via
+#   `mirror -X`, so lftp command separators (`; & |`), `"`, newlines
+#   and control characters are rejected first. Then each trimmed item
+#   must not start with `-` (read as a mirror option) or contain a
+#   space (breaks lftp's tokenising). `!`, backtick and `$` are
+#   allowed. Exits 2 on any violation.
 # ------------------------------------------------------------------------------
 validate_glob_pattern() {
   _vgp_name=$1
@@ -238,17 +227,26 @@ validate_glob_pattern() {
     exit 2
   fi
   case "${_vgp_value}" in
-    -*)
-      printf 'ERROR: %s starts with a dash (would be misread as mirror option)\n' \
-        "${_vgp_name}" >&2
-      exit 2
-      ;;
     *';'*|*'&'*|*'|'*|*'"'*)
       printf 'ERROR: %s contains lftp command separator (; & |) or double-quote: %s\n' \
         "${_vgp_name}" "${_vgp_value}" >&2
       exit 2
       ;;
   esac
+  _vgp_ifs=$IFS
+  IFS=,
+  set -f
+  for _vgp_item in ${_vgp_value}; do
+    _vgp_item=$(printf '%s' "${_vgp_item}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    case "${_vgp_item}" in
+      -*) printf 'ERROR: %s item starts with a dash (would be misread as mirror option): %s\n' \
+            "${_vgp_name}" "${_vgp_item}" >&2; exit 2 ;;
+      *' '*) printf 'ERROR: %s item contains a space: %s\n' \
+            "${_vgp_name}" "${_vgp_item}" >&2; exit 2 ;;
+    esac
+  done
+  set +f
+  IFS=$_vgp_ifs
 }
 
 # ------------------------------------------------------------------------------
@@ -515,6 +513,10 @@ emit_deprecation_warning() {
 #   emitting the directive so a multi-line secret collapses into a
 #   single masked line.
 #
+#   The server host is masked on its own as well: lftp prints URLs
+#   as `ftp://user@host:port/...`, which never contains the full
+#   `server` value verbatim.
+#
 #   Reads: INPUT_PASSWORD, INPUT_USER, INPUT_SERVER.
 # ------------------------------------------------------------------------------
 add_masks() {
@@ -530,6 +532,11 @@ add_masks() {
       fi
     fi
   done
+  _am_server=$(_indirection INPUT_SERVER)
+  _am_host=$(extract_netrc_host "${_am_server}" | tr -d '[:cntrl:]')
+  if [ -n "${_am_host}" ] && [ "${_am_host}" != "${_am_server}" ]; then
+    printf '::add-mask::%s\n' "${_am_host}"
+  fi
 }
 
 # ------------------------------------------------------------------------------
@@ -578,25 +585,23 @@ print_inputs_dump() {
     printf '  %-26s %s\n' "dns_fatal_timeout:"       "$(_indirection INPUT_DNS_FATAL_TIMEOUT)"
     printf '  %-26s %s\n' "lftp_settings:"           "$(_indirection INPUT_LFTP_SETTINGS)"
     printf '  %-26s %s\n' "exclude:"                 "$(_indirection INPUT_EXCLUDE)"
-    printf '  %-26s %s\n' "exclude_delete:"          "$(_indirection INPUT_EXCLUDE_DELETE)"
     printf '  %-26s %s\n' "debug:"                   "$(_indirection INPUT_DEBUG)"
     printf '  %-26s %s\n' "fail_on_deprecated:"      "$(_indirection INPUT_FAIL_ON_DEPRECATED)"
     printf '  %-26s %s\n' "dry_run:"                 "$(_indirection INPUT_DRY_RUN)"
-    printf '  %-26s %s\n' "upload_log_on_failure:"   "$(_indirection INPUT_UPLOAD_LOG_ON_FAILURE)"
     printf '  %-26s %s\n' "concurrency_lock:"        "$(_indirection INPUT_CONCURRENCY_LOCK)"
     printf '  %-26s %s\n' "concurrency_lock_path:"   "$(_indirection INPUT_CONCURRENCY_LOCK_PATH)"
     printf '  %-26s %s\n' "concurrency_lock_timeout:"  "$(_indirection INPUT_CONCURRENCY_LOCK_TIMEOUT)"
     printf '  %-26s %s\n' "concurrency_lock_poll_interval:"  "$(_indirection INPUT_CONCURRENCY_LOCK_POLL_INTERVAL)"
   else
     # v2.11.8 (#181): swap MAX_RETRIES <-> DELETE to match action.yml
-    # declaration order. Loop already iterates all 31 names.
+    # declaration order. Loop already iterates every declared name.
     for _pid_name in \
       SERVER USER PASSWORD LOCAL_DIR REMOTE_DIR DELETE MAX_RETRIES \
       NO_SYMLINKS MIRROR_VERBOSE FTP_SSL_ALLOW SSL_VERIFY_CERTIFICATE \
       SSL_CHECK_HOSTNAME FTP_PASSIVE_MODE FTP_USE_FEAT FTP_NOP_INTERVAL \
       NET_MAX_RETRIES NET_PERSIST_RETRIES NET_TIMEOUT DNS_MAX_RETRIES \
-      DNS_FATAL_TIMEOUT LFTP_SETTINGS EXCLUDE EXCLUDE_DELETE DEBUG \
-      FAIL_ON_DEPRECATED DRY_RUN UPLOAD_LOG_ON_FAILURE \
+      DNS_FATAL_TIMEOUT LFTP_SETTINGS EXCLUDE DEBUG \
+      FAIL_ON_DEPRECATED DRY_RUN \
       CONCURRENCY_LOCK CONCURRENCY_LOCK_PATH CONCURRENCY_LOCK_TIMEOUT \
       CONCURRENCY_LOCK_POLL_INTERVAL; do
       _pid_label=$(printf '%s' "${_pid_name}" | tr '[:upper:]' '[:lower:]')
@@ -623,19 +628,8 @@ print_inputs_dump() {
 #     <lftp-key>  <default-value>  <INPUT_var_name>
 #   The default applies when the INPUT is unset or empty.
 #
-#   v2.11.2: INPUT_EXCLUDE / INPUT_EXCLUDE_DELETE are NO LONGER
-#   emitted here. The pre-fix code emitted `set mirror:exclude` /
-#   `set mirror:exclude-file` directives, but neither variable
-#   is actually queried by lftp 4.9.3's MirrorJob when the mirror
-#   command runs (MirrorJob::AddPattern only consults
-#   `mirror:exclude-regex` as a *default* when the user passes
-#   `mirror -x`; a bare `set mirror:exclude-file` is a silent
-#   no-op). The v2.11.2 fix moves the exclude values onto the
-#   mirror command line itself (see build_mirror_command below,
-#   which appends `-x <regex>` / `-X <glob>` based on the same
-#   inputs). The action's behaviour-preserving contract for the
-#   default case (both inputs empty -> no `set` or `-x`/`-X`
-#   emitted) is preserved. See #131, #167.
+#   `exclude` is not emitted here: it becomes `mirror -X` options
+#   in build_mirror_command.
 #
 #   The function still emits:
 #     * the 11 standard `set <lftp-key> <value>;` directives for
@@ -646,31 +640,8 @@ print_inputs_dump() {
 # ------------------------------------------------------------------------------
 build_ftp_settings() {
   _bfs_settings=""
-  # F2 audit (#334, follow-up to #330): net:max-retries default raised
-  # 0 -> 1 so lftp's mirror command exits its a-finite-time on the
-  # FTP-root MKD scenario that scenarios 07 / 08 / 09 / 10 / 11 / 12
-  # hit when INPUT_REMOTE_DIR=/. Reproducer (workflow run 36381107484,
-  # scenario 07): lftp does `MKD /` to ensure the target dir exists;
-  # vsftpd / proftpd / pure-ftpd answer `550 Create directory operation
-  # failed` for the root because the root already exists. With
-  # net:max-retries=0 (post-c866afb #330) lftp enters a
-  # `net:persist-retries=5 × reconnect` loop and never returns, so the
-  # action's `run_lftp_once` wrapper hangs for the 5-minute CI job
-  # timeout. With net:max-retries=1 (pre-c866afb, workflow run
-  # 34072185163) lftp's `mirror` aborts the retry loop after the first
-  # failed MKD attempt, the action's outer INPUT_MAX_RETRIES loop
-  # retries the whole command, and the mirror eventually succeeds
-  # (verified: scenario 07 ran for 17s with no failure on be6d8f8).
-  # The #330 trade-off (the FIRST attempt's 530 gets overwritten by
-  # the retry's `max-retries exceeded`) is accepted here because
-  # leaving it in place makes the integration tests fail and the
-  # action unusable end-to-end; #330's classification logic still
-  # works correctly when the first attempt's error is the same as
-  # the retry's error (the common case for an auth 530), and only
-  # misses when lftp's internal retry masks a transient error as
-  # permanent — a narrower failure surface than the container hang.
-  # TODO(#330): revisit once lftp grows a flag to surface the first
-  # attempt's error AND let mirror skip the MKD-on-root preflight.
+  # The defaults below must equal the action.yml defaults
+  # (tests/acceptance/behavior.bats checks the parity).
   set -- \
     "ftp:ssl-allow"          "true"   "INPUT_FTP_SSL_ALLOW" \
     "ssl:verify-certificate" "true"   "INPUT_SSL_VERIFY_CERTIFICATE" \
@@ -679,7 +650,7 @@ build_ftp_settings() {
     "ftp:use-feat"           "false"  "INPUT_FTP_USE_FEAT" \
     "ftp:nop-interval"       "2"      "INPUT_FTP_NOP_INTERVAL" \
     "net:max-retries"        "1"      "INPUT_NET_MAX_RETRIES" \
-    "net:persist-retries"    "5"      "INPUT_NET_PERSIST_RETRIES" \
+    "net:persist-retries"    "0"      "INPUT_NET_PERSIST_RETRIES" \
     "net:timeout"            "15s"    "INPUT_NET_TIMEOUT" \
     "dns:max-retries"        "8"      "INPUT_DNS_MAX_RETRIES" \
     "dns:fatal-timeout"      "10s"    "INPUT_DNS_FATAL_TIMEOUT"
@@ -694,9 +665,6 @@ build_ftp_settings() {
     fi
     _bfs_settings="${_bfs_settings}set ${_bfs_key} ${_bfs_val};"
   done
-  # v2.11.2: INPUT_EXCLUDE / INPUT_EXCLUDE_DELETE removed from
-  # this function (no-op directives, see comment above). They are
-  # now applied via `mirror -x` / `mirror -X` in build_mirror_command.
   # Any manual settings (B-16, already validated).
   _bfs_extra=$(_indirection "INPUT_LFTP_SETTINGS")
   if [ -n "${_bfs_extra}" ]; then
@@ -746,35 +714,19 @@ build_mirror_command() {
     _bmc_command="${_bmc_command} --delete"
   fi
 
-  # v2.11.2: INPUT_EXCLUDE / INPUT_EXCLUDE_DELETE. lftp's `mirror`
-  # command takes `-x <regex>` to exclude files matching a POSIX
-  # regex. The pre-fix code emitted `set mirror:exclude-regex ...`
-  # into FTP_SETTINGS, but that variable is only consulted by lftp
-  # when `mirror -x` is also given — a `set` alone is a silent
-  # no-op in lftp 4.9.3. So the action's INPUT_EXCLUDE /
-  # INPUT_EXCLUDE_DELETE inputs have been broken since v2.5.0.
-  # The fix moves the exclude values onto the mirror command line
-  # itself, which is what actually applies them. See #131, #167.
-  #
-  # INPUT_EXCLUDE -> `mirror -x <regex>` (POSIX ERE, NOT a shell
-  # glob). Users who currently pass `*.bak` etc. will need to
-  # convert to `.*\.bak` (documented in CHANGELOG and the
-  # action.yml input descriptions below).
-  _bmc_exclude=$(_indirection "INPUT_EXCLUDE")
-  if [ -n "${_bmc_exclude}" ]; then
-    _bmc_command="${_bmc_command} -x ${_bmc_exclude}"
-  fi
-
-  # INPUT_EXCLUDE_DELETE -> `mirror -X <glob>` (POSIX glob syntax,
-  # lftp's PatternSet::Glob). The action surface keeps the
-  # INPUT_EXCLUDE vs INPUT_EXCLUDE_DELETE naming for API stability,
-  # but lftp 4.9.3's `-X` flag applies the pattern to BOTH upload
-  # and delete operations (same as `-x`) — there is no separate
-  # delete-only-exclude variable in lftp 4.9.3.
-  _bmc_exclude_delete=$(_indirection "INPUT_EXCLUDE_DELETE")
-  if [ -n "${_bmc_exclude_delete}" ]; then
-    _bmc_command="${_bmc_command} -X ${_bmc_exclude_delete}"
-  fi
+  # Each comma-separated glob in INPUT_EXCLUDE becomes one `-X <glob>`;
+  # lftp skips matching files both when uploading and with --delete.
+  # Globbing is off while splitting so `*.map` is not expanded
+  # against the files in the current directory.
+  _bmc_ifs=$IFS
+  IFS=,
+  set -f
+  for _bmc_glob in $(_indirection INPUT_EXCLUDE); do
+    _bmc_glob=$(printf '%s' "${_bmc_glob}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    [ -n "${_bmc_glob}" ] && _bmc_command="${_bmc_command} -X ${_bmc_glob}"
+  done
+  set +f
+  IFS=$_bmc_ifs
 
   # Dry run: compute the mirror plan but do not transfer or delete
   # anything. lftp's --dry-run makes mirror print every file it
@@ -785,46 +737,6 @@ build_mirror_command() {
   fi
 
   printf '%s' "${_bmc_command}"
-}
-
-# ------------------------------------------------------------------------------
-# build_lock_acquire_script
-#   DEPRECATED in v2.9.0. Returns empty string unconditionally.
-#
-#   In v2.8.0 this function emitted the inline `repeat --until-ok
-#   quote MKD ...` lftp script fragment that was concatenated into
-#   the mirror's lftp `-e` command. In v2.9.0 the lock work moved
-#   out of the mirror lftp invocation and into the shell-driven
-#   `acquire_lock_with_recovery` helper, so the stale-lock auto-
-#   recovery can do its LIST / parse / DELE / RMD sequence without
-#   fighting lftp's flow-control primitives (the `repeat --until-ok`
-#   retry loop has no clean way to branch into a stale-recovery
-#   sub-flow on each MKD failure).
-#
-#   The function is kept as a no-op so entrypoint.sh (which assigns
-#   its output to LOCK_ACQUIRE) does not need to change, and so the
-#   unit tests can verify the deprecation cleanly.
-#
-#   Reads: INPUT_CONCURRENCY_LOCK (ignored; always empty).
-# ------------------------------------------------------------------------------
-build_lock_acquire_script() {
-  return 0
-}
-
-# ------------------------------------------------------------------------------
-# build_lock_release_script
-#   DEPRECATED in v2.9.0. Returns empty string unconditionally.
-#
-#   In v2.8.0 this emitted `quote RMD <path>; ` to be appended to
-#   the mirror's lftp `-e` command. In v2.9.0 the release moved to
-#   `release_lock_safely` (best-effort standalone lftp invocation
-#   from the EXIT trap), which also DELEs the sentinel file (a
-#   sibling of the lock dir) — see acquire_lock_with_recovery.
-#
-#   Reads: INPUT_CONCURRENCY_LOCK (ignored; always empty).
-# ------------------------------------------------------------------------------
-build_lock_release_script() {
-  return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -1153,26 +1065,18 @@ run_lftp_once() {
   # B-03: no -u USER,PASS — lftp reads the password from ${NETRC}.
   # The user embedded in the URL above is what triggers lftp's
   # NetRC::LookupHost call (see commands.cc:1055 in upstream).
-  # B-04: redirect combined stdout+stderr to the timestamped log file
-  # so the captured output can be inspected after the fact and, if
-  # the user wishes, attached as a workflow artifact.
-  #
-  # v2.11.9 (#193): use >> (append) instead of > (truncate). The
-  # caller (entrypoint.sh's retry loop) computes LOG_FILE once
-  # before the loop and passes it in unchanged on every retry; with
-  # >, each retry erased the previous attempt's output and the
-  # post-mortem log only contained the LAST attempt's stderr (or
-  # nothing if all attempts failed mid-startup). With >>, the file
-  # grows by retry and the upload_log_artifact path picks up the
-  # full history. The log is timestamped once per run (entrypoint.sh
-  # uses `date -u +%Y%m%dT%H%M%SZ` in the basename) so retries
-  # within one run do NOT collide on the filename; the only
-  # consumer of the file (upload_log_artifact) uploads the whole
-  # thing, so the appended history is the desired shape.
+  # B-04: lftp's combined stdout+stderr goes to the step log (so the
+  # user sees transferred files, the dry-run plan and server errors)
+  # and is appended (tee -a, one file per run, so every retry is kept)
+  # to the log file that classify_permanent_error reads. pipefail makes
+  # the function return lftp's exit code, not tee's; it is also set
+  # here because bats calls this function without entrypoint.sh.
+  # shellcheck disable=SC3040
+  set -o pipefail
   timeout -k "${_rlo_kill_after}" "${_rlo_timeout}" lftp \
     "${_rlo_server_eff}" \
     -e "${_rlo_settings} ${_rlo_mirror} ${_rlo_local} ${_rlo_remote}; quit;" \
-    >> "${_rlo_log}" 2>&1
+    2>&1 | tee -a "${_rlo_log}"
 }
 
 # ------------------------------------------------------------------------------
@@ -1586,40 +1490,6 @@ release_lock_safely() {
 }
 
 # ------------------------------------------------------------------------------
-# run_lftp_lock_release SERVER NETRC_PATH LOCK_PATH [SENTINEL] [USER]
-#   Backward-compatibility shim. Used by the EXIT trap in
-#   entrypoint.sh to release the server-side concurrency lock if
-#   the main pipeline was killed before reaching the explicit
-#   release_lock_safely call (signal, OOM, hard timeout).
-#
-#   When the lock is disabled (LOCK_PATH empty) or the netrc file
-#   is missing (the EXIT trap may run after the netrc was already
-#   removed), this function is a no-op. Otherwise it delegates to
-#   release_lock_safely with the optional SENTINEL and USER
-#   arguments.
-#
-#   Failures are silently swallowed because at this point the
-#   script is already on the way out; we do not want the cleanup
-#   itself to print spurious noise. Logs to /dev/null.
-# ------------------------------------------------------------------------------
-run_lftp_lock_release() {
-  _rlr_server=$1
-  _rlr_netrc=$2
-  _rlr_lock_path=$3
-  _rlr_sentinel=${4:-}
-  _rlr_user=${5:-}
-
-  if [ -z "${_rlr_lock_path}" ]; then
-    return 0
-  fi
-  if [ ! -f "${_rlr_netrc}" ]; then
-    return 0
-  fi
-
-  release_lock_safely "${_rlr_server}" "${_rlr_lock_path}" "${_rlr_sentinel}" "${_rlr_user}"
-}
-
-# ------------------------------------------------------------------------------
 # print_resolved_config
 #   Print the "Resolved configuration" group: directories, listing of
 #   the local directory, and the computed FTP_SETTINGS / MIRROR_COMMAND
@@ -1655,11 +1525,12 @@ print_resolved_config() {
 #   Print the "ERROR: UPLOAD FAILED" banner, mention whether the
 #   failure was classified as permanent, list common lftp exit codes
 #   for debugging, and exit 1. The function does not return.
+#   LOG_FILE is not printed: the container is gone after the step, and
+#   lftp's output is already in the step log.
 # ------------------------------------------------------------------------------
 print_failure_banner() {
   _pfb_rc=$1
   _pfb_permanent=$2
-  _pfb_log=$3
   _pfb_timeout=$4
   _pfb_kill_after=$5
 
@@ -1670,7 +1541,7 @@ print_failure_banner() {
   if [ -n "${_pfb_permanent}" ]; then
     echo "Failure type: PERMANENT (no point retrying with the same inputs)."
     echo "Check credentials, the remote_dir path, and the FTP user's"
-    echo "permissions; see the log file below for the server's message."
+    echo "permissions; the server's message is in the lftp output above."
   fi
   if [ -n "${_pfb_rc}" ]; then
     echo "Last lftp exit code: ${_pfb_rc}"
@@ -1680,7 +1551,7 @@ print_failure_banner() {
     echo "  124  timeout reached (max wall-clock ${_pfb_timeout})"
     echo "  137  process killed (SIGKILL after ${_pfb_kill_after} grace)"
   fi
-  echo "Full lftp output: ${_pfb_log}"
+  echo "The server's reply is in the lftp output above."
   exit 1
 }
 
@@ -1700,101 +1571,4 @@ print_success_banner() {
     echo "=   FTP UPLOADED FINISHED!   ="
   fi
   echo "=============================="
-}
-
-# ------------------------------------------------------------------------------
-# upload_log_artifact LOG_FILE
-#   If INPUT_UPLOAD_LOG_ON_FAILURE=true AND every GitHub-Actions env
-#   var required for the artifact upload API is set
-#   (GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID,
-#   GITHUB_RUN_ATTEMPT, GITHUB_TOKEN), POST LOG_FILE to the workflow
-#   run as an artifact named "ftp-deployment-action-log-<run-attempt>"
-#   with a 90-day retention. Otherwise, skip with a notice.
-#
-#   The function never aborts the parent: any failure (missing env,
-#   missing log file, curl error, HTTP 4xx/5xx) is logged as a warning
-#   and the function returns 0. The action's own exit code is
-#   unaffected.
-#
-#   The env-var lookup uses `_indirection` (no second `eval` site) so
-#   the project-wide "single point of dynamic variable-name lookup"
-#   rule is preserved.
-#
-#   API endpoint:
-#     POST ${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts
-#   Body: multipart/form-data with
-#     - name            "ftp-deployment-action-log-<attempt>"
-#     - retention_days  90 (max allowed by the public API)
-#     - artifact_file   <LOG_FILE>  (filename = basename of LOG_FILE,
-#                                   content-type text/plain)
-#
-#   curl's -F flag builds the multipart envelope automatically. The
-#   Authorization header carries the token; it is never interpolated
-#   into the URL, so the token does not leak into the runner log
-#   even if -v were used.
-# ------------------------------------------------------------------------------
-upload_log_artifact() {
-  _ula_log=$1
-
-  # 1. Opt-in switch.
-  if [ "$(_indirection INPUT_UPLOAD_LOG_ON_FAILURE)" != "true" ]; then
-    return 0
-  fi
-
-  # 2. Required GitHub-Actions env vars. Iterate over a known list
-  #    of literal names and use _indirection for the lookup; never
-  #    introduce a second `eval` site.
-  for _ula_var in GITHUB_API_URL GITHUB_REPOSITORY GITHUB_RUN_ID \
-                  GITHUB_RUN_ATTEMPT GITHUB_TOKEN; do
-    if [ -z "$(_indirection "${_ula_var}")" ]; then
-      printf '  skip: not uploading log; %s is not set in the step env.\n' "${_ula_var}" >&2
-      printf '  hint: add GITHUB_TOKEN to the step env: ' >&2
-      # shellcheck disable=SC2016  # intentional literal ${{ ... }} for the user to copy
-      printf 'env: GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n' >&2
-      return 0
-    fi
-  done
-
-  # 3. Log file must exist (the lftp loop always creates it, but a
-  #    failure before the loop would skip this).
-  if [ ! -f "${_ula_log}" ]; then
-    printf '  skip: not uploading log; %s does not exist.\n' "${_ula_log}" >&2
-    return 0
-  fi
-
-  _ula_api_url=$(_indirection GITHUB_API_URL)
-  _ula_repo=$(_indirection GITHUB_REPOSITORY)
-  _ula_run_id=$(_indirection GITHUB_RUN_ID)
-  _ula_attempt=$(_indirection GITHUB_RUN_ATTEMPT)
-  _ula_token=$(_indirection GITHUB_TOKEN)
-
-  _ula_name="ftp-deployment-action-log-${_ula_attempt}"
-  _ula_url="${_ula_api_url}/repos/${_ula_repo}/actions/runs/${_ula_run_id}/artifacts"
-  _ula_filename=$(basename "${_ula_log}")
-
-  printf '  uploading log %s to %s as "%s" (90-day retention) ...\n' \
-    "${_ula_log}" "${_ula_url}" "${_ula_name}" >&2
-
-  # 4. The actual upload. set +e / set -e bracketing, same pattern as
-  #    run_lftp_once, so a curl non-zero exit does not trip errexit
-  #    and abort the script before we can print a warning.
-  set +e
-  curl -fsSL \
-    -X POST \
-    -H "Authorization: Bearer ${_ula_token}" \
-    -H "Accept: application/vnd.github+json" \
-    -F "name=${_ula_name}" \
-    -F "retention_days=90" \
-    -F "artifact_file=@${_ula_log};filename=${_ula_filename};type=text/plain" \
-    "${_ula_url}" >/dev/null
-  _ula_rc=$?
-  set -e
-
-  if [ "${_ula_rc}" -ne 0 ]; then
-    printf '  WARNING: failed to upload log artifact (curl exit %s); ' \
-      "${_ula_rc}" >&2
-    printf 'continuing to the failure banner.\n' >&2
-    return 0
-  fi
-  printf '  ok: log uploaded as artifact "%s"\n' "${_ula_name}" >&2
 }

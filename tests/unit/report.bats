@@ -29,9 +29,26 @@ setup() {
   [[ "$output" == *"::add-mask::secret"* ]]
   [[ "$output" == *"::add-mask::me"* ]]
   [[ "$output" == *"::add-mask::ftp://example.com"* ]]
-  # Exactly 3 lines.
+  [[ "$output" == *"::add-mask::example.com"* ]]
+  # Exactly 4 lines (password, user, server, server host).
   n=$(printf '%s\n' "$output" | grep -c '^::add-mask::')
-  [ "$n" -eq 3 ]
+  [ "$n" -eq 4 ]
+}
+
+@test "add_masks: masks the bare server host that lftp prints in its URLs" {
+  INPUT_SERVER="ftp://ftp.example.com:2121/www"
+  unset INPUT_PASSWORD INPUT_USER
+  run add_masks
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qx '::add-mask::ftp.example.com'
+}
+
+@test "add_masks: a bare-host server is masked once" {
+  INPUT_SERVER="ftp.example.com"
+  unset INPUT_PASSWORD INPUT_USER
+  run add_masks
+  [ "$status" -eq 0 ]
+  [ "$output" = "::add-mask::ftp.example.com" ]
 }
 
 @test "add_masks: empty inputs are skipped" {
@@ -48,7 +65,7 @@ setup() {
   run add_masks
   [ "$status" -eq 0 ]
   n=$(printf '%s\n' "$output" | grep -c '^::add-mask::')
-  [ "$n" -eq 2 ]
+  [ "$n" -eq 3 ]
 }
 
 # F2 audit (#314): ::add-mask:: is a SINGLE-LINE workflow command.
@@ -65,9 +82,9 @@ second-line-password"
   INPUT_SERVER="ftp://example.com"
   run add_masks
   [ "$status" -eq 0 ]
-  # Exactly 3 lines (one per non-empty input).
+  # Exactly 4 lines (one per non-empty input plus the server host).
   n=$(printf '%s\n' "$output" | grep -c '^::add-mask::')
-  [ "$n" -eq 3 ]
+  [ "$n" -eq 4 ]
   # The post-newline portion must NOT appear on its own line —
   # a bare `second-line-password` line would be the partial-leak
   # signature the runner's single-line parser would expose.
@@ -97,10 +114,11 @@ second-line-password"
   INPUT_SERVER="ftp://example.com"
   run add_masks
   [ "$status" -eq 0 ]
-  # Exactly 3 masked lines; the bare "alice" must appear, with no
-  # CR / NUL / BEL residue and no post-newline leakage.
+  # Exactly 4 masked lines (the server host is the 4th); the bare
+  # "alice" must appear, with no CR / NUL / BEL residue and no
+  # post-newline leakage.
   n=$(printf '%s\n' "$output" | grep -c '^::add-mask::')
-  [ "$n" -eq 3 ]
+  [ "$n" -eq 4 ]
   printf '%s\n' "$output" | grep -q "::add-mask::alice"
   if printf '%s' "$output" | grep -q $'\r'; then
     echo "CR survived add_masks stripping (issue #314 regression)"
@@ -149,15 +167,15 @@ second-line-password"
   [[ "$output" == *"password:"*"(using default)"* ]]
 }
 
-@test "print_inputs_dump: the dump loop covers all 31 declared inputs (v2.11.8 #257 + #227)" {
+@test "print_inputs_dump: the dump loop covers all 29 declared inputs (v2.11.8 #257 + #227)" {
   unset INPUT_SERVER INPUT_USER INPUT_PASSWORD INPUT_LOCAL_DIR INPUT_REMOTE_DIR \
         INPUT_DELETE INPUT_NO_SYMLINKS INPUT_MAX_RETRIES INPUT_MIRROR_VERBOSE \
         INPUT_FTP_SSL_ALLOW INPUT_SSL_VERIFY_CERTIFICATE INPUT_SSL_CHECK_HOSTNAME \
         INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
         INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
         INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS \
-        INPUT_EXCLUDE INPUT_EXCLUDE_DELETE INPUT_DEBUG INPUT_FAIL_ON_DEPRECATED \
-        INPUT_DRY_RUN INPUT_UPLOAD_LOG_ON_FAILURE INPUT_CONCURRENCY_LOCK \
+        INPUT_EXCLUDE INPUT_DEBUG INPUT_FAIL_ON_DEPRECATED \
+        INPUT_DRY_RUN INPUT_CONCURRENCY_LOCK \
         INPUT_CONCURRENCY_LOCK_PATH INPUT_CONCURRENCY_LOCK_TIMEOUT \
         INPUT_CONCURRENCY_LOCK_POLL_INTERVAL
   run print_inputs_dump "false"
@@ -166,15 +184,15 @@ second-line-password"
               no_symlinks mirror_verbose ftp_ssl_allow ssl_verify_certificate \
               ssl_check_hostname ftp_passive_mode ftp_use_feat ftp_nop_interval \
               net_max_retries net_persist_retries net_timeout dns_max_retries \
-              dns_fatal_timeout lftp_settings exclude exclude_delete debug \
-              fail_on_deprecated dry_run upload_log_on_failure concurrency_lock \
+              dns_fatal_timeout lftp_settings exclude debug \
+              fail_on_deprecated dry_run concurrency_lock \
               concurrency_lock_path concurrency_lock_timeout \
               concurrency_lock_poll_interval; do
     [[ "$output" == *"${name}:"* ]]
   done
 }
 
-@test "print_inputs_dump: debug=true covers all 31 declared inputs (v2.11.8 #181)" {
+@test "print_inputs_dump: debug=true covers all 29 declared inputs (v2.11.8 #181)" {
   # Previously the debug=true printf block was silently missing
   # fail_on_deprecated and dry_run (29 entries vs 31). A regression
   # that drops either from the printf block would have slipped
@@ -185,8 +203,8 @@ second-line-password"
         INPUT_FTP_PASSIVE_MODE INPUT_FTP_USE_FEAT INPUT_FTP_NOP_INTERVAL \
         INPUT_NET_MAX_RETRIES INPUT_NET_PERSIST_RETRIES INPUT_NET_TIMEOUT \
         INPUT_DNS_MAX_RETRIES INPUT_DNS_FATAL_TIMEOUT INPUT_LFTP_SETTINGS \
-        INPUT_EXCLUDE INPUT_EXCLUDE_DELETE INPUT_DEBUG INPUT_FAIL_ON_DEPRECATED \
-        INPUT_DRY_RUN INPUT_UPLOAD_LOG_ON_FAILURE INPUT_CONCURRENCY_LOCK \
+        INPUT_EXCLUDE INPUT_DEBUG INPUT_FAIL_ON_DEPRECATED \
+        INPUT_DRY_RUN INPUT_CONCURRENCY_LOCK \
         INPUT_CONCURRENCY_LOCK_PATH INPUT_CONCURRENCY_LOCK_TIMEOUT \
         INPUT_CONCURRENCY_LOCK_POLL_INTERVAL
   run print_inputs_dump "true"
@@ -195,8 +213,8 @@ second-line-password"
               no_symlinks mirror_verbose ftp_ssl_allow ssl_verify_certificate \
               ssl_check_hostname ftp_passive_mode ftp_use_feat ftp_nop_interval \
               net_max_retries net_persist_retries net_timeout dns_max_retries \
-              dns_fatal_timeout lftp_settings exclude exclude_delete debug \
-              fail_on_deprecated dry_run upload_log_on_failure concurrency_lock \
+              dns_fatal_timeout lftp_settings exclude debug \
+              fail_on_deprecated dry_run concurrency_lock \
               concurrency_lock_path concurrency_lock_timeout \
               concurrency_lock_poll_interval; do
     [[ "$output" == *"${name}:"* ]]
@@ -300,12 +318,13 @@ second-line-password"
 # print_failure_banner
 # ----------------------------------------------------------------------------
 
-@test "print_failure_banner: emits ERROR: UPLOAD FAILED and the lftp log path" {
+@test "print_failure_banner: emits ERROR: UPLOAD FAILED and points to the lftp output" {
   run print_failure_banner "1" "" "/home/lftp/.lftp-logs/run-20260706T193427Z.log" "5h" "30s"
   [ "$status" -eq 1 ]
   [[ "$output" == *"ERROR: UPLOAD FAILED"* ]]
   [[ "$output" == *"Last lftp exit code: 1"* ]]
-  [[ "$output" == *"Full lftp output: /home/lftp/.lftp-logs/run-20260706T193427Z.log"* ]]
+  [[ "$output" == *"The server's reply is in the lftp output above."* ]]
+  [[ "$output" != *"/home/lftp/.lftp-logs"* ]]
 }
 
 @test "print_failure_banner: PERMANENT error is mentioned when set" {

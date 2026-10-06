@@ -2,26 +2,18 @@
 # tests/unit/lock.bats — unit tests for the concurrency-lock
 # functions in lib.sh.
 #
-# The v2.8.0 inline-lftp-script approach (build_lock_acquire_script
-# and build_lock_release_script emitting the `repeat --until-ok
-# quote MKD ...` fragment) was replaced in v2.9.0 with shell-driven
-# helpers (acquire_lock_with_recovery, release_lock_safely) so the
-# stale-lock auto-recovery can do its LIST/parse/DELE/RMD sequence
-# without fighting lftp's flow-control primitives. The
-# build_lock_acquire_script and build_lock_release_script functions
-# remain as no-op shims for source-level backward compat.
+# The lock is driven by shell helpers (acquire_lock_with_recovery,
+# release_lock_safely) so the stale-lock auto-recovery can do its
+# LIST/parse/DELE/RMD sequence without fighting lftp's flow-control
+# primitives.
 #
 # Coverage matrix:
-#   * build_lock_acquire_script — always empty (v2.9.0 deprecation).
-#   * build_lock_release_script — always empty (v2.9.0 deprecation).
 #   * _lock_sentinel_name — pure: TIMESTAMP + PID -> filename.
 #   * _lock_age_seconds — pure: STAMP_NOW - STAMP_THEN in seconds.
 #   * _lock_parse_sentinel_listing — pure: extract first sentinel
 #     filename from an FTP LIST output.
 #   * acquire_lock_with_recovery — uses lftp; tested via fake lftp.
 #   * release_lock_safely — uses lftp; tested via fake lftp.
-#   * run_lftp_lock_release — backward-compat shim, delegates to
-#     release_lock_safely.
 
 setup() {
   set +u
@@ -64,46 +56,6 @@ FAKE
 
 teardown() {
   unset FAKE_LFTP_STDOUT
-}
-
-# ----------------------------------------------------------------------------
-# build_lock_acquire_script — deprecated no-op (v2.9.0)
-# ----------------------------------------------------------------------------
-
-@test "build_lock_acquire_script: always empty (v2.9.0 deprecation)" {
-  INPUT_CONCURRENCY_LOCK="true"
-  INPUT_CONCURRENCY_LOCK_PATH=".lftp-deployment.lock"
-  INPUT_CONCURRENCY_LOCK_TIMEOUT="300"
-  INPUT_CONCURRENCY_LOCK_POLL_INTERVAL="5"
-  run build_lock_acquire_script
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "build_lock_acquire_script: empty when INPUT_CONCURRENCY_LOCK is unset" {
-  unset INPUT_CONCURRENCY_LOCK
-  run build_lock_acquire_script
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "build_lock_acquire_script: empty when INPUT_CONCURRENCY_LOCK is false" {
-  INPUT_CONCURRENCY_LOCK="false"
-  run build_lock_acquire_script
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-# ----------------------------------------------------------------------------
-# build_lock_release_script — deprecated no-op (v2.9.0)
-# ----------------------------------------------------------------------------
-
-@test "build_lock_release_script: always empty (v2.9.0 deprecation)" {
-  INPUT_CONCURRENCY_LOCK="true"
-  INPUT_CONCURRENCY_LOCK_PATH=".lftp-deployment.lock"
-  run build_lock_release_script
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
 }
 
 # ----------------------------------------------------------------------------
@@ -765,44 +717,6 @@ FAKE
   run release_lock_safely "ftp://example.test" "" "" "ftptest"
   [ "$status" -eq 0 ]
   [ ! -s "${FAKE_LFTP_LOG}" ]
-}
-
-# ----------------------------------------------------------------------------
-# run_lftp_lock_release — backward-compat shim
-# ----------------------------------------------------------------------------
-
-@test "run_lftp_lock_release: no-op when lock path is empty" {
-  run run_lftp_lock_release "ftp://nonexistent.invalid" \
-                            "/tmp/does-not-exist-netrc" \
-                            "" "" "ftptest"
-  [ "$status" -eq 0 ]
-  [ ! -s "${FAKE_LFTP_LOG}" ]
-}
-
-@test "run_lftp_lock_release: no-op when netrc file is missing" {
-  rm -f "${FAKE_LFTP_LOG}"
-  run run_lftp_lock_release "ftp://nonexistent.invalid" \
-                            "/tmp/does-not-exist-netrc" \
-                            ".lftp-deployment.lock" "" "ftptest"
-  [ "$status" -eq 0 ]
-  [ ! -s "${FAKE_LFTP_LOG}" ]
-}
-
-@test "run_lftp_lock_release: delegates to release_lock_safely when netrc exists" {
-  rm -f "${FAKE_LFTP_LOG}"
-  # Create a fake netrc so the netrc-exists check passes.
-  fake_netrc="${BATS_TEST_TMPDIR}/fake-netrc"
-  touch "${fake_netrc}"
-  run run_lftp_lock_release "ftp://example.test" \
-                            "${fake_netrc}" \
-                            ".lftp-deployment.lock" \
-                            ".lftp-deployment.lock.20260707T080000Z.1234.info" \
-                            "ftptest"
-  [ "$status" -eq 0 ]
-  grep -q "quote RMD .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
-  grep -q "quote DELE .lftp-deployment.lock.20260707T080000Z.1234.info" "${FAKE_LFTP_LOG}"
-  # v2.11.x (#132): URL must carry the embedded user.
-  grep -q "ftp://ftptest@example.test" "${FAKE_LFTP_LOG}"
 }
 
 # F2 audit (#312): the mktemp fallback branch in

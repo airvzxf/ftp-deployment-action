@@ -70,4 +70,4 @@ body:
     id: context
     attributes:
       label: Context
-      description: Why does this matter? For a behavior example, include the relevant `server` scheme, inputs, and whether the action exited with `0`, `1`, or `2`. You may link the `ftp-deployment-action-log-<run-attempt>` artifact produced by `upload_log_on_failure`, but redact credentials and real host details.
+      description: Why does this matter? For a behavior example, include the relevant `server` scheme, inputs, and whether the action exited with `0`, `1`, or `2`. Redact credentials and real host details.

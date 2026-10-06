@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] - 2026-10-04
+
+Repair release. Every v2.x tag up to v2.11.14 fails to build on the
+user's runner; this release builds again and makes the defaults work.
+
+### Fixed
+
+- The image builds again on every runner: apk packages are pinned by version (`lftp~4.9.3`), not by Alpine revision, so Alpine rotating a package no longer breaks the build.
+- The action no longer hangs with the default settings: `net_max_retries` defaults to `1`.
+- A wrong password is reported as `530 Login incorrect` and classified as permanent (no pointless retries): `net_persist_retries` defaults to `0`.
+- lftp's output (transferred files, server errors, the `dry_run` plan) is shown in the step log.
+
+### Changed
+
+- `exclude` is a comma-separated list of shell globs (`*.map, *.bak, node_modules/`); matching files are neither uploaded nor deleted. **Breaking** for anyone using the regex syntax introduced in v2.11.2.
+
+### Removed
+
+- `upload_log_on_failure`: it posted to a GitHub endpoint that does not exist and never uploaded anything.
+- `exclude_delete`: use `exclude`.
+- The `log_file` output: it pointed inside the container, which is gone when the step ends.
+- `curl` from the image.
+
 ## [2.11.14] - 2026-09-07
 
 Hardening batch v2.11.14 (F2 audit round post-v2.11.13). One
@@ -1329,6 +1352,8 @@ malformed input).
 Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 
 
+[2.12.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.14...v2.12.0
+[2.11.14]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.13...v2.11.14
 [2.11.13]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.12...v2.11.13
 [2.11.12]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.11...v2.11.12
 [2.11.11]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.10...v2.11.11

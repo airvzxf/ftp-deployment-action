@@ -20,8 +20,7 @@
 #      EXIT trap that removes the file.
 #  11. Retry loop with exponential backoff + jitter, capturing
 #      lftp's combined stdout+stderr to a timestamped log file.
-#  12. Expose the log file path via $GITHUB_OUTPUT.
-#  13. Print the success or failure banner.
+#  12. Print the success or failure banner.
 #
 # The split between this file and lib.sh is the only architectural
 # change vs. the pre-v2.5.0 single-file layout; the behaviour is
@@ -54,35 +53,33 @@ set -o pipefail
 : "${INPUT_SERVER:=}"
 : "${INPUT_USER:=}"
 : "${INPUT_PASSWORD:=}"
-: "${INPUT_LOCAL_DIR:=}"
-: "${INPUT_REMOTE_DIR:=}"
-: "${INPUT_DELETE:=}"
-: "${INPUT_NO_SYMLINKS:=}"
+: "${INPUT_LOCAL_DIR:=./}"
+: "${INPUT_REMOTE_DIR:=./}"
+: "${INPUT_DELETE:=false}"
+: "${INPUT_NO_SYMLINKS:=true}"
 : "${INPUT_MAX_RETRIES:=10}"
 : "${INPUT_MIRROR_VERBOSE:=1}"
-: "${INPUT_FTP_SSL_ALLOW:=}"
-: "${INPUT_SSL_VERIFY_CERTIFICATE:=}"
-: "${INPUT_SSL_CHECK_HOSTNAME:=}"
-: "${INPUT_FTP_PASSIVE_MODE:=}"
-: "${INPUT_FTP_USE_FEAT:=}"
+: "${INPUT_FTP_SSL_ALLOW:=true}"
+: "${INPUT_SSL_VERIFY_CERTIFICATE:=true}"
+: "${INPUT_SSL_CHECK_HOSTNAME:=true}"
+: "${INPUT_FTP_PASSIVE_MODE:=true}"
+: "${INPUT_FTP_USE_FEAT:=false}"
 : "${INPUT_FTP_NOP_INTERVAL:=2}"
-: "${INPUT_NET_MAX_RETRIES:=1}"   # F2 audit (#334, follow-up to #330): reverted from 0 back to 1 — see lib.sh::build_ftp_settings for the full rationale. net:max-retries=0 hangs the integration tests because lftp's `mirror -R local/ /` enters an infinite persist-retry loop on the FTP root's MKD failure. TODO(#330): revisit once lftp grows a flag to surface the first attempt's error AND let mirror skip the MKD-on-root preflight.
-: "${INPUT_NET_PERSIST_RETRIES:=5}"
-: "${INPUT_NET_TIMEOUT:=}"
+: "${INPUT_NET_MAX_RETRIES:=1}"
+: "${INPUT_NET_PERSIST_RETRIES:=0}"
+: "${INPUT_NET_TIMEOUT:=15s}"
 : "${INPUT_DNS_MAX_RETRIES:=8}"
-: "${INPUT_DNS_FATAL_TIMEOUT:=}"
+: "${INPUT_DNS_FATAL_TIMEOUT:=10s}"
 : "${INPUT_LFTP_SETTINGS:=}"
 : "${INPUT_EXCLUDE:=}"
-: "${INPUT_EXCLUDE_DELETE:=}"
-: "${INPUT_DEBUG:=}"
-: "${INPUT_FAIL_ON_DEPRECATED:=}"
-: "${INPUT_DRY_RUN:=}"
-: "${INPUT_UPLOAD_LOG_ON_FAILURE:=}"
+: "${INPUT_DEBUG:=false}"
+: "${INPUT_FAIL_ON_DEPRECATED:=false}"
+: "${INPUT_DRY_RUN:=false}"
 : "${INPUT_CONCURRENCY_LOCK:=false}"
 : "${INPUT_CONCURRENCY_LOCK_PATH:=.lftp-deployment.lock}"
 : "${INPUT_CONCURRENCY_LOCK_TIMEOUT:=300}"
 : "${INPUT_CONCURRENCY_LOCK_POLL_INTERVAL:=5}"
-# v2.11.7 (#252): validate and canonicalise the 7 gate bool inputs so
+# v2.11.7 (#252): validate and canonicalise the 6 gate bool inputs so
 # non-canonical aliases (yes/no/on/off/0/1/...) flow into the gate
 # checks the documented way. Pre-fix the gates used a literal
 # `[ ... = "true" ]` compare, so `concurrency_lock: yes` was silently
@@ -91,7 +88,6 @@ set -o pipefail
 INPUT_DELETE=$(normalize_bool                  "delete"                "${INPUT_DELETE}")
 INPUT_NO_SYMLINKS=$(normalize_bool             "no_symlinks"           "${INPUT_NO_SYMLINKS}")
 INPUT_DRY_RUN=$(normalize_bool                 "dry_run"               "${INPUT_DRY_RUN}")
-INPUT_UPLOAD_LOG_ON_FAILURE=$(normalize_bool   "upload_log_on_failure" "${INPUT_UPLOAD_LOG_ON_FAILURE}")
 INPUT_CONCURRENCY_LOCK=$(normalize_bool        "concurrency_lock"      "${INPUT_CONCURRENCY_LOCK}")
 INPUT_DEBUG=$(normalize_bool                   "debug"                 "${INPUT_DEBUG}")
 INPUT_FAIL_ON_DEPRECATED=$(normalize_bool      "fail_on_deprecated"    "${INPUT_FAIL_ON_DEPRECATED}")
@@ -170,12 +166,9 @@ validate_lftp_settings "${INPUT_LFTP_SETTINGS}"
 # (v2.11.8 #174) ASCII space. None of those are valid in an lftp
 # URL. Valid bare-host and bracketed-IPv6 URLs all pass.
 validate_path "server" "${INPUT_SERVER}"
-# v2.11.3 (#160): the exclude inputs flow onto the `mirror -x` /
-# `mirror -X` command line (not into the lftp `-e` script body,
-# since v2.11.2), so they need a lighter validator that allows
-# glob/regex metacharacters like `!`, `;`, `$`, backtick.
-validate_glob_pattern "exclude"        "${INPUT_EXCLUDE}"
-validate_glob_pattern "exclude_delete" "${INPUT_EXCLUDE_DELETE}"
+# exclude is a comma-separated glob list: validate_glob_pattern
+# allows glob metacharacters but rejects lftp command separators.
+validate_glob_pattern "exclude" "${INPUT_EXCLUDE}"
 # Concurrency lock: validate path and integers only when enabled,
 # to keep the validation surface tight for the common case
 # (concurrency_lock=false). validate_int already rejects negatives
@@ -211,19 +204,6 @@ INPUT_REMOTE_DIR=$(normalize_dir "${INPUT_REMOTE_DIR}")
 validate_path "local_dir"  "${INPUT_LOCAL_DIR}"
 validate_path "remote_dir" "${INPUT_REMOTE_DIR}"
 MIRROR_COMMAND=$(build_mirror_command)
-# v2.11.8 (#259): LOCK_ACQUIRE / LOCK_RELEASE removed entirely.
-# The two build_lock_*_script helpers have been unconditional
-# no-ops since v2.9.0; the lock work moved out of the lftp -e
-# fragment to shell-driven helpers (acquire_lock_with_recovery
-# and release_lock_safely). The two empty positional args in
-# run_lftp_once (positions 9-10 in the old signature) were
-# always interpolated as empty into the lftp script body. The
-# helpers themselves are kept in lib.sh as no-ops so anyone
-# sourcing lib.sh continues to find the documented names.
-# Build them only to preserve the deprecation-by-print pattern
-# of the source-level compat. Output is discarded.
-build_lock_acquire_script >/dev/null
-build_lock_release_script >/dev/null
 
 # ------------------------------------------------------------------------------
 # Display the resolved configuration only when INPUT_DEBUG=true.
@@ -268,7 +248,7 @@ write_netrc "${NETRC}" "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
 #
 # v2.9.0: pass the sentinel name (if any was acquired during this
 # run) so the trap can also DELE the sentinel file. We use the
-# empty string as the default — run_lftp_lock_release falls back
+# empty string as the default — release_lock_safely falls back
 # to $ACQUIRED_LOCK_SENTINEL, which is set by acquire_lock_with_recovery.
 #
 # v2.11.2: only register the lock-release portion of the EXIT trap
@@ -285,7 +265,7 @@ write_netrc "${NETRC}" "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
 # and lock path. See tests/integration/scenarios/09-concurrency-
 # lock-e2e.sh which now also covers the default-mode trap shape.
 if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
-  trap 'run_lftp_lock_release "${INPUT_SERVER}" "${NETRC}" "${INPUT_CONCURRENCY_LOCK_PATH}" "${ACQUIRED_LOCK_SENTINEL:-}" "${INPUT_USER}"; rm -f "${NETRC}"' EXIT
+  trap 'release_lock_safely "${INPUT_SERVER}" "${INPUT_CONCURRENCY_LOCK_PATH}" "${ACQUIRED_LOCK_SENTINEL:-}" "${INPUT_USER}"; rm -f "${NETRC}"' EXIT
 else
   trap 'rm -f "${NETRC}"' EXIT
 fi
@@ -351,12 +331,11 @@ LFTP_TIMEOUT="5h"
 LFTP_KILL_AFTER="30s"
 
 # B-04: capture every lftp invocation's combined stdout+stderr to a
-# timestamped log file under ~/.lftp-logs/. The path is exported via
-# the GITHUB_OUTPUT file so a downstream step can upload it as a
-# workflow artifact (or just download it from the runner). The
-# directory is created here rather than at the top of the script
-# so test runs that exit before the loop (validate_int / deprecated
-# ref) do not leave an empty .lftp-logs directory behind.
+# timestamped log file under ~/.lftp-logs/; classify_permanent_error
+# reads it to decide whether a retry can help. The directory is
+# created here rather than at the top of the script so test runs
+# that exit before the loop (validate_int / deprecated ref) do not
+# leave an empty .lftp-logs directory behind.
 mkdir -p "/home/lftp/.lftp-logs"
 LOG_FILE="/home/lftp/.lftp-logs/run-$(date -u +%Y%m%dT%H%M%SZ).log"
 
@@ -415,37 +394,10 @@ while true; do
 done
 printf '::endgroup::\n'
 
-# B-04: expose the log file path as an action output so a follow-up
-# step can attach it as a workflow artifact. Only do this if the
-# runner set GITHUB_OUTPUT (i.e. the user invoked us with `id:` in
-# their step and declared `log_file` in the step's outputs).
-# F2 audit (#313): if the write fails (file unwritable, disk full,
-# leaked fd on a dead runner worker, read-only fs on a self-hosted
-# runner, etc.) the action must not abort AFTER a successful mirror.
-# The output is best-effort metadata; bracket with set +e / set -e /
-# capture rc / warn, mirroring upload_log_artifact at
-# lib.sh:1743-1759.
-if [ -n "${GITHUB_OUTPUT:-}" ]; then
-  set +e
-  printf 'log_file=%s\n' "${LOG_FILE}" >> "${GITHUB_OUTPUT}"
-  _gho_rc=$?
-  set -e
-  if [ "${_gho_rc}" -ne 0 ]; then
-    printf 'WARNING: could not write log_file output to %s (rc=%s); continuing.\n' \
-      "${GITHUB_OUTPUT}" "${_gho_rc}" >&2
-  fi
-fi
-
 # ------------------------------------------------------------------------------
 # Display the status of the LFTP actions.
 # ------------------------------------------------------------------------------
 if [ -z "${SUCCESS}" ]; then
-  # v2.7.0: try to upload the captured lftp log to the current
-  # workflow run as a workflow artifact. The function is fail-soft:
-  # if GITHUB_TOKEN is missing or the upload request fails, it logs
-  # a warning / notice and returns 0, so the failure banner below
-  # still runs.
-  upload_log_artifact "${LOG_FILE}"
   print_failure_banner "${LFTP_RC}" "${PERMANENT_ERROR}" \
     "${LOG_FILE}" "${LFTP_TIMEOUT}" "${LFTP_KILL_AFTER}"
 fi

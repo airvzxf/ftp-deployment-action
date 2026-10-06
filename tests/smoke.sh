@@ -414,15 +414,16 @@ echo "${out}" | grep -q "^EXIT=1" \
 pass "fail_on_deprecated=true on current ref does not error out"
 
 # ----------------------------------------------------------------------------
-# Test 22: A6 — failure banner mentions the log file path (B-04).
+# Test 22: A6 — failure banner points to the lftp output above it.
 # ----------------------------------------------------------------------------
 # We use max_retries=1 to keep the test fast (a single lftp attempt
-# + a quick classification pass). The failure banner must include
-# the captured lftp log path so the user can find it for debugging.
+# + a quick classification pass). The log file inside the container
+# is unreachable for the user, so the banner must point to the lftp
+# output already printed in the step log instead.
 out=$(run_init "INPUT_MAX_RETRIES=1" 30)
-echo "${out}" | grep -qE "Full lftp output: /.+\.lftp-logs/run-[0-9TZ]+\.log" \
-  || fail "failure banner did not mention the log file path; output was:\n${out}"
-pass "failure banner includes the captured lftp log file path"
+echo "${out}" | grep -q "The server's reply is in the lftp output above." \
+  || fail "failure banner did not point to the lftp output; output was:\n${out}"
+pass "failure banner points to the lftp output in the step log"
 
 # ----------------------------------------------------------------------------
 # Test 23: B-04 — lftp stdout+stderr is captured to the log file.
@@ -460,7 +461,7 @@ fi
 pass "dry_run=true adds --dry-run to the mirror command and the DRY RUN banner"
 
 # ----------------------------------------------------------------------------
-# Test 25: INPUT_EXCLUDE=*.map — `mirror -x *.map` appears in the
+# Test 25: INPUT_EXCLUDE=*.map — `mirror -X *.map` appears in the
 # resolved MIRROR_COMMAND, and NO `mirror:exclude*` directive is
 # in FTP_SETTINGS (the v2.11.2 fix moved the exclude onto the
 # mirror command itself; the previous `set mirror:exclude <value>`
@@ -472,33 +473,15 @@ pass "dry_run=true adds --dry-run to the mirror command and the DRY RUN banner"
 # to surface the resolved-command dump.
 # ----------------------------------------------------------------------------
 out=$(run_init "INPUT_DRY_RUN=true" "INPUT_DEBUG=true" "INPUT_EXCLUDE=*.map" 30)
-echo "${out}" | grep -qE 'MIRROR_COMMAND.*-x [*].map' \
-  || fail "INPUT_EXCLUDE=*.map was not injected into MIRROR_COMMAND as -x flag; output was:\n${out}"
+echo "${out}" | grep -qE 'MIRROR_COMMAND.*-X [*].map' \
+  || fail "INPUT_EXCLUDE=*.map was not injected into MIRROR_COMMAND as -X flag; output was:\n${out}"
 # mirror:exclude* must NOT appear in FTP_SETTINGS (was a silent
 # no-op; v2.11.2 fix removed it).
 if echo "${out}" | grep -qE 'set mirror:exclude'; then
   fail "INPUT_EXCLUDE should not produce any set mirror:exclude* directive in FTP_SETTINGS (was a silent no-op in lftp 4.9.3); output was:\n${out}"
 fi
-pass 'INPUT_EXCLUDE=*.map injects "mirror -x *.map" into MIRROR_COMMAND (v2.11.2 fix)'
+pass 'INPUT_EXCLUDE=*.map injects "mirror -X *.map" into MIRROR_COMMAND'
 
-# ----------------------------------------------------------------------------
-# Test 26: INPUT_EXCLUDE_DELETE=*.bak — `mirror -X *.bak` appears in
-# the resolved MIRROR_COMMAND, and NO `mirror:exclude*` directive is
-# in FTP_SETTINGS (the v2.11.2 fix moved the exclude onto the
-# mirror command itself; the previous `set mirror:exclude-file
-# *.bak;` was a silent no-op because `mirror:exclude-file` does
-# not exist in lftp 4.9.3 — verified against MirrorJob.cc::AddPattern,
-# which only queries `mirror:exclude-regex` as a default).
-# v2.11.8 (#194): INPUT_DEBUG=true for the resolved-config dump.
-# ----------------------------------------------------------------------------
-out=$(run_init "INPUT_DRY_RUN=true" "INPUT_DEBUG=true" "INPUT_EXCLUDE_DELETE=*.bak" 30)
-echo "${out}" | grep -qE 'MIRROR_COMMAND.*-X [*].bak' \
-  || fail "INPUT_EXCLUDE_DELETE=*.bak was not injected into MIRROR_COMMAND as -X flag; output was:\n${out}"
-# mirror:exclude* must NOT appear in FTP_SETTINGS.
-if echo "${out}" | grep -qE 'set mirror:exclude'; then
-  fail "INPUT_EXCLUDE_DELETE should not produce any set mirror:exclude* directive in FTP_SETTINGS (no such variable in lftp 4.9.3); output was:\n${out}"
-fi
-pass 'INPUT_EXCLUDE_DELETE=*.bak injects "mirror -X *.bak" into MIRROR_COMMAND (v2.11.2 fix)'
 out=$(run_init "INPUT_DRY_RUN=true" "INPUT_DEBUG=true" 30)
 if echo "${out}" | grep -qE 'set mirror:exclude'; then
   fail "default FTP_SETTINGS unexpectedly contains mirror:exclude; output was:\n${out}"
@@ -642,42 +625,6 @@ echo "${out}" | grep -q "^EXIT=2" \
 pass 'INPUT_REMOTE_DIR with double-quote is rejected (lftp command injection, v2.11.3 #172)'
 
 # ----------------------------------------------------------------------------
-# Test 29: INPUT_UPLOAD_LOG_ON_FAILURE=false — the upload path is
-# skipped with a notice, the regular failure banner still fires
-# (server unreachable), and the action exits 1. This is the
-# "opt-out" path of the v2.7.0 artifact-upload feature.
-# ----------------------------------------------------------------------------
-out=$(run_init "INPUT_UPLOAD_LOG_ON_FAILURE=false" 30)
-echo "${out}" | grep -q "ERROR: UPLOAD FAILED" \
-  || fail "upload_log_on_failure=false should still show the failure banner on an unreachable server; output was:\n${out}"
-# The function is supposed to be a no-op (return 0 with no output)
-# when the opt-in is disabled, so the "uploading log" line must
-# NOT appear.
-if echo "${out}" | grep -q "uploading log"; then
-  fail "upload_log_on_failure=false should NOT attempt the upload; output was:\n${out}"
-fi
-echo "${out}" | grep -q "^EXIT=1" \
-  || fail "upload_log_on_failure=false with unreachable server did not exit 1; output was:\n${out}"
-pass "INPUT_UPLOAD_LOG_ON_FAILURE=false skips upload and shows regular failure banner"
-
-# ----------------------------------------------------------------------------
-# Test 30: INPUT_UPLOAD_LOG_ON_FAILURE=true (default) WITHOUT
-# GITHUB_TOKEN — the function detects a missing GitHub-Actions
-# env var, skips with a notice, and the action still exits 1
-# normally (fail-soft). The skip notice must mention SOME
-# required env var; we accept any of the five so the test is
-# robust to the iteration order in lib.sh.
-# ----------------------------------------------------------------------------
-out=$(run_init "INPUT_UPLOAD_LOG_ON_FAILURE=true" 30)
-echo "${out}" | grep -q "ERROR: UPLOAD FAILED" \
-  || fail "upload_log_on_failure=true with missing GITHUB_TOKEN should still show the failure banner; output was:\n${out}"
-echo "${out}" | grep -qE "(GITHUB_API_URL|GITHUB_REPOSITORY|GITHUB_RUN_ID|GITHUB_RUN_ATTEMPT|GITHUB_TOKEN) is not set" \
-  || fail "upload_log_on_failure=true with missing GITHUB_TOKEN should print the skip notice mentioning a required env var; output was:\n${out}"
-echo "${out}" | grep -q "^EXIT=1" \
-  || fail "upload_log_on_failure=true with missing GITHUB_TOKEN did not exit 1; output was:\n${out}"
-pass "INPUT_UPLOAD_LOG_ON_FAILURE=true with missing GITHUB_TOKEN skips upload with notice, still exits 1"
-
-# ----------------------------------------------------------------------------
 # Test 31: INPUT_CONCURRENCY_LOCK=false (default) — the lftp -e
 # script is bit-for-bit identical to v2.7.0: no `quote MKD` or
 # `repeat --until-ok` substring appears. We assert by substring
@@ -741,9 +688,7 @@ pass "INPUT_CONCURRENCY_LOCK=true + unreachable server fails fast with lock-acqu
 # Test 35 (v2.9.0): INPUT_CONCURRENCY_LOCK=false (default) on an
 # unreachable server must reach the mirror phase and exit with
 # the regular "UPLOAD FAILED" banner. Regression: ensures the
-# refactor of build_lock_acquire_script/build_lock_release_script
-# to no-ops in v2.9.0 did not change the disabled-lock code
-# path.
+# disabled-lock code path stays unchanged.
 # ----------------------------------------------------------------------------
 out=$(run_init "INPUT_CONCURRENCY_LOCK=false" "INPUT_MAX_RETRIES=1" 30)
 echo "${out}" | grep -q "ERROR: UPLOAD FAILED" \

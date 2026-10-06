@@ -18,6 +18,9 @@
 
 set -u
 
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+ok()   { printf '  ok: %s\n' "$*"; }
+
 # CDPATH= cd -- ... is the POSIX idiom to resolve the script's own directory
 # without being affected by the caller's CDPATH. shellcheck gets confused
 # by the `=` spacing, hence the disable.
@@ -74,14 +77,7 @@ else
   printf '  skip: action.yml YAML parseability check skipped (install python3-yaml in CI to enable this regression test)\n' >&2
 fi
 
-fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
-ok()   { printf '  ok: %s\n' "$*"; }
-
 # 1. Inputs declared in action.yml (top-level keys under "inputs:").
-# v2.11.3 (#197): stop scanning when we hit either `runs:` or
-# `outputs:` (both are top-level siblings of `inputs:`; for Docker
-# actions, `outputs:` sits next to `runs:`, not inside it, so the
-# earlier parser picked up output keys like `log_file` as inputs).
 declared=$(awk '
   /^inputs:/ { in_inputs = 1; next }
   in_inputs && (/^runs:/ || /^outputs:/) { in_inputs = 0; next }
