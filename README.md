@@ -112,7 +112,7 @@ ssl_verify_certificate: 'false'
 
 The `@latest` tag now points to the current v2 release.
 
-## Publishing targets (v2.10.0+)
+## Publishing targets
 
 Every tag is published to **two registries by default** (ghcr.io + Docker Hub
 when configured); a third (ECR Public) is currently disabled — see below:
@@ -134,13 +134,12 @@ release pipeline emits a `::notice::` and skips that registry —
 the v2.9.0 behaviour (ghcr.io only) is preserved bit-for-bit.
 
 > **Note on ECR Public**: A third registry (`public.ecr.aws/m2z1h0m9/...`)
-> was added in v2.10.0 for enterprise visibility. It is **temporarily
-> disabled** as of the post-v2.11.1 commits because the AWS IAM
-> role's OIDC trust policy is no longer aligned with this repo,
-> and the maintainer does not currently have access to the AWS
-> account. The `release.yml` ECR Public steps are commented out
-> (not deleted) so re-enabling is a one-line change in two places
-> when the trust policy is fixed. See the "Re-enable ECR Public"
+> exists for enterprise visibility but is **currently disabled** —
+> the AWS IAM role's OIDC trust policy is no longer aligned with
+> this repo, and the maintainer does not currently have access to
+> the AWS account. The `release.yml` ECR Public steps are commented
+> out (not deleted) so re-enabling is a one-line change in two
+> places when the trust policy is fixed. See the "Re-enable ECR Public"
 > section below for the exact diff.
 
 ### Maintainer setup: publishing to Docker Hub
@@ -168,10 +167,9 @@ have secrets configured. The ghcr.io path is unaffected.
 
 ### Re-enable ECR Public (when AWS access is restored)
 
-ECR Public publishing is **disabled by default** as of
-v2.11.11 (#216). All four ECR Public sites in
-`.github/workflows/release.yml` are under `# DISABLED:`
-preambles:
+ECR Public publishing is **disabled by default**. All four ECR
+Public sites in `.github/workflows/release.yml` are under
+`# DISABLED:` preambles:
 
 1. The ECR Public block inside the
    `Resolve tag, version and enabled registries` step
@@ -190,7 +188,7 @@ preambles:
    which is dead while `ecr_enabled=false`.
 4. The `Attach SBOM attestation to ECR Public image` step at
    the end of the `build` job — commented out, with a
-   `v2.11.11 (#216): DISABLED.` preamble.
+   `# DISABLED:` preamble.
 
 To re-enable, do **three things** (canonical runbook
 tracked in #212):
@@ -336,12 +334,11 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 > `concurrency_lock_poll_interval` accept a non-negative
 > integer without leading zeros. `max_retries: "00"` (and any
 > other `0`-prefixed integer) exits `2` rather than being
-> silently treated as `0`. v2.11.12 (F2 audit) extended the
-> same guard to the two duration inputs (`net_timeout`,
-> `dns_fatal_timeout`) so `net_timeout: "00s"` and
-> `dns_fatal_timeout: "00"` are also rejected with exit `2`
-> — they are silent typos of the `0` retry-forever sentinel,
-> not distinct values.
+> silently treated as `0`. The same guard applies to the
+> two duration inputs (`net_timeout`, `dns_fatal_timeout`):
+> `net_timeout: "00s"` and `dns_fatal_timeout: "00"` are
+> rejected with exit `2` — they are silent typos of the `0`
+> retry-forever sentinel, not distinct values.
 
 | Option                 | Description                                                                           | Required | Default | Example                                                                                           |
 |------------------------|---------------------------------------------------------------------------------------|----------|---------|---------------------------------------------------------------------------------------------------|
@@ -705,7 +702,7 @@ non-buildable image) **before** a tag is pushed.
 |------|---------|
 | `0`  | Upload finished successfully. |
 | `1`  | Upload failed after all retries; the last lftp error is printed above. |
-| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` — v2.11.8 #195 closes the credential-source bypass); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives; an `exclude` value rejected by `validate_glob_pattern` (control chars, `;`, `&`, `|`, `"`, or an item that starts with a dash or contains a space). |
+| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` — the userinfo password is rejected); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives; an `exclude` value rejected by `validate_glob_pattern` (control chars, `;`, `&`, `|`, `"`, or an item that starts with a dash or contains a space). |
 
 lftp's own output (transferred files, the `dry_run` plan, server errors) is
 printed in the step log; there is nothing else to download.
@@ -725,7 +722,7 @@ log for debugging).
 | `mirror: Access failed: 550 ... No such file or directory` | The remote path does not exist or the FTP user has no permission to create it. | Create the `remote_dir` manually (or set `delete: false` and accept a partial mirror) and confirm the FTP user owns it. |
 | `getpeername: Connection refused` on `ftps://host:990` | The server is **not** speaking implicit FTPS — it is almost certainly explicit FTPS on port 21. The `ftps://` URL forces TLS from byte 0, which the server rejects. | Switch `server` to `ftp://host:21` and keep `ftp_ssl_allow: "true"`. See the "Plain FTP vs FTPS" table in [Security and SSL](#security-and-ssl). |
 | lftp logs `PROT command not understood` then drops the data connection | Some legacy FTPS servers do not support `PROT P` even though they accept `AUTH TLS`. lftp falls back to `PROT C` (clear data channel) by default; if the server closes the data connection instead, the action exits 1. | Add `lftp_settings: "set ftps:initial-prot C;"` to the step, or ask the hoster to enable `PROT P` server-side. |
-| `can't create /<some-path>/.netrc: Permission denied` (or `Read-only file system`) on self-hosted runners | The runner is forwarding its host `HOME` into the container. The action tried to write `<HOME>/.netrc`, but the directory is read-only or owned by a different uid than the in-container `lftp` user. | **Fixed in v2.11.0** — `entrypoint.sh` now pins `NETRC=/home/lftp/.netrc` and `export HOME=/home/lftp` regardless of any inherited `HOME`. On older versions, add `env: HOME: /home/lftp` to the step. See [Self-hosted runners](#self-hosted-runners) below for the full picture. |
+| `can't create /<some-path>/.netrc: Permission denied` (or `Read-only file system`) on self-hosted runners | The runner is forwarding its host `HOME` into the container. The action tried to write `<HOME>/.netrc`, but the directory is read-only or owned by a different uid than the in-container `lftp` user. | `entrypoint.sh` pins `NETRC=/home/lftp/.netrc` and `export HOME=/home/lftp` regardless of any inherited `HOME`, so this error means an image older than v2.11.0: pin a current release. See [Self-hosted runners](#self-hosted-runners) below for the full picture. |
 
 > **The job is still running for hours**: `lftp` is probably waiting on a
 > half-open TCP connection. Since v1.5.0 the action wraps every
@@ -747,36 +744,11 @@ Self-hosted runners forward environment variables from the host
 into the container by default. In practice this means `HOME` is
 copied from the runner process, which is usually `/github/home`
 (the GitHub Actions Runner service) or `/home/runner` (bare-metal).
-Since **v2.11.0**, the action ignores the inherited `HOME` and pins
-`HOME=/home/lftp` unconditionally — `entrypoint.sh` writes the
-credentials to `/home/lftp/.netrc` (the path the `Dockerfile`
-guarantees to be writable for the `lftp` user), so the deployment
-succeeds even when the host `HOME` is read-only or owned by a
-different uid.
-
-On older versions (`v2.10.0` and below) the action wrote the
-credentials to `${HOME}/.netrc`, which made the `.netrc` write
-fail with `can't create /<HOME>/.netrc: Permission denied` on
-self-hosted runners with the default `HOME` forwarding. If you
-cannot yet upgrade to v2.11.0, the workaround is to pin `HOME`
-explicitly on the step:
-
-```yaml
-- uses: airvzxf/ftp-deployment-action@v2.12.0
-  env:
-    HOME: /home/lftp        # override the runner's HOME
-  with:
-    server: ftp://example.com
-    user: ${{ secrets.FTP_USERNAME }}
-    password: ${{ secrets.FTP_PASSWORD }}
-    local_dir: .
-    remote_dir: /www
-```
-
-The `env` block on the action step ships only `HOME` to the
-container, leaving every other environment variable forwarded
-normally. This is the documented escape hatch for v2.10.0 and
-remains valid on v2.11.0+.
+The action ignores the inherited `HOME` and pins `HOME=/home/lftp`
+unconditionally — `entrypoint.sh` writes the credentials to
+`/home/lftp/.netrc` (the path the `Dockerfile` guarantees to be
+writable for the `lftp` user), so the deployment succeeds even
+when the host `HOME` is read-only or owned by a different uid.
 
 See also `SECURITY.md` → "Self-hosted runners" for the security
 implications of environment forwarding and how the action's
@@ -800,13 +772,12 @@ are all validated against the same deny-list: `..` path-traversal
 components, leading dashes (which `lftp` would misread as options),
 control characters, newlines, double quotes, shell metacharacters
 (`;`, `&`, `|`, backtick, and dollar), `!` (lftp's shell escape),
-and (since v2.11.8) ASCII space — a value like `/my data/site/`
-used to silently break the lftp `-e` tokeniser, now exits `2`.
-The `server` input additionally rejects URL userinfo that
-embeds a password (the `ftp://user:pass@host` form, v2.11.8
-#195 — lftp 4.9.3 would otherwise authenticate with the embedded
-credentials and silently bypass the action's documented
-credential source). `lftp_settings` is lightly sanitised:
+and ASCII space — a value like `/my data/site/` exits `2`
+instead of silently breaking the lftp `-e` tokeniser. The
+`server` input additionally rejects URL userinfo that embeds a
+password (the `ftp://user:pass@host` form — lftp would otherwise
+authenticate with the embedded credentials and silently bypass
+the action's documented credential source). `lftp_settings` is lightly sanitised:
 control characters, newlines, backtick, dollar, and `!` are
 rejected, and no more than three semicolon-chained directives
 are allowed.

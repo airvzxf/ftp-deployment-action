@@ -325,6 +325,21 @@ setup() {
   [ "$output" = "mirror --continue --reverse --verbose=3 --no-symlinks --delete --dry-run" ]
 }
 
+@test "build_mirror_command: INPUT_EXCLUDE='*.map' stays literal when the cwd has a.map" {
+  # Without `set -f` around the comma split, `*.map` expands against
+  # the cwd and the command becomes `-X a.map`.
+  _trap_dir=$(mktemp -d)
+  touch "${_trap_dir}/a.map"
+  cd "${_trap_dir}"
+  unset INPUT_MIRROR_VERBOSE INPUT_NO_SYMLINKS INPUT_DELETE INPUT_DRY_RUN
+  INPUT_EXCLUDE='*.map'
+  run build_mirror_command
+  cd "${BATS_TEST_DIRNAME}/../.."
+  rm -rf "${_trap_dir}"
+  [ "$status" -eq 0 ]
+  [ "$output" = "mirror --continue --reverse --verbose=1 -X *.map" ]
+}
+
 # ----------------------------------------------------------------------------
 # normalize_dir
 # ----------------------------------------------------------------------------

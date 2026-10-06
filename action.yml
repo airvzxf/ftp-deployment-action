@@ -86,7 +86,7 @@ inputs:
     required: false
     default: ''
   exclude:
-    description: 'Comma-separated shell globs (e.g. `*.map, *.bak, node_modules/`). Matching files are neither uploaded nor deleted.'
+    description: 'Comma-separated shell globs (e.g. `*.map, *.bak, node_modules/`). Matching files are neither uploaded nor deleted. Items must not contain spaces or start with `-`.'
     required: false
     default: ''
   debug:

@@ -1058,21 +1058,10 @@ run_lftp_once() {
   # NetRC::LookupHost call (see commands.cc:1055 in upstream).
   # B-04: lftp's combined stdout+stderr goes to the step log (so the
   # user sees transferred files, the dry-run plan and server errors)
-  # and is appended to the timestamped log file that
-  # classify_permanent_error reads. pipefail makes the function return
-  # lftp's exit code, not tee's; it is also set here because bats
-  # calls this function without entrypoint.sh.
-  #
-  # v2.11.9 (#193): use >> (append) instead of > (truncate). The
-  # caller (entrypoint.sh's retry loop) computes LOG_FILE once
-  # before the loop and passes it in unchanged on every retry; with
-  # >, each retry erased the previous attempt's output and the
-  # post-mortem log only contained the LAST attempt's stderr (or
-  # nothing if all attempts failed mid-startup). With >>, the file
-  # grows by retry and classify_permanent_error sees the full
-  # history. The log is timestamped once per run (entrypoint.sh
-  # uses `date -u +%Y%m%dT%H%M%SZ` in the basename) so retries
-  # within one run do NOT collide on the filename.
+  # and is appended (tee -a, one file per run, so every retry is kept)
+  # to the log file that classify_permanent_error reads. pipefail makes
+  # the function return lftp's exit code, not tee's; it is also set
+  # here because bats calls this function without entrypoint.sh.
   # shellcheck disable=SC3040
   set -o pipefail
   timeout -k "${_rlo_kill_after}" "${_rlo_timeout}" lftp \
