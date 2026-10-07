@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.1] - 2026-10-07
+
+Bug-fix release for two problems found while testing v2.12.0 against
+real servers.
+
+### Fixed
+
+- `dry_run: true` fails when the server cannot be reached. It used to print a full upload plan and succeed for a wrong host, port or a firewall that blocks the runner. A dry run now connects and logs in, so a wrong password also fails it, with the server's `530`. A dry run of a first deploy, to a `remote_dir` that does not exist yet, still works. (#341)
+- When the server never replies (a firewall that drops packets, a wrong host), lftp only says `max-retries exceeded`. The failure banner now explains that there was no reply and tells you to check the address, port and firewall. GitHub-hosted runners connect from Azure IP ranges, which some hosters block. (#342)
+
+### Tests
+
+- The FTPS integration tests no longer fail at random: the harness's readiness probe made the test server crash. Leftover references to the inputs removed in v2.12.0 are gone from tests and docs. (#138, #343)
+
 ## [2.12.0] - 2026-10-04
 
 Repair release. Tags v2.0.1 through v2.11.14 fail to build on the
@@ -1352,6 +1366,7 @@ malformed input).
 Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 
 
+[2.12.1]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.12.0...v2.12.1
 [2.12.0]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.14...v2.12.0
 [2.11.14]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.13...v2.11.14
 [2.11.13]: https://github.com/airvzxf/ftp-deployment-action/compare/v2.11.12...v2.11.13
