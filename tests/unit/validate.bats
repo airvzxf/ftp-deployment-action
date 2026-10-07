@@ -500,12 +500,12 @@ setup() {
 }
 
 @test "validate_glob_pattern rejects double-quote (lftp string delimiter)" {
-  run validate_glob_pattern "exclude_delete" '"X"'
+  run validate_glob_pattern "exclude" '"X"'
   [ "$status" -eq 2 ]
 }
 
 @test "validate_glob_pattern accepts an empty string" {
-  run validate_glob_pattern "exclude_delete" ""
+  run validate_glob_pattern "exclude" ""
   [ "$status" -eq 0 ]
 }
 
@@ -583,7 +583,7 @@ bar'
   # embedded double-quotes, and tests/smoke.sh:286 pins it as a
   # documented happy path. The closing of #172 therefore means
   # ensuring the validator rejects `"` only where it is dangerous
-  # (paths in validate_path; mirror -x/-X values in
+  # (paths in validate_path; mirror -X values in
   # validate_glob_pattern), not in validate_lftp_settings where
   # `"` is the documented string-delimiter for lftp's
   # `set <key> "value";` directive. v2.11.8 close-doc.

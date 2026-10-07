@@ -426,15 +426,9 @@ echo "${out}" | grep -q "The server's reply is in the lftp output above." \
 pass "failure banner points to the lftp output in the step log"
 
 # ----------------------------------------------------------------------------
-# Test 23: B-04 — lftp stdout+stderr is captured to the log file.
-#
-# The log file path is /home/lftp/.lftp-logs/run-<timestamp>.log.
-# We cannot easily read the file from outside the container, but
-# the previous test (Test 22) already verified the path is in the
-# banner, which is the surface that matters. This test instead
-# confirms the failure banner appears for an unreachable server
-# even when no error matches the A6 classifier (i.e. we did not
-# regress by always aborting on the first failure).
+# Test 23: the failure banner appears for an unreachable server even
+# when no error matches the A6 classifier (i.e. we did not regress by
+# always aborting on the first failure).
 # ----------------------------------------------------------------------------
 out=$(run_init "INPUT_MAX_RETRIES=1" 30)
 echo "${out}" | grep -q "ERROR: UPLOAD FAILED" \

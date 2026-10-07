@@ -557,12 +557,8 @@ print_inputs_dump() {
   printf '::group::Inputs received\n'
   echo "=== Inputs received ==="
   if [ "${_pid_debug}" = "true" ]; then
-    # v2.11.8 (#181): order matches action.yml's `inputs:` block so a
-    # side-by-side diff of the dump against the schema is clean. Also
-    # adds the two entries the previous printf block was silently
-    # missing: `fail_on_deprecated` and `dry_run` (29 entries vs the
-    # 31 declared inputs). The DEBUG=false branch already iterated
-    # all 31 names correctly.
+    # Order matches action.yml's `inputs:` block so a side-by-side diff
+    # of the dump against the schema is clean.
     printf '  %-26s %s\n' "server:"                  "$(_indirection INPUT_SERVER)"
     printf '  %-26s %s\n' "user:"                    "$(_indirection INPUT_USER)"
     printf '  %-26s %s\n' "password:"                "$(_indirection INPUT_PASSWORD)"
