@@ -157,6 +157,34 @@ wait_for_port() {
 }
 
 # ------------------------------------------------------------------------------
+# wait_for_listen CONTAINER PORT TIMEOUT_SECONDS
+#   Poll the sockets inside CONTAINER every 0.5s, up to TIMEOUT_SECONDS,
+#   until vsftpd listens on PORT. Returns 1 on timeout. `netstat -p`
+#   names only the processes of the container's own PID namespace, so
+#   with --network host a listener left by another container (shown as
+#   "-") does not count. Unlike
+#   wait_for_port it never connects: on the Alpine test server image a
+#   connect-and-close probe makes vsftpd's standalone listener (PID 1)
+#   die with SIGSEGV now and then (exit 139), and the action then gets
+#   "Connection refused" on every try (#138).
+# ------------------------------------------------------------------------------
+wait_for_listen() {
+  _wfl_container=$1
+  _wfl_port=$2
+  _wfl_deadline=$(($3 * 2))
+  _wfl_i=0
+  while [ "${_wfl_i}" -lt "${_wfl_deadline}" ]; do
+    if ${RUNTIME} exec "${_wfl_container}" netstat -ltnp 2>/dev/null \
+        | grep -q ":${_wfl_port}[[:space:]].*vsftpd"; then
+      return 0
+    fi
+    sleep 0.5
+    _wfl_i=$((_wfl_i + 1))
+  done
+  return 1
+}
+
+# ------------------------------------------------------------------------------
 # start_ftp_server FTP_USER FTP_PASS DATA_DIR
 #   Boot fauria/vsftpd with the given virtual user / password, bind-
 #   mounted DATA_DIR at /home/vsftpd (the directory where virtual
