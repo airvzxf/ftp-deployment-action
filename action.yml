@@ -98,7 +98,7 @@ inputs:
     required: false
     default: 'false'
   dry_run:
-    description: 'If "true", perform a dry run: lftp will compute the mirror plan but not transfer or delete any file. Useful to preview what the action would change before a destructive run. The action still exits 0 on success (i.e. on a clean dry-run plan) and 1 on a hard error.'
+    description: 'If "true", perform a dry run: lftp will compute the mirror plan but not transfer or delete any file. Useful to preview what the action would change before a destructive run. It still connects and logs in, so an unreachable server or a wrong password fails the dry run. The action exits 0 on success (i.e. on a clean dry-run plan) and 1 on a hard error.'
     required: false
     default: 'false'
   concurrency_lock:
