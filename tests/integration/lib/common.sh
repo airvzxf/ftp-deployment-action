@@ -157,6 +157,34 @@ wait_for_port() {
 }
 
 # ------------------------------------------------------------------------------
+# wait_for_listen CONTAINER PORT TIMEOUT_SECONDS
+#   Poll the sockets inside CONTAINER every 0.5s, up to TIMEOUT_SECONDS,
+#   until vsftpd listens on PORT. Returns 1 on timeout. `netstat -p`
+#   names only the processes of the container's own PID namespace, so
+#   with --network host a listener left by another container (shown as
+#   "-") does not count. Unlike
+#   wait_for_port it never connects: on the Alpine test server image a
+#   connect-and-close probe makes vsftpd's standalone listener (PID 1)
+#   die with SIGSEGV now and then (exit 139), and the action then gets
+#   "Connection refused" on every try (#138).
+# ------------------------------------------------------------------------------
+wait_for_listen() {
+  _wfl_container=$1
+  _wfl_port=$2
+  _wfl_deadline=$(($3 * 2))
+  _wfl_i=0
+  while [ "${_wfl_i}" -lt "${_wfl_deadline}" ]; do
+    if ${RUNTIME} exec "${_wfl_container}" netstat -ltnp 2>/dev/null \
+        | grep -q ":${_wfl_port}[[:space:]].*vsftpd"; then
+      return 0
+    fi
+    sleep 0.5
+    _wfl_i=$((_wfl_i + 1))
+  done
+  return 1
+}
+
+# ------------------------------------------------------------------------------
 # start_ftp_server FTP_USER FTP_PASS DATA_DIR
 #   Boot fauria/vsftpd with the given virtual user / password, bind-
 #   mounted DATA_DIR at /home/vsftpd (the directory where virtual
@@ -226,6 +254,8 @@ start_ftp_server() {
   export FTP_CONTAINER_NAME
   FTP_DATA_DIR="${_sfs_data_dir}"
   export FTP_DATA_DIR
+  FTP_SERVER_PORT="${FTP_CONTROL_PORT}"
+  export FTP_SERVER_PORT
 
   # Wait for vsftpd to accept control connections on
   # $FTP_CONTROL_PORT. Typical startup time is ~1s; allow up to 20s
@@ -493,6 +523,7 @@ assert_action_success() {
     printf '%s\n' '---- captured action log (exit '"${_aas_rc}"') ----' >&2
     cat "${_aas_log}" >&2
     printf '%s\n' '---- end of action log ----' >&2
+    dump_ftp_server_diagnostics
     log_fail "action exited with code ${_aas_rc}"
   fi
   if ! grep -q 'FTP UPLOADED FINISHED' "${_aas_log}"; then
@@ -501,6 +532,37 @@ assert_action_success() {
     printf '%s\n' '---- end of action log ----' >&2
     log_fail "action exited 0 but did not print the FTP UPLOADED FINISHED banner"
   fi
+}
+
+# ------------------------------------------------------------------------------
+# dump_ftp_server_diagnostics
+#   Print, to stderr, what the FTP server looked like when the action
+#   failed: the container state (a vsftpd that died shows its exit code
+#   and FinishedAt), its output (vsftpd prints "500 OOPS: ..." there
+#   when it cannot bind or start), its transfer log, and which sockets
+#   listen on the server port. Added for the FTPS 03/04 flake (#138),
+#   where the action gets "Connection refused" although the harness
+#   saw the port open. Best effort: never fails the caller.
+# ------------------------------------------------------------------------------
+dump_ftp_server_diagnostics() {
+  [ -n "${FTP_CONTAINER_NAME:-}" ] || return 0
+  {
+    printf '%s\n' "---- ftp server diagnostics (${FTP_CONTAINER_NAME}, port ${FTP_SERVER_PORT:-?}) ----"
+    ${RUNTIME} inspect --format \
+      'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}' \
+      "${FTP_CONTAINER_NAME}" 2>&1
+    printf '%s\n' '-- container output --'
+    ${RUNTIME} logs --tail 50 "${FTP_CONTAINER_NAME}" 2>&1
+    printf '%s\n' '-- /var/log/vsftpd/vsftpd.log (tail) --'
+    ${RUNTIME} exec "${FTP_CONTAINER_NAME}" tail -n 20 /var/log/vsftpd/vsftpd.log 2>&1
+    printf '%s\n' "-- listeners on port ${FTP_SERVER_PORT:-?} --"
+    if command -v ss >/dev/null 2>&1; then
+      ss -ltnp 2>&1 | grep -E "^State|:${FTP_SERVER_PORT:-x}[[:space:]]"
+    else
+      printf '%s\n' '(ss not available)'
+    fi
+    printf '%s\n' '---- end of ftp server diagnostics ----'
+  } >&2 || true
 }
 
 # ------------------------------------------------------------------------------
