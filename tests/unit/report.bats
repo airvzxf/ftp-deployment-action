@@ -347,3 +347,36 @@ second-line-password"
   [[ "$output" == *"137  process killed"* ]]
   [[ "$output" == *"SIGKILL after 30s grace"* ]]
 }
+
+@test "print_failure_banner: bare 'max-retries exceeded' prints the no-reply hint (#342)" {
+  _log="${BATS_TEST_TMPDIR}/run.log"
+  printf 'Try #1\nmirror: Fatal error: max-retries exceeded\n' > "${_log}"
+  run print_failure_banner "1" "" "${_log}" "5h" "30s"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"lftp got no reply from the server"* ]]
+  [[ "$output" == *"firewall"* ]]
+  [[ "$output" != *"The server's reply is in the lftp output above."* ]]
+}
+
+@test "print_failure_banner: 'max-retries exceeded (Connection refused)' keeps the default line" {
+  _log="${BATS_TEST_TMPDIR}/run.log"
+  printf 'mirror: Fatal error: max-retries exceeded (Connection refused)\n' > "${_log}"
+  run print_failure_banner "1" "" "${_log}" "5h" "30s"
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"no reply from the server"* ]]
+  [[ "$output" == *"The server's reply is in the lftp output above."* ]]
+}
+
+@test "print_failure_banner: PERMANENT error never prints the no-reply hint" {
+  _log="${BATS_TEST_TMPDIR}/run.log"
+  printf 'mirror: Login failed: 530 Login incorrect.\nmirror: Fatal error: max-retries exceeded\n' > "${_log}"
+  run print_failure_banner "1" "true" "${_log}" "5h" "30s"
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"no reply from the server"* ]]
+}
+
+@test "print_failure_banner: missing log file keeps the default line" {
+  run print_failure_banner "1" "" "${BATS_TEST_TMPDIR}/does-not-exist.log" "5h" "30s"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"The server's reply is in the lftp output above."* ]]
+}

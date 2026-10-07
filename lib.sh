@@ -1530,11 +1530,13 @@ print_resolved_config() {
 #   failure was classified as permanent, list common lftp exit codes
 #   for debugging, and exit 1. The function does not return.
 #   LOG_FILE is not printed: the container is gone after the step, and
-#   lftp's output is already in the step log.
+#   lftp's output is already in the step log. It is only read to tell
+#   whether the server ever answered.
 # ------------------------------------------------------------------------------
 print_failure_banner() {
   _pfb_rc=$1
   _pfb_permanent=$2
+  _pfb_log=$3
   _pfb_timeout=$4
   _pfb_kill_after=$5
 
@@ -1555,7 +1557,17 @@ print_failure_banner() {
     echo "  124  timeout reached (max wall-clock ${_pfb_timeout})"
     echo "  137  process killed (SIGKILL after ${_pfb_kill_after} grace)"
   fi
-  echo "The server's reply is in the lftp output above."
+  # lftp appends the cause in parentheses ("(Connection refused)") when
+  # it has one; a bare "max-retries exceeded" means no reply at all
+  # (connect timeout, firewall drop, peer closed before the greeting).
+  if [ -z "${_pfb_permanent}" ] && [ -f "${_pfb_log}" ] && \
+     grep -qE 'max-retries exceeded[[:space:]]*$' "${_pfb_log}"; then
+    echo "lftp got no reply from the server (max-retries exceeded, no reason given)."
+    echo "Check the server address and port, and any firewall between the runner"
+    echo "and the server (GitHub-hosted runners connect from Azure IP ranges)."
+  else
+    echo "The server's reply is in the lftp output above."
+  fi
   exit 1
 }
 
