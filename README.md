@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@v4
       # Here is the deployment action
       - name: Upload from public_html via FTP
-        uses: airvzxf/ftp-deployment-action@v2.12.0
+        uses: airvzxf/ftp-deployment-action@v2.12.1
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -85,7 +85,7 @@ jobs:
 ```
 
 > **Pin to a specific tag (recommended)**: use an exact release
-> such as `@v2.12.0` (the examples below use it) or a full commit
+> such as `@v2.12.1` (the examples below use it) or a full commit
 > SHA. Floating refs (`@v2`, `@v1`, `@latest`, `@main`, `@master`)
 > are not moved by the release pipeline, so they can lag behind
 > the latest release.
@@ -119,8 +119,8 @@ when configured); a third (ECR Public) is currently disabled — see below:
 
 | Registry | Image | How to consume |
 |---|---|---|
-| GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.12.0` | `uses: airvzxf/ftp-deployment-action@v2.12.0` (the example above) |
-| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.12.0` | `uses: docker://docker.io/airvzxf/ftp-deployment-action:v2.12.0` |
+| GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.12.1` | `uses: airvzxf/ftp-deployment-action@v2.12.1` (the example above) |
+| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.12.1` | `uses: docker://docker.io/airvzxf/ftp-deployment-action:v2.12.1` |
 
 Both carry the same OCI image bytes (one `docker buildx build`,
 one digest), the same `cosign` keyless signature
@@ -403,7 +403,7 @@ jobs:
       - uses: actions/checkout@v4
       # Here is the deployment action
       - name: Upload from public_html via FTP
-        uses: airvzxf/ftp-deployment-action@v2.12.0
+        uses: airvzxf/ftp-deployment-action@v2.12.1
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -465,7 +465,7 @@ jobs:
       group: ftp-deploy-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - uses: airvzxf/ftp-deployment-action@v2.12.0
+      - uses: airvzxf/ftp-deployment-action@v2.12.1
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -493,7 +493,7 @@ distinct workflows pointing to the same FTP and don't want
 to share a group name), opt in to the server-side lock:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2.12.0
+- uses: airvzxf/ftp-deployment-action@v2.12.1
   with:
     server: ${{ secrets.FTP_SERVER }}
     user: ${{ secrets.FTP_USERNAME }}
@@ -573,7 +573,7 @@ production, one for staging, each writing to a different
 remote directory), give each its own lock path:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2.12.0
+- uses: airvzxf/ftp-deployment-action@v2.12.1
   with:
     concurrency_lock: "true"
     concurrency_lock_path: ".lftp-deployment.lock.prod"
