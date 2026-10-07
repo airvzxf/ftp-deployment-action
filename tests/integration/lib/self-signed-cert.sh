@@ -486,6 +486,8 @@ start_ftps_server() {
   export FTP_CONTAINER_NAME
   FTP_DATA_DIR="${_sfs_data_dir}"
   export FTP_DATA_DIR
+  FTP_SERVER_PORT="${_sfs_host_port}"
+  export FTP_SERVER_PORT
   # Overlay vsftpd.conf bind-mounted into the container. Exported so
   # the scenario-level EXIT trap can rm -f it on success paths
   # (the container rm is handled by stop_ftp_server; the overlay
