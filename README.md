@@ -419,7 +419,7 @@ jobs:
           ftp_use_feat: "true"
           ftp_nop_interval: "9"
           net_max_retries: "3"
-          net_persist_retries: "2"
+          net_persist_retries: "0"
           net_timeout: "13s"
           dns_max_retries: "17"
           dns_fatal_timeout: "never"

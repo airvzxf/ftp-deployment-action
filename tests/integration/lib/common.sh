@@ -274,8 +274,8 @@ stop_ftp_server() {
 
 # ------------------------------------------------------------------------------
 # lftp_run_script SCRIPT_FILE LOG_FILE [TIMEOUT_SECONDS]
-#   Run an lftp script from a freshly-pulled alpine:3.23.3 container
-#   that has `apk add lftp` installed (alpine base + apk layer).
+#   Run an lftp script in a container of the test server image
+#   (tests/integration/Dockerfile.test-server, Alpine + lftp).
 #
 #   lftp 4.9.3 in alpine refuses to combine `-c`/`-f` with a URL
 #   argument ("-c, -f, -v, -h conflict with other `open' options and

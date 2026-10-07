@@ -24,21 +24,24 @@ tests/integration/
 │                                 #   assets/.keep (one of them is a
 │                                 #   subdirectory to exercise MKD)
 └── scenarios/
-    ├── 01-plain-ftp-upload.sh                # exercises the upload path
-    ├── 02-plain-ftp-delete.sh                # exercises --delete
+    ├── 01-plain-ftp-upload.sh                # lftp: upload
+    ├── 02-plain-ftp-delete.sh                # lftp: --delete
     ├── 03-ftps-explicit-upload.sh            # FTPS explicit (AUTH TLS upgrade)
     ├── 04-ftps-implicit-upload.sh            # FTPS implicit (TLS from byte 0)
-    ├── 05-exclude-and-exclude-delete.sh      # exercises mirror:exclude
-                                              #   + --delete
-    ├── 07-self-hosted-home.sh                # regression guard for #111
-                                              #   (#124 covered end-to-end)
-    ├── 08-action-driven-upload.sh            # action-driven upload
-                                              #   (closes #124)
-    ├── 09-concurrency-lock-e2e.sh            # INPUT_CONCURRENCY_LOCK=true
-                                              #   end-to-end
+    ├── 05-mirror-delete-and-exclude-glob.sh  # lftp: --delete + -X '*.bak'
+    ├── 07-self-hosted-home.sh                # forwarded HOME (#111)
+    ├── 08-action-driven-upload.sh            # upload through .netrc (#124)
+    ├── 09-concurrency-lock-e2e.sh            # concurrency_lock: true
     ├── 10-stale-lock-recovery.sh             # stale-sentinel takeover
-    └── 12-acquire-vs-bare-host-url.sh        # acquire_lock against the
-                                              #   bare-host URL shape (closes #160)
+    ├── 12-acquire-vs-bare-host-url.sh        # lock with a bare-host URL (#132)
+    ├── 20-action-yml-defaults.sh             # only required inputs, action.yml defaults
+    ├── 21-lftp-output-visible.sh             # lftp output in the step log, 530, masking
+    ├── 22-dry-run-shows-plan.sh              # dry_run shows the plan, changes nothing
+    ├── 23-exclude-glob-and-delete.sh         # exclude globs with upload and --delete
+    ├── 24-image-contents.sh                  # image ships only what it needs
+    ├── 25-dry-run-unreachable.sh             # dry_run fails on a closed port (#341)
+    ├── 26-dry-run-new-remote-dir.sh          # dry_run of a first deploy
+    └── 27-no-reply-hint.sh                   # silent server gets the no-reply hint (#342)
 ```
 
 ## Running locally
@@ -108,85 +111,20 @@ TLS variable names (`ssl_tlsv1_1=` → `ssl_tlsv11=`, etc.),
 vsftpd`. The image tag is controlled by `TEST_SERVER_IMAGE`
 (default `ftp-deployment-action-test-server:ci-integration`).
 
-## Why variant B (lftp from alpine, not the action)
+## Why variant B (lftp directly, not the action)
 
-The original #117 proposal offered three variants for the FTP
-server harness. **Variant C** (drive the upload through the
-`ftp-deployment-action` image) was the original target for this
-worktree. It turned out to be **not viable in this PR** for two
-related reasons, both rooted in lftp 4.9.3 (the version pinned in
-`Dockerfile`):
+Most scenarios run the action image end-to-end against vsftpd
+(variant C). Three scenarios (01, 02, 05) run lftp directly from the
+test server image, with `lftp_run_script`, because they check the
+lftp mirror primitive the action relies on (upload, `--delete`,
+`-X <glob>`); driving them through the action would only re-test the
+harness.
 
-1. **lftp 4.9.3 ignores `.netrc` for `ftp://host:port` URLs.** The
-   action's `run_lftp_once` (in `entrypoint.sh` / `lib.sh`) calls
-   `lftp "${INPUT_SERVER}" -e '...'` with the server URL as the
-   positional `<site>` argument. The action writes credentials to
-   `~/.netrc` and relies on lftp to look them up, but lftp 4.9.3
-   falls back to `USER anonymous`/`PASS lftp@` for FTP URLs without
-   an embedded user, and never consults `.netrc` for the retry
-   path. We confirmed this with `lftp -d` debug output: every
-   `ftp://127.0.0.1:2121` invocation logs `---> USER anonymous`
-   even when `~/.netrc` has the correct `machine 127.0.0.1 login
-   ... password ...` entry. This makes the action's B-03 ".netrc
-   over argv" plumbing inert against any FTP server that rejects
-   `anonymous`, which is the default for `fauria/vsftpd`'s
-   virtual-user config.
-
-2. **`set mirror:exclude-file` is hidden behind `set -a` in
-   lftp 4.9.3.** The action's `lib.sh::build_ftp_settings` writes
-   `set mirror:exclude-file <value>;` for `INPUT_EXCLUDE_DELETE`,
-   expecting it to protect remote files from `mirror --reverse
-   --delete`. lftp 4.9.3 logs `mirror:exclude-file: no such
-   variable. Use 'set -a' to look at all variables.` and
-   continues without applying the pattern. The same flag for the
-   upload direction (`set mirror:exclude` *is* valid, but it
-   expects a POSIX regex, not a glob — `*.bak` is rejected with
-   "Invalid preceding regular expression").
-
-   Closed by `lib.sh::build_ftp_settings` wrapping the assignment
-   in `set -a; set mirror:exclude-file <value>; set -a;` (closes
-   #131). The first `set -a` enables lftp's "show all variables"
-   toggle so the assignment is recognised; the second toggles it
-   back off so the rest of the action's lftp settings are not
-   affected by the wider auto-execute semantics. See scenario 11
-   for the end-to-end regression guard.
-
-Either issue alone was enough to disqualify variant C in the
-#117 PR; together they made it impossible to assert the action's
-behaviour end-to-end without modifying `entrypoint.sh` / `lib.sh` /
-`Dockerfile`, which #117 must not touch.
-
-**v2.11.0 closed both blockers** (#124, #131), so variant C is now
-the primary path: scenarios 03 / 04 / 07 / 08 / 09 / 10 / 11 / 12
-all drive the action image end-to-end (see the Layout tree). The
-plain-FTP scenarios 01 / 02 / 05 still use variant B (lftp from
-alpine, no `set mirror:exclude-file`) because they exercise lftp's
-mirror-primitive behaviour directly — running them via the action
-would only re-test the harness, not the primitive.
-
-**Variant B** (lftp from alpine, ftp-upload / ftp-list /
-ftp-delete through `alpine:3.23.3 + apk add lftp` and the same
-`fauria/vsftpd` server) is now a deliberate subset, kept for the
-two scenarios that need raw lftp semantics (01, 02, 05). It keeps
-the harness faithful to the production control plane — same lftp
-version, same FTP server image, same PASV configuration — while
-letting the test drive the FTP commands directly. The CI job
-still builds the action image
-(`make build IMAGE=ftp-deployment-action:ci-integration VERSION=ci`)
-to catch Dockerfile / package-pin / entrypoint-regressions; the
-integration scenarios themselves either invoke it (variant C) or
-run lftp from a throwaway alpine container (variant B).
-
-## Acceptance criteria for #117
-
-| # | Criterion | Status |
-|---|---|---|
-| 1 | `make integration` boots vsftpd and runs 11 scenarios. | ✓ 11 scenarios wired (01/02/05 plain FTP, 03/04 FTPS, 07/08/09/10/11/12 action-driven) |
-| 2 | All 11 scenarios pass locally (podman) and in CI (docker). | ✓ locally; CI is the same Make target, only the runtime differs |
-| 3 | Each scenario is standalone. | ✓ each scenario installs `trap stop_ftp_server EXIT` |
-| 4 | `tests/integration/README.md` documents how to add a scenario. | ✓ see "Adding a new scenario" below |
-| 5 | Tests are idempotent. | ✓ per-scenario unique PID + random FTP user; bind mount created with `mktemp -d`; trap removes both the FTP container and the bind-mount source directory |
-| 6 | CI job runs in ≤ 5 min. | ✓ `timeout-minutes: 5` on the integration job in `ci.yml`; current local wall-clock per scenario is ~12s (mostly the alpine image pull + the FTP server boot) |
+`lftp_run_script` passes credentials with `open -u user,pass` inside a
+0600 script file: lftp 4.9.3 does not consult `~/.netrc` for an
+`ftp://host:port` URL without an embedded user. The action works
+around the same behaviour by rewriting the URL to
+`ftp://user@host:port` (`rewrite_lftp_url`, #124).
 
 ## How a scenario is wired
 
