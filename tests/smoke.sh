@@ -445,20 +445,21 @@ echo "${out}" | grep -q "PERMANENT" \
 pass "A6 classifier does not flag transient connection errors as permanent"
 
 # ----------------------------------------------------------------------------
-# Test 24: dry_run=true — the mirror command gets --dry-run, and the
-# final banner switches to the DRY RUN variant.
-# v2.11.8 (#194): opt in to INPUT_DEBUG=true so print_resolved_config
-# dumps the MIRROR_COMMAND line we are asserting on.
+# Test 24: dry_run=true — the mirror command gets --dry-run behind a
+# `quote NOOP` connection check, so a dry run against the unreachable
+# smoke server fails instead of printing the DRY RUN banner (#341).
+# The success banner is covered by integration scenario 22.
+# INPUT_DEBUG=true makes print_resolved_config dump MIRROR_COMMAND.
 # ----------------------------------------------------------------------------
 out=$(run_init "INPUT_DRY_RUN=true" "INPUT_DEBUG=true" 30)
-echo "${out}" | grep -q "MIRROR_COMMAND.*--dry-run" \
+echo "${out}" | grep -q "MIRROR_COMMAND.*quote NOOP && mirror .*--dry-run" \
   || fail "INPUT_DRY_RUN=true was not reflected in MIRROR_COMMAND; output was:\n${out}"
-echo "${out}" | grep -q "FTP DRY RUN COMPLETED" \
-  || fail "dry-run final banner was not shown; output was:\n${out}"
-if echo "${out}" | grep -q "FTP UPLOADED FINISHED!"; then
-  fail "dry-run run should not show the regular success banner; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=1" \
+  || fail "dry run against an unreachable server did not exit 1; output was:\n${out}"
+if echo "${out}" | grep -q "FTP DRY RUN COMPLETED"; then
+  fail "dry run against an unreachable server printed the DRY RUN banner; output was:\n${out}"
 fi
-pass "dry_run=true adds --dry-run to the mirror command and the DRY RUN banner"
+pass "dry_run=true checks the connection before mirror --dry-run"
 
 # ----------------------------------------------------------------------------
 # Test 25: INPUT_EXCLUDE=*.map — `mirror -X *.map` appears in the
