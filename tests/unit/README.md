@@ -10,7 +10,6 @@ Automated Testing System).
 | File | Functions |
 |---|---|
 | `validate.bats` | `validate_int`, `validate_path`, `validate_lftp_settings` |
-| `deprecation.bats` | `emit_deprecation_warning` |
 | `parse.bats` | `_indirection`, `extract_netrc_host`, `build_ftp_settings`, `build_mirror_command`, `normalize_dir` |
 | `retry.bats` | `classify_permanent_error`, `compute_backoff_seconds` |
 | `report.bats` | `add_masks`, `print_inputs_dump`, `print_success_banner`, `print_failure_banner` |

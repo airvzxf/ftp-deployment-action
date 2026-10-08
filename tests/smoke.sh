@@ -335,83 +335,16 @@ fi
 pass "max_retries=0 retries past the first failure (saw ${n} attempts in 25s)"
 
 # ----------------------------------------------------------------------------
-# Test 15: deprecation warning fires for EOL ref (v1.3.3).
+# Test 15: the pinned ref does not change the output (#324): no
+# ::warning:: / ::notice:: / ::error:: for @latest, @master or a v1 tag.
 # ----------------------------------------------------------------------------
-out=$(run_init 'GITHUB_ACTION_REF=v1.3.3' 10)
-echo "${out}" | grep -q "::warning file=action.yml,title=End-of-life version::" \
-  || fail "no ::warning:: emitted for EOL ref v1.3.3; output was:\n${out}"
-echo "${out}" | grep -q "v1.3.3 is end-of-life" \
-  || fail "warning text does not mention the EOL ref; output was:\n${out}"
-pass "::warning:: emitted for EOL ref v1.3.3"
-
-# ----------------------------------------------------------------------------
-# Test 16: ::notice:: fires for older-but-supported v1.x refs.
-# ----------------------------------------------------------------------------
-out=$(run_init 'GITHUB_ACTION_REF=v1.5.0' 10)
-echo "${out}" | grep -q "::notice file=action.yml,title=New major available::" \
-  || fail "no ::notice:: emitted for v1.5.0; output was:\n${out}"
-echo "${out}" | grep -q "v2 is available" \
-  || fail "notice text does not mention v2; output was:\n${out}"
-# v2.11.12 (F2 audit): the v1.4*-v1.9* branch (lib.sh:454-456) emits
-# `(image version: %s)` where `%s` is the value baked into /app/VERSION
-# at build time. If the Dockerfile build-arg wiring regressed the
-# `_edw_img_ver` fallback (`entrypoint.sh:123`) produces the literal
-# string `unknown`; pin the field so the regression surfaces in
-# smoke instead of waiting for the release-pipeline Check 3.
-if echo "${out}" | grep -qE 'image version: (unknown|\(image version:[[:space:]]*\))'; then
-  fail "image version is 'unknown' (build-arg VERSION did not reach /app/VERSION); output was:\n${out}"
-fi
-pass "::notice:: emitted for v1.5.0 ('v2 is available', image version baked)"
-
-# ----------------------------------------------------------------------------
-# Test 17: current line (v2.0.1) is silent.
-# ----------------------------------------------------------------------------
-out=$(run_init 'GITHUB_ACTION_REF=v2.0.1' 10)
-if echo "${out}" | grep -qE "::warning|::notice|::error file=action.yml,title="; then
-  fail "unexpected deprecation notice for current ref v2.0.1; output was:\n${out}"
-fi
-pass "no deprecation notice for current ref v2.0.1"
-
-# ----------------------------------------------------------------------------
-# Test 18: @latest emits a ::warning::.
-# ----------------------------------------------------------------------------
-out=$(run_init 'GITHUB_ACTION_REF=latest' 10)
-echo "${out}" | grep -q "::warning file=action.yml,title=Deprecated usage::" \
-  || fail "no ::warning:: emitted for @latest; output was:\n${out}"
-echo "${out}" | grep -q "moving target" \
-  || fail "@latest warning does not mention 'moving target'; output was:\n${out}"
-pass "::warning:: emitted for @latest"
-
-# ----------------------------------------------------------------------------
-# Test 19: @master emits a ::warning::.
-# ----------------------------------------------------------------------------
-out=$(run_init 'GITHUB_ACTION_REF=master' 10)
-echo "${out}" | grep -q "::warning file=action.yml,title=Branch usage::" \
-  || fail "no ::warning:: emitted for @master; output was:\n${out}"
-pass "::warning:: emitted for @master"
-
-# ----------------------------------------------------------------------------
-# Test 20: fail_on_deprecated=true + EOL ref -> ::error:: and exit 1.
-# ----------------------------------------------------------------------------
-out=$(run_init 'GITHUB_ACTION_REF=v1.3.3
-INPUT_FAIL_ON_DEPRECATED=true' 10)
-echo "${out}" | grep -q "::error file=action.yml::" \
-  || fail "no ::error:: emitted with fail_on_deprecated=true; output was:\n${out}"
-echo "${out}" | grep -q "^EXIT=1" \
-  || fail "fail_on_deprecated=true on EOL ref did not exit 1; output was:\n${out}"
-pass "fail_on_deprecated=true on EOL ref exits 1 with ::error::"
-
-# ----------------------------------------------------------------------------
-# Test 21: fail_on_deprecated=true + current ref -> no ::error::, action runs.
-# ----------------------------------------------------------------------------
-out=$(run_init 'GITHUB_ACTION_REF=v2.0.1
-INPUT_FAIL_ON_DEPRECATED=true' 25)
-if echo "${out}" | grep -q "::error file=action.yml::"; then
-  fail "fail_on_deprecated=true on current ref unexpectedly fired; output was:\n${out}"
-fi
-echo "${out}" | grep -q "^EXIT=1" \
-  || fail "current ref with fail_on_deprecated should still reach the lftp step; output was:\n${out}"
-pass "fail_on_deprecated=true on current ref does not error out"
+for _ref in latest master v1.3.3; do
+  out=$(run_init "GITHUB_ACTION_REF=${_ref}" 10)
+  if echo "${out}" | grep -qE "::(warning|notice|error) file=action.yml"; then
+    fail "GITHUB_ACTION_REF=${_ref} produced a workflow annotation; output was:\n${out}"
+  fi
+done
+pass "GITHUB_ACTION_REF=latest/master/v1.3.3 produce no annotation"
 
 # ----------------------------------------------------------------------------
 # Test 22: A6 — failure banner points to the lftp output above it.
