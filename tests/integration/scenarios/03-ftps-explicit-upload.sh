@@ -174,6 +174,8 @@ assert_present "${_ftp_home}" "about.html"
 # instead of being caught downstream.
 assert_present "${_ftp_home}" "assets"
 
+assert_server_alive
+
 log_pass "scenario 03 passed: action uploaded fixtures over FTPS explicit (AUTH TLS on port ${FTP_CONTROL_PORT})"
 
 exit 0

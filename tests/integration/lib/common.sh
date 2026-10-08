@@ -535,6 +535,21 @@ assert_action_success() {
 }
 
 # ------------------------------------------------------------------------------
+# assert_server_alive
+#   Fail if the FTP server container is no longer running. A server that
+#   crashed after the upload finished would otherwise pass (#138). Waits 2 s
+#   first: a crash triggered by the last session closing lands just after.
+# ------------------------------------------------------------------------------
+assert_server_alive() {
+  sleep 2
+  _asa_state=$(${RUNTIME} inspect -f '{{.State.Status}}' "${FTP_CONTAINER_NAME}" 2>&1) || true
+  if [ "${_asa_state}" != "running" ]; then
+    dump_ftp_server_diagnostics
+    log_fail "ftp server is ${_asa_state} after the scenario; expected running"
+  fi
+}
+
+# ------------------------------------------------------------------------------
 # dump_ftp_server_diagnostics
 #   Print, to stderr, what the FTP server looked like when the action
 #   failed: the container state (a vsftpd that died shows its exit code
