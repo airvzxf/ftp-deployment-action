@@ -42,13 +42,14 @@ tests/integration/
     ├── 25-dry-run-unreachable.sh             # dry_run fails on a closed port (#341)
     ├── 26-dry-run-new-remote-dir.sh          # dry_run of a first deploy
     ├── 27-no-reply-hint.sh                   # silent server gets the no-reply hint (#342)
-    └── 28-lock-live-holder-kept.sh           # a live holder keeps the lock (#250)
+    ├── 28-lock-live-holder-kept.sh           # a live holder keeps the lock (#250)
+    └── 29-version-line.sh                    # first log line names the release
 ```
 
 ## Running locally
 
 ```
-make build IMAGE=ftp-deployment-action:ci-integration VERSION=ci
+make build IMAGE=ftp-deployment-action:ci-integration
 make build-test-server-image TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
 make integration IMAGE=ftp-deployment-action:ci-integration \
                  TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
@@ -72,7 +73,7 @@ otherwise.
 `.github/workflows/ci.yml` defines a separate `integration` job
 that:
 
-1. Builds the action image (`make build IMAGE=ftp-deployment-action:ci-integration VERSION=ci`).
+1. Builds the action image (`make build IMAGE=ftp-deployment-action:ci-integration`).
 2. Builds the pre-baked FTPS test server image (`make build-test-server-image TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration`).
 3. Runs `make integration IMAGE=ftp-deployment-action:ci-integration TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration`.
 
