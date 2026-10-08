@@ -119,68 +119,23 @@ rm -f "${_log}" "${_env_file}"
 pass "container runs and validate_path rejects '..' with exit 2"
 
 # ---------------------------------------------------------------------------
-# Check 2: the deprecation warning fires for an EOL ref. We pass
-# GITHUB_ACTION_REF=v1.3.3 (EOL per SECURITY.md) and expect:
-#   * exit 1 (lftp fails on unreachable server after the warning)
-#   * a '::warning file=action.yml,title=End-of-life version::' line
-#
-# This catches:
-#   * _deprecated_check regressing (no ::warning:: emitted)
-#   * the EOL list being accidentally emptied
-#   * the /app/VERSION bake not working (the warning text would
-#     show 'unknown' instead of the real version)
+# Check 2: the first line of a run names the release
+# (`ftp-deployment-action vX.Y.Z`, from the repo's VERSION file).
 # ---------------------------------------------------------------------------
-echo "=== Check 2: deprecation warning fires for EOL ref v1.3.3 ==="
+echo "=== Check 2: first line is 'ftp-deployment-action vX.Y.Z' ==="
 _log=$(mktemp); _env_file=$(mktemp)
 {
   COMMON_ENV
-  printf 'GITHUB_ACTION_REF=v1.3.3\n'
+  printf 'INPUT_LOCAL_DIR=../etc\n'
 } > "${_env_file}"
-set +e
-timeout 60 "${RUNTIME}" run --rm --env-file "${_env_file}" "${IMAGE}" >"${_log}" 2>&1
-_rc=$?
-set -e
-if [ "${_rc}" -ne 1 ]; then
+timeout 15 "${RUNTIME}" run --rm --env-file "${_env_file}" "${IMAGE}" >"${_log}" 2>&1 || true
+_first=$(head -n 1 "${_log}")
+if ! printf '%s\n' "${_first}" | grep -qE '^ftp-deployment-action v[0-9]+\.[0-9]+\.[0-9]+$'; then
   cat "${_log}" >&2
   rm -f "${_log}" "${_env_file}"
-  fail "GITHUB_ACTION_REF=v1.3.3 with unreachable server did not exit 1 (got ${_rc})"
-fi
-if ! grep -q '::warning file=action.yml,title=End-of-life version::' "${_log}"; then
-  cat "${_log}" >&2
-  rm -f "${_log}" "${_env_file}"
-  fail "expected ::warning:: for EOL ref v1.3.3"
+  fail "first line is '${_first}', expected 'ftp-deployment-action vX.Y.Z'"
 fi
 rm -f "${_log}" "${_env_file}"
-pass "::warning:: emitted for EOL ref v1.3.3"
-
-# ---------------------------------------------------------------------------
-# Check 3: the image prints the right version string. This is the
-# canary that catches the kind of bug that hit v2.3.0: the
-# /app/VERSION file was supposed to be baked at build time with
-# the resolved tag, but if the build-arg wiring regressed the
-# file would not contain the tag.
-#
-# We read /app/VERSION directly via `--entrypoint cat` rather than
-# parsing the deprecation warning text. The v1.3.3 EOL branch
-# (lib.sh:444-452) does not emit the '(image version: %s)'
-# substring (only the @latest / @master / v1.4*-v1.9* branches do,
-# at lib.sh:432 and lib.sh:456), so the previous check at this
-# site was a silent no-op for the EOL ref it exercised.
-# ---------------------------------------------------------------------------
-echo "=== Check 3: /app/VERSION is baked (build-arg VERSION reached the Dockerfile) ==="
-_log=$(mktemp)
-timeout 60 "${RUNTIME}" run --rm --entrypoint cat "${IMAGE}" /app/VERSION >"${_log}" 2>&1 || true
-# /app/VERSION must exist, be non-empty, and not be the literal
-# string 'unknown' (the fallback in entrypoint.sh:123 when the
-# file is missing). A regression in the build-arg wiring would
-# leave the file empty or absent.
-_baked_version=$(cat "${_log}" 2>/dev/null || true)
-if [ -z "${_baked_version}" ] || [ "${_baked_version}" = "unknown" ]; then
-  cat "${_log}" >&2
-  rm -f "${_log}"
-  fail "build-arg VERSION did not reach /app/VERSION; got: '${_baked_version}'"
-fi
-rm -f "${_log}"
-pass "build-arg VERSION was baked into /app/VERSION: ${_baked_version}"
+pass "first line names the release: ${_first}"
 
 printf '\nAll release smoke tests passed for %s.\n' "${IMAGE}"

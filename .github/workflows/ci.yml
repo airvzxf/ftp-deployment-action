@@ -171,7 +171,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Build the action image under test
-        run: make build IMAGE=ftp-deployment-action:ci-integration VERSION=ci
+        run: make build IMAGE=ftp-deployment-action:ci-integration
       # Build the pre-baked FTPS test server image used by scenarios
       # 03 / 04 (closes #135). Same `ci-integration` suffix as the
       # action image so both rebuild together on the same CI run;

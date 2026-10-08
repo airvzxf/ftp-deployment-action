@@ -104,9 +104,8 @@ historical SHA is the contract with existing users; altering
 it would be a breaking change worse than the missing
 signature.
 
-Users on legacy refs are already covered by the EOL notice in
-the "Supported versions" table above and by the deprecation
-warning emitted by the action itself at runtime. Users who
+Users on legacy refs are covered by the EOL notice in the
+"Supported versions" table above. Users who
 need to verify a legacy tag's integrity can pin to a specific
 commit SHA instead of the tag name.
 

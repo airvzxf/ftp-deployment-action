@@ -32,7 +32,7 @@ tests/integration/
     ├── 07-self-hosted-home.sh                # forwarded HOME (#111)
     ├── 08-action-driven-upload.sh            # upload through .netrc (#124)
     ├── 09-concurrency-lock-e2e.sh            # concurrency_lock: true
-    ├── 10-stale-lock-recovery.sh             # stale-sentinel takeover
+    ├── 10-stale-lock-recovery.sh             # takeover of a sentinel older than 6 h
     ├── 12-acquire-vs-bare-host-url.sh        # lock with a bare-host URL (#132)
     ├── 20-action-yml-defaults.sh             # only required inputs, action.yml defaults
     ├── 21-lftp-output-visible.sh             # lftp output in the step log, 530, masking
@@ -41,13 +41,15 @@ tests/integration/
     ├── 24-image-contents.sh                  # image ships only what it needs
     ├── 25-dry-run-unreachable.sh             # dry_run fails on a closed port (#341)
     ├── 26-dry-run-new-remote-dir.sh          # dry_run of a first deploy
-    └── 27-no-reply-hint.sh                   # silent server gets the no-reply hint (#342)
+    ├── 27-no-reply-hint.sh                   # silent server gets the no-reply hint (#342)
+    ├── 28-lock-live-holder-kept.sh           # a live holder keeps the lock (#250)
+    └── 29-version-line.sh                    # first log line names the release
 ```
 
 ## Running locally
 
 ```
-make build IMAGE=ftp-deployment-action:ci-integration VERSION=ci
+make build IMAGE=ftp-deployment-action:ci-integration
 make build-test-server-image TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
 make integration IMAGE=ftp-deployment-action:ci-integration \
                  TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
@@ -71,7 +73,7 @@ otherwise.
 `.github/workflows/ci.yml` defines a separate `integration` job
 that:
 
-1. Builds the action image (`make build IMAGE=ftp-deployment-action:ci-integration VERSION=ci`).
+1. Builds the action image (`make build IMAGE=ftp-deployment-action:ci-integration`).
 2. Builds the pre-baked FTPS test server image (`make build-test-server-image TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration`).
 3. Runs `make integration IMAGE=ftp-deployment-action:ci-integration TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration`.
 

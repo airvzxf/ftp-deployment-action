@@ -99,9 +99,8 @@ validate_bool() {
 # normalize_bool NAME VALUE
 #   Echo the canonical lftp-style "true" or "false" for VALUE, after
 #   validating it through `validate_bool`. Used for the GATE inputs
-#   (`delete`, `no_symlinks`, `dry_run`, `concurrency_lock`, plus
-#   `debug` and `fail_on_deprecated`) which
-#   the script compares with a literal `[ ... = "true" ]` to decide
+#   (`delete`, `no_symlinks`, `dry_run`, `concurrency_lock`, `debug`)
+#   which the script compares with a literal `[ ... = "true" ]` to decide
 #   whether to append a flag / take a branch.
 #
 #   Without this, a workflow author who writes `concurrency_lock: yes`
@@ -435,68 +434,6 @@ validate_lftp_settings() {
 }
 
 # ------------------------------------------------------------------------------
-# emit_deprecation_warning REF IMAGE_VERSION FAIL_ON_DEPRECATED
-#
-# Emit a deprecation / EOL / major-out-of-date notice based on the ref
-# the user pinned this action to. Driven by $GITHUB_ACTION_REF (set
-# by the runner) and the /app/VERSION file baked at build time by
-# release.yml.
-#
-# Strategy: hardcoded EOL list. No network call, no latency, no rate
-# limit. Update on each major-line cut.
-#
-#   * @latest                  -> ::warning:: "moving target" (B-18)
-#   * @master / @main / empty  -> ::warning:: "development branch"
-#   * v1.0-alpha.* | v1.1 |
-#     v1.2.0 | v1.3.*          -> ::warning:: "end-of-life" (SECURITY.md)
-#   * v1.4* - v1.9*            -> ::notice::  "v2 is available"
-#   * anything else            -> silent (current line)
-#
-# If FAIL_ON_DEPRECATED=true AND the ref is in the EOL list, exit 1
-# via ::error::. Other warnings (latest, master) are advisory only.
-# ------------------------------------------------------------------------------
-emit_deprecation_warning() {
-  _edw_ref=$1
-  _edw_img_ver=$2
-  _edw_fail_on=$3
-
-  case "${_edw_ref}" in
-    latest)
-      printf '::warning file=action.yml,title=Deprecated usage::' >&2
-      printf 'You are using @latest, a moving target. ' >&2
-      printf 'Pin to @v2 or @<sha>. (image version: %s)\n' "${_edw_img_ver}" >&2
-      ;;
-    "")
-      # No GITHUB_ACTION_REF means the workflow invoked the action from
-      # the same repo (`uses: ./` or local checkout). Not a user-facing
-      # warning, but still useful to know the image version.
-      ;;
-    master|main)
-      printf '::warning file=action.yml,title=Branch usage::' >&2
-      printf 'You are using @%s, a development branch. ' "${_edw_ref}" >&2
-      printf 'Use a tagged release (current image: %s).\n' "${_edw_img_ver}" >&2
-      ;;
-    v1.0-alpha.1|v1.0-alpha.2|v1.1|v1.2.0|v1.3.0|v1.3.1|v1.3.2|v1.3.3)
-      printf '::warning file=action.yml,title=End-of-life version::' >&2
-      printf 'Version %s is end-of-life (SECURITY.md: only v1.4+ is supported). ' "${_edw_ref}" >&2
-      printf 'Upgrade to v2: https://github.com/airvzxf/ftp-deployment-action/releases\n' >&2
-      if [ "${_edw_fail_on}" = "true" ]; then
-        printf '::error file=action.yml::fail_on_deprecated is true and ref %s is EOL.\n' "${_edw_ref}" >&2
-        exit 1
-      fi
-      ;;
-    v1.4*|v1.5*|v1.6*|v1.7*|v1.8*|v1.9*)
-      printf '::notice file=action.yml,title=New major available::' >&2
-      printf 'You are on %s. v2 is available (BREAKING: ssl_verify_certificate default is now true). ' "${_edw_ref}" >&2
-      printf 'See CHANGELOG.md. (image version: %s)\n' "${_edw_img_ver}" >&2
-      ;;
-    *)
-      # Current line (v2.x, or anything not yet in the EOL list).
-      ;;
-  esac
-}
-
-# ------------------------------------------------------------------------------
 # add_masks
 #   Defence-in-depth: ask the runner to mask sensitive values in the
 #   log even if they ever leak outside the .netrc plumbing. GitHub
@@ -582,7 +519,6 @@ print_inputs_dump() {
     printf '  %-26s %s\n' "lftp_settings:"           "$(_indirection INPUT_LFTP_SETTINGS)"
     printf '  %-26s %s\n' "exclude:"                 "$(_indirection INPUT_EXCLUDE)"
     printf '  %-26s %s\n' "debug:"                   "$(_indirection INPUT_DEBUG)"
-    printf '  %-26s %s\n' "fail_on_deprecated:"      "$(_indirection INPUT_FAIL_ON_DEPRECATED)"
     printf '  %-26s %s\n' "dry_run:"                 "$(_indirection INPUT_DRY_RUN)"
     printf '  %-26s %s\n' "concurrency_lock:"        "$(_indirection INPUT_CONCURRENCY_LOCK)"
     printf '  %-26s %s\n' "concurrency_lock_path:"   "$(_indirection INPUT_CONCURRENCY_LOCK_PATH)"
@@ -596,8 +532,7 @@ print_inputs_dump() {
       NO_SYMLINKS MIRROR_VERBOSE FTP_SSL_ALLOW SSL_VERIFY_CERTIFICATE \
       SSL_CHECK_HOSTNAME FTP_PASSIVE_MODE FTP_USE_FEAT FTP_NOP_INTERVAL \
       NET_MAX_RETRIES NET_PERSIST_RETRIES NET_TIMEOUT DNS_MAX_RETRIES \
-      DNS_FATAL_TIMEOUT LFTP_SETTINGS EXCLUDE DEBUG \
-      FAIL_ON_DEPRECATED DRY_RUN \
+      DNS_FATAL_TIMEOUT LFTP_SETTINGS EXCLUDE DEBUG DRY_RUN \
       CONCURRENCY_LOCK CONCURRENCY_LOCK_PATH CONCURRENCY_LOCK_TIMEOUT \
       CONCURRENCY_LOCK_POLL_INTERVAL; do
       _pid_label=$(printf '%s' "${_pid_name}" | tr '[:upper:]' '[:lower:]')
@@ -1079,6 +1014,9 @@ run_lftp_once() {
     2>&1 | tee -a "${_rlo_log}"
 }
 
+# 6 h is GitHub's maximum job time, so an older sentinel cannot belong to a live run.
+LOCK_STALE_AFTER=21600
+
 # ------------------------------------------------------------------------------
 # acquire_lock_with_recovery SERVER LOCK_PATH TIMEOUT_SECS POLL_SECS USER
 #   Acquire the server-side concurrency lock at LOCK_PATH on SERVER,
@@ -1091,7 +1029,7 @@ run_lftp_once() {
 #   Stale-lock recovery: on every MKD failure (550, lock held), the
 #   function does a `cls -la .` (lftp's high-level ls) to look for
 #   sentinel files at the FTP root. If the OLDEST sentinel exists
-#   and its embedded timestamp is older than TIMEOUT_SECS, the
+#   and its embedded timestamp is older than LOCK_STALE_AFTER, the
 #   function assumes the previous holder died (OOM, SIGKILL, 6h job
 #   limit) and takes over: it runs ONE lftp invocation that lists
 #   the directory AND DELEs every parsed sentinel AND RMDs the
@@ -1116,7 +1054,9 @@ run_lftp_once() {
 #       an empty listing we cannot distinguish from a failure.
 #
 #   Returns 0 on a successful acquire, 1 if the timeout is
-#   exhausted or the lock is held and timeout=0. The caller MUST
+#   exhausted or the lock is held and timeout=0. On timeout it
+#   prints which sentinel holds the lock and how to clear it.
+#   The caller MUST
 #   have a writable ${NETRC} at $HOME and MUST have `set -e`
 #   disabled around the call to this function (or check the
 #   return value explicitly), because intermediate lftp calls may
@@ -1138,6 +1078,8 @@ acquire_lock_with_recovery() {
   _alwr_timeout=$3
   _alwr_poll=$4
   _alwr_user=$5
+  _alwr_holder=""
+  _alwr_holder_age=""
 
   # v2.11.x (#132): rewrite the URL when it has a scheme but no
   # embedded user. Without this, lftp 4.9.3 falls back to USER
@@ -1188,7 +1130,9 @@ acquire_lock_with_recovery() {
   # FTP_SETTINGS does not include (those are tuned for the mirror
   # itself, which the user might WANT to ride out transient
   # issues).
-  _alwr_preamble="set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5;"
+  # `ftp:list-options -a` makes `cls` send `LIST -a`: the sentinel is a
+  # dot-file, and vsftpd hides dot-files from a plain LIST.
+  _alwr_preamble="set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5; set ftp:list-options -a;"
 
   while :; do
 
@@ -1297,7 +1241,7 @@ acquire_lock_with_recovery() {
 
     # Probe for a stale sentinel. We list the FTP root and grep
     # for the sentinel pattern; if the timestamp in the filename
-    # is older than TIMEOUT_SECS, we take over.
+    # is older than LOCK_STALE_AFTER, we take over.
     # Use lftp's high-level `cls` (alias for `ls`) rather than the
     # raw `quote LIST` because vsftpd requires the data connection
     # (PASV/PORT) to be negotiated before answering LIST, and the
@@ -1350,17 +1294,10 @@ acquire_lock_with_recovery() {
         set -e
         if [ "${_alwr_age_rc}" -ne 0 ]; then
           _alwr_took_over=0
-        elif [ "${_alwr_age}" -le "${_alwr_timeout}" ]; then
-          # `<= timeout` (not `<`) — the timeout represents the maximum
-          # age at which we still consider the sentinel recent, so a
-          # sentinel whose age is exactly `timeout` is at the boundary
-          # and must still be respected. Using `<` here would make
-          # the comparison racy when `_alwr_now` and the sentinel's
-          # timestamp straddle a second boundary (test #19 catches
-          # this: a sentinel stamped at "now" but observed one
-          # second later would have age=1 vs timeout=1 and be
-          # mis-classified as stale, triggering an unwanted DELE/RMD).
+        elif [ "${_alwr_age}" -le "${LOCK_STALE_AFTER}" ]; then
           _alwr_took_over=0
+          _alwr_holder=${_alwr_oldest}
+          _alwr_holder_age=${_alwr_age}
         fi
       fi
     fi
@@ -1402,6 +1339,10 @@ EOF
     sleep "${_alwr_poll}"
   done
 
+  if [ -n "${_alwr_holder}" ]; then
+    printf 'ERROR: lock %s is held by %s (age %s s); if that run is gone, delete %s and %s on the server\n' \
+      "${_alwr_path}" "${_alwr_holder}" "${_alwr_holder_age}" "${_alwr_path}" "${_alwr_holder}" >&2
+  fi
   return 1
 }
 

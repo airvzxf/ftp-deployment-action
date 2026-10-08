@@ -4,23 +4,22 @@
 # This file is the entrypoint of the Docker image. It does the
 # following, in order:
 #
-#   1. Source lib.sh (pure functions and IO helpers).
+#   1. Source lib.sh (pure functions and IO helpers) and print the
+#      release version.
 #   2. Apply effective defaults to every INPUT_* (B-07 / smoke-test
 #      safety: works with `set -u` and with direct `docker run`).
-#   3. Emit a deprecation / EOL warning based on $GITHUB_ACTION_REF
-#      and the baked-in /app/VERSION.
-#   4. Mask sensitive inputs in the runner log (::add-mask::).
-#   5. Print the "Inputs received" group.
-#   6. Validate integer and free-form inputs (exit 2 on failure).
-#   7. Build the FTP_SETTINGS and MIRROR_COMMAND strings.
-#   8. Normalize local_dir / remote_dir (trailing slash + path
+#   3. Mask sensitive inputs in the runner log (::add-mask::).
+#   4. Print the "Inputs received" group.
+#   5. Validate integer and free-form inputs (exit 2 on failure).
+#   6. Build the FTP_SETTINGS and MIRROR_COMMAND strings.
+#   7. Normalize local_dir / remote_dir (trailing slash + path
 #      traversal guard).
-#   9. Print the "Resolved configuration" group.
-#  10. Write credentials to ~/.netrc with mode 0600 and install the
+#   8. Print the "Resolved configuration" group.
+#   9. Write credentials to ~/.netrc with mode 0600 and install the
 #      EXIT trap that removes the file.
-#  11. Retry loop with exponential backoff + jitter, capturing
+#  10. Retry loop with exponential backoff + jitter, capturing
 #      lftp's combined stdout+stderr to a timestamped log file.
-#  12. Print the success or failure banner.
+#  11. Print the success or failure banner.
 #
 # The split between this file and lib.sh is the only architectural
 # change vs. the pre-v2.5.0 single-file layout; the behaviour is
@@ -36,6 +35,9 @@ set -o pipefail
 
 # shellcheck source=lib.sh
 . /app/lib.sh
+
+# First line of every run, so a support log shows which release ran.
+printf 'ftp-deployment-action v%s\n' "$(cat /app/VERSION)"
 
 # ------------------------------------------------------------------------------
 # B-07 / smoke-test: normalize all input vars to their effective
@@ -73,13 +75,12 @@ set -o pipefail
 : "${INPUT_LFTP_SETTINGS:=}"
 : "${INPUT_EXCLUDE:=}"
 : "${INPUT_DEBUG:=false}"
-: "${INPUT_FAIL_ON_DEPRECATED:=false}"
 : "${INPUT_DRY_RUN:=false}"
 : "${INPUT_CONCURRENCY_LOCK:=false}"
 : "${INPUT_CONCURRENCY_LOCK_PATH:=.lftp-deployment.lock}"
 : "${INPUT_CONCURRENCY_LOCK_TIMEOUT:=300}"
 : "${INPUT_CONCURRENCY_LOCK_POLL_INTERVAL:=5}"
-# v2.11.7 (#252): validate and canonicalise the 6 gate bool inputs so
+# v2.11.7 (#252): validate and canonicalise the 5 gate bool inputs so
 # non-canonical aliases (yes/no/on/off/0/1/...) flow into the gate
 # checks the documented way. Pre-fix the gates used a literal
 # `[ ... = "true" ]` compare, so `concurrency_lock: yes` was silently
@@ -90,7 +91,6 @@ INPUT_NO_SYMLINKS=$(normalize_bool             "no_symlinks"           "${INPUT_
 INPUT_DRY_RUN=$(normalize_bool                 "dry_run"               "${INPUT_DRY_RUN}")
 INPUT_CONCURRENCY_LOCK=$(normalize_bool        "concurrency_lock"      "${INPUT_CONCURRENCY_LOCK}")
 INPUT_DEBUG=$(normalize_bool                   "debug"                 "${INPUT_DEBUG}")
-INPUT_FAIL_ON_DEPRECATED=$(normalize_bool      "fail_on_deprecated"    "${INPUT_FAIL_ON_DEPRECATED}")
 
 # v2.11.8 (#195): reject URL userinfo WITH EMBEDDED PASSWORD in
 # INPUT_SERVER. lftp 4.9.3 parses `ftp://user:pw@host/path` and
@@ -108,16 +108,6 @@ case "${INPUT_SERVER}" in
     exit 2
     ;;
 esac
-
-# ------------------------------------------------------------------------------
-# Emit deprecation / EOL warning based on the ref the user pinned
-# this action to. Runs *before* any other echo so the warning is the
-# first thing the user sees in the log.
-# ------------------------------------------------------------------------------
-emit_deprecation_warning \
-  "${GITHUB_ACTION_REF:-}" \
-  "$(cat /app/VERSION 2>/dev/null || echo "unknown")" \
-  "${INPUT_FAIL_ON_DEPRECATED}"
 
 # ------------------------------------------------------------------------------
 # Defence-in-depth: ask the runner to mask sensitive values in the
@@ -275,17 +265,10 @@ fi
 # mirror loop. The lock is held for the entire deployment
 # (including the retry sequence) and released by the EXIT trap
 # installed above. If the lock cannot be acquired within
-# INPUT_CONCURRENCY_LOCK_TIMEOUT seconds (and the existing holder
-# is not detected as stale), print a clear error and exit 1 so
-# the workflow fails fast.
-#
-# Stale-lock auto-recovery (v2.9.0): if the existing holder's
-# sentinel is older than INPUT_CONCURRENCY_LOCK_TIMEOUT seconds,
-# acquire_lock_with_recovery takes over by DELEing the stale
-# sentinel and RMDing the lock dir, then retrying MKD. This
-# closes the residual risk from v2.8.0 documented in the README
-# ("if the holder dies before RMD, subsequent runs will wait
-# until `concurrency_lock_timeout` and then fail with exit 1").
+# INPUT_CONCURRENCY_LOCK_TIMEOUT seconds, print a clear error and
+# exit 1 so the workflow fails fast. A holder's sentinel older than
+# 6 h (LOCK_STALE_AFTER) is taken over; a younger one belongs to a
+# live run and is respected.
 # ------------------------------------------------------------------------------
 if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
   printf '::group::Concurrency lock acquire\n'
@@ -334,7 +317,7 @@ LFTP_KILL_AFTER="30s"
 # timestamped log file under ~/.lftp-logs/; classify_permanent_error
 # reads it to decide whether a retry can help. The directory is
 # created here rather than at the top of the script so test runs
-# that exit before the loop (validate_int / deprecated ref) do not
+# that exit before the loop (validate_int) do not
 # leave an empty .lftp-logs directory behind.
 mkdir -p "/home/lftp/.lftp-logs"
 LOG_FILE="/home/lftp/.lftp-logs/run-$(date -u +%Y%m%dT%H%M%SZ).log"
@@ -377,10 +360,8 @@ while true; do
   fi
 
   COUNTER=$((COUNTER + 1))
-  # B-02: `max_retries=0` is the documented sentinel for "retry forever"
-  # (the only exit paths are then: lftp success, the global 5h timeout,
-  # or `fail_on_deprecated` in PR-B). Anything else just compares the
-  # counter as before.
+  # B-02: `max_retries=0` retries until lftp succeeds, a permanent
+  # error is detected, or the job is stopped.
   # B-06: quote to satisfy shellcheck SC2086 and `set -u` semantics.
   if [ "${INPUT_MAX_RETRIES}" != "0" ] && \
      [ "${COUNTER}" -gt "${INPUT_MAX_RETRIES}" ]; then

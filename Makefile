@@ -14,8 +14,6 @@ SH := $(shell command -v bash 2>/dev/null || echo sh)
 # Repository root (parent of this file).
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
-# Override on the command line: make build VERSION=dev, etc.
-VERSION          ?= dev
 PYTHON           ?= python3
 IMAGE            ?= ftp-deployment-action:local
 # Pre-baked FTPS test server image (tests/integration/Dockerfile.test-
@@ -174,13 +172,12 @@ unit:
 	bats tests/unit
 
 # ----------------------------------------------------------------------------
-# Build: a local Docker image tagged ftp-deployment-action:local. VERSION
-# is baked into /app/VERSION; the default 'dev' matches the value
-# committed in the repo.
+# Build: a local Docker image tagged ftp-deployment-action:local. The
+# repo's VERSION file is copied to /app/VERSION.
 # ----------------------------------------------------------------------------
 .PHONY: build
 build:
-	docker build -t "$(IMAGE)" --build-arg "VERSION=$(VERSION)" "$(ROOT)"
+	docker build -t "$(IMAGE)" "$(ROOT)"
 
 # ----------------------------------------------------------------------------
 # build-test-server-image: build the pre-baked FTPS test server image
@@ -259,7 +256,7 @@ build-smoke-image:
 #
 # IMAGE is the ftp-deployment-action image under test. CI sets
 # IMAGE=ftp-deployment-action:ci-integration and builds it with `make build
-# IMAGE=ftp-deployment-action:ci-integration VERSION=ci` first.
+# IMAGE=ftp-deployment-action:ci-integration` first.
 #
 # TEST_SERVER_IMAGE is the pre-baked FTPS test server image used by
 # scenarios 03 / 04 (closes #135). CI builds it with `make build-test-
@@ -293,7 +290,7 @@ run: build
 # ----------------------------------------------------------------------------
 # Release smoke tests: run the same checks the release pipeline
 # runs against a freshly-built image, locally. Catches Dockerfile
-# / lftp pin / build-arg regressions before a tag is pushed.
+# / lftp pin / version-line regressions before a tag is pushed.
 # Usage: make release-smoke IMAGE=ftp-deployment-action:local
 # ----------------------------------------------------------------------------
 .PHONY: release-smoke

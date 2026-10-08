@@ -330,7 +330,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 > whose default is `true` / `false` (`delete`, `no_symlinks`,
 > `ftp_ssl_allow`, `ssl_verify_certificate`,
 > `ssl_check_hostname`, `ftp_passive_mode`, `ftp_use_feat`,
-> `debug`, `fail_on_deprecated`, `dry_run`, `concurrency_lock`)
+> `debug`, `dry_run`, `concurrency_lock`)
 > accepts the
 > case-sensitive set `true`, `false`, `yes`, `no`, `on`, `off`,
 > `0`, and `1`. Anything else — including capitalised variants
@@ -375,7 +375,6 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | lftp_settings          | Any other settings that you find in the MAN pages for the LFTP package.               | No       | ""      | "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';" |
 | exclude                | Comma-separated shell globs. Matching files are **not uploaded** and **not deleted**. | No       | ""      | "*.map, *.bak, node_modules/" |
 | debug                  | If "true", print resolved input values to the log.                                    | No       | false   | N/A                                                                                               |
-| fail_on_deprecated     | If "true", exit 1 when the pinned ref is end-of-life (v1.x).                         | No       | false   | N/A                                                                                               |
 | dry_run                | If "true", compute the mirror plan but do not transfer or delete any file. It still connects and logs in, so an unreachable server or a wrong password fails. | No       | false   | N/A                                                                                               |
 | concurrency_lock       | If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory. See "Concurrency / deployment lock" below. | No       | false   | N/A                                                                                               |
 | concurrency_lock_path  | Path of the sentinel directory used by `concurrency_lock`. Must be a valid FTP path (no `..`, no shell metacharacters, no leading dash, no `!`, no `"`). | No       | .lftp-deployment.lock | N/A                                                                                |
@@ -532,50 +531,38 @@ basics and are implemented by every FTP server
 (vsftpd, proftpd, Pure-FTPd, SFTP-via-FTP-gateways, etc.).
 `mkdir` is atomic on virtually every UNIX-like filesystem
 (returning `EEXIST` if the dir already exists), so the
-race window between two clients is microseconds and the
-worst-case outcome is that the lock briefly stays held by
-a dead runner — which the `concurrency_lock_timeout`
-catches.
+race window between two clients is microseconds.
 
-**Stale lock risk and auto-recovery (v2.9.0).** If the holder
-dies before RMD (runner OOM, the 5h hard timeout, a
-`kill -9` from the runner host), v2.9.0+ writes a
-timestamp-encoded sentinel file at the FTP root before
-starting the mirror. The next runner sees the lock held,
-`LIST`s the FTP root, parses the sentinel's timestamp, and:
+**A live holder keeps the lock; a dead one is recovered after
+6 hours.** When the action acquires the lock it also writes a
+timestamp-encoded sentinel file at the FTP root, e.g.
+`.lftp-deployment.lock.20260707T080000Z.1234.info` (stamp and
+runner PID; it sits next to the lock dir so `quote RMD` works
+without a recursive delete). A runner that finds the lock held
+reads that stamp:
 
-- If the sentinel is **older** than `concurrency_lock_timeout`
-  seconds: treats the lock as stale, `DELE`s the sentinel,
-  `RMD`s the lock dir, and retries the high-level `mkdir`
-  command immediately.
-- If the sentinel is **recent** (legitimate holder): polls
-  normally up to `concurrency_lock_timeout` and then fails.
-- If the lock dir exists but **no sentinel** is present
-  (the previous holder died between MKD and the sentinel
-  PUT, a microsecond race): also treats as stale and
-  takes over.
+- **Sentinel younger than 6 hours**: the holder may still be
+  mirroring (a large deploy can take longer than
+  `concurrency_lock_timeout`), so the lock is respected. The
+  runner polls up to `concurrency_lock_timeout` seconds and then
+  fails with exit 1 and an error that names the lock and the
+  sentinel.
+- **Sentinel older than 6 hours**: 6 hours is GitHub's maximum
+  job time, so that run is gone (runner OOM, `kill -9`). The
+  runner `DELE`s the sentinel, `RMD`s the lock dir and takes the
+  lock.
+- **Lock dir without a sentinel** (the holder died between the
+  `mkdir` and the sentinel upload): taken over immediately.
 
-The sentinel filename encodes the timestamp and the runner
-PID, e.g.
-`.lftp-deployment.lock.20260707T080000Z.1234.info`. The
-file lives at the FTP root as a sibling of the lock dir so
-the release path can do `quote RMD` without recursive
-delete (FTP RMD on a non-empty dir returns 550).
-
-If you need to force-recover a stuck lock *without* waiting
-for the auto-detection (e.g. you want to push a hotfix and
-`concurrency_lock_timeout` is set to a high value), log in
-to the FTP and remove the sentinel + the lock dir manually:
+If a holder died less than 6 hours ago, the next deploys fail
+with that error until you clear the lock. Delete the two entries
+the error names, for example:
 
 ```sh
-lftp -u user,pw ftp://example.com \
+lftp -u user ftp://example.com \
   -e "quote DELE .lftp-deployment.lock.<stamp>.<pid>.info; \
       quote RMD .lftp-deployment.lock; quit;"
 ```
-
-The manual recovery is rarely needed with the default
-`concurrency_lock_timeout: 300` (5 minutes): a stale lock
-surfaces within a normal workflow run.
 
 **Customizing the lock path.** If you have several
 deployments against the same FTP server (e.g. one for
@@ -621,41 +608,35 @@ remote directory), give each its own lock path:
 |  entrypoint.sh starts    |
 |  (sources /app/lib.sh)   |
 |                          |
-|  1. Deprecation check    |--- EOL / @latest / @main    -->  ::warning::
-|     (emit_deprecation_   |                                (::error:: + exit 1
-|      warning, reads       |                                 if fail_on_deprecated)
-|      GITHUB_ACTION_REF +  |
-|      /app/VERSION)       |
-|                          |
-|  2. Mask sensitive       |--- ::add-mask:: password / user / server
+|  1. Mask sensitive       |--- ::add-mask:: password / user / server
 |     inputs (add_masks)   |
 |                          |
-|  3. Validate inputs      |--- path traversal? shell metachars?     --> exit 2
+|  2. Validate inputs      |--- path traversal? shell metachars?     --> exit 2
 |     (validate_int,       |
 |      validate_path,      |
 |      validate_lftp_      |
 |      settings)           |
 |                          |
-|  4. Build FTP_SETTINGS   |--- one 'set foo bar' per input
+|  3. Build FTP_SETTINGS   |--- one 'set foo bar' per input
 |     + MIRROR_COMMAND     |   (build_ftp_settings / build_mirror_command)
 |     + normalize paths    |
 |                          |
-|  5. Write .netrc         |--- 0600, removed by EXIT trap
+|  4. Write .netrc         |--- 0600, removed by EXIT trap
 |     (write_netrc)        |
 |                          |
-|  5b. Acquire server lock  |--- only if concurrency_lock=true
+|  4b. Acquire server lock  |--- only if concurrency_lock=true
 |      (acquire_lock_with_  |   high-level `mkdir <path>`; checks for
-|       recovery)           |   stale sentinels and polls up to
+|       recovery)           |   sentinels older than 6 h; polls up to
 |                          |   concurrency_lock_timeout s
 |                          |   then fails with exit 1
 |                          |
-|  6. lftp -e "..."        |--- +5h timeout per attempt
+|  5. lftp -e "..."        |--- +5h timeout per attempt
 |     (run_lftp_once +     |   + exponential backoff with jitter
 |      retry loop,         |   + per-attempt net/dns timeouts
 |      max_retries=0..N)   |   + releases lock via `quote RMD` + EXIT trap
 |                          |     if it was acquired
 |                          |
-|  7. Result banner        |--- ERROR: UPLOAD FAILED + last lftp exit code
+|  6. Result banner        |--- ERROR: UPLOAD FAILED + last lftp exit code
 |     (print_failure_      |    FTP UPLOADED FINISHED! on success
 |      banner / print_     |    FTP DRY RUN COMPLETED on dry run
 |      success_banner)     |
@@ -685,21 +666,19 @@ Main features:
 make lint
 make test
 
-# Build a local image with the deprecation warning reading 'dev' as
-# the image version (matches the default in the Dockerfile)
+# Build a local image and run the release smoke checks against it
 make build IMAGE=ftp-deployment-action:local
 make release-smoke IMAGE=ftp-deployment-action:local
 ```
 
-`make build` runs `docker build --build-arg VERSION=dev` and
-`make release-smoke` runs the same three checks the release
+`make build` runs `docker build` and
+`make release-smoke` runs the same two checks the release
 workflow runs against the just-pushed image:
 
 1. The container starts and `validate_path` rejects a `..`
    path-traversal in `local_dir` with exit 2.
-2. The deprecation warning fires for an EOL ref (`v1.3.3`).
-3. The `VERSION` build-arg was baked into `/app/VERSION`
-   (the warning would say `image version: unknown` otherwise).
+2. The first line of a run is `ftp-deployment-action vX.Y.Z`
+   (the repo's `VERSION` file, copied into the image).
 
 These checks catch the kind of regression that broke the v2.3.0
 release (Dependabot bumped the alpine base image, the lftp

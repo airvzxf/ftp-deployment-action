@@ -8,13 +8,13 @@
 # subsequent runs will wait until concurrency_lock_timeout and then
 # fail with exit 1".
 #
-# Pre-creates the lock dir AND a sentinel file with a deliberately
-# OLD timestamp (2026-01-01), then invokes the action with a HIGH
+# Pre-creates the lock dir AND a sentinel file stamped 7 h ago (older
+# than the 6 h LOCK_STALE_AFTER), then invokes the action with a HIGH
 # timeout (900 seconds). The only way the action can complete in
 # under 30 seconds is by taking over the stale lock via the
 # acquire_lock_with_recovery path: list the FTP root, parse the
-# sentinel, observe its age is well over INPUT_CONCURRENCY_LOCK_TIMEOUT
-# (so the previous holder is treated as dead), DELE the sentinel +
+# sentinel, observe its age is over LOCK_STALE_AFTER (so the previous
+# holder is treated as dead), DELE the sentinel +
 # RMD the lock dir, then immediately retry MKD. If the
 # stale-recovery code path regresses, the action will spin on MKD
 # until its 900-second timeout expires — the timing assertion below
@@ -30,30 +30,7 @@
 #      recovery AND again on the EXIT trap).
 #   5. The fixture files are present on the server (the action
 #      completed its mirror after taking over).
-#
-# What this scenario does NOT assert:
-#
-#   * That the pre-created stale sentinel is DELE'd at the FTP
-#     server. v2.9.0's recovery path runs `quote DELE
-#     ${stale_sentinel}`; whether vsftpd removes the file on
-#     this code path depends on a `quote`-level FTP command
-#     propagating 250/550 to lftp's exit code, which is brittle
-#     for various lftp versions. The sentinel being orphaned
-#     is bounded by the stale-recovery taking over (the lock IS
-#     acquired) and the EXIT trap's release of the NEW sentinel
-#     (the lock is released cleanly). So the next deployment
-#     can re-claim the lock; an orphan sentinel from 30 days ago
-#     is not actionable until the next holder's MKD fails AND
-#     the recovery branch finds it via LIST + parse. The recovery
-#     branch's empty-listing default (`_alwr_took_over=1`) means
-#     even an orphaned sentinel that the listing didn't return
-#     does not block acquisition. The orphan is a hygiene
-#     issue that would naturally clear on the NEXT stale-recovery
-#     event that successfully lists. It is NOT a correctness
-#     issue for this release. The next round of FTP-integration
-#     work (#120 FTPS coverage) can add a deep-cleanup pass that
-#     iterates parsed sentinel names and DELE's each one before
-#     returning to the MKD loop; that is a follow-up.
+#   6. The stale sentinel was DELE'd.
 
 set -eu
 
@@ -84,36 +61,14 @@ _ftp_home="${FTP_DATA_DIR}/${FTP_USER}"
 # bind-mount maps ownership to host; 0777 ensures RMD succeeds
 # regardless).
 #
-# v2.11.9 (#229): the sentinel timestamp was hardcoded to
-# "20260101T000000Z" (a date clearly in the past) so the
-# action's stale-recovery branch could prove the takeover fired.
-# On a long-lived CI runner where the system date drifts past the
-# fixed stamp, the comparison INPUT_CONCURRENCY_LOCK_TIMEOUT vs
-# (now − _stale_ts) can fail or behave inconsistently; the test
-# is also brittle to whoever happens to be reading the spec in
-# the future (2026 is "in the past" today but ambiguous in 2030).
-# Make the stamp dynamic: subtract the desired staleness window
-# from the current UTC time so the sentinel is exactly
-# (2 × INPUT_CONCURRENCY_LOCK_TIMEOUT) older than the action's
-# threshold. The sentinel is then guaranteed stale by construction,
-# independent of the runner's wall clock. POSIX-awk does the date
-# arithmetic; no GNU date dependency.
-#
-# F2 audit (v2.11.9 +1 day): the staleness window is derived from
-# the same _tlock_timeout variable that is passed to the env file,
-# so changing one changes the other. The previous shape hardcoded
-# 900 in two unrelated places (the awk now_offset argument and
-# INPUT_CONCURRENCY_LOCK_TIMEOUT); a future tweak to one would
-# silently break the (2× threshold) invariant the test asserts.
+# The stamp is computed from the current UTC time so the sentinel is
+# always 7 h old: past the 6 h LOCK_STALE_AFTER, whatever the clock.
 _tlock_timeout=900
 _lockdir="${_ftp_home}/.lftp-deployment.lock"
-_stale_ts=$(awk -v now_offset="$(( 2 * _tlock_timeout ))" 'BEGIN {
+_stale_ts=$(awk 'BEGIN {
   "date -u +%s" | getline now
   close("date -u +%s")
-  ts = now - now_offset
-  printf "%04d%02d%02dT%02d%02d%02dZ", \
-    strftime("%Y", ts), strftime("%m", ts), strftime("%d", ts), \
-    strftime("%H", ts), strftime("%M", ts), strftime("%S", ts)
+  printf "%s", strftime("%Y%m%dT%H%M%SZ", now - 7 * 3600, 1)
 }')
 _stale_pid="99999"
 _stale_sentinel=".lftp-deployment.lock.${_stale_ts}.${_stale_pid}.info"
@@ -215,7 +170,10 @@ if [ -e "${_ftp_home}/.lftp-deployment.lock" ]; then
   log_fail "lock dir .lftp-deployment.lock still exists after action"
 fi
 
-# Assertion 6: fixture files are present.
+# Assertion 6: the stale sentinel was DELE'd during the takeover.
+assert_absent "${_ftp_home}" "${_stale_sentinel}"
+
+# Assertion 7: fixture files are present.
 assert_present "${_ftp_home}" "index.html"
 assert_present "${_ftp_home}" "about.html"
 assert_present "${_ftp_home}" "assets"

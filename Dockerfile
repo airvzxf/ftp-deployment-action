@@ -14,15 +14,10 @@ RUN apk add --no-cache \
  && addgroup -S lftp \
  && adduser -S lftp -G lftp -h /home/lftp
 
-COPY entrypoint.sh lib.sh /app/
-
-# Bake the image version into /app/VERSION so the deprecation warning
-# in entrypoint.sh can print the actual version even on local builds.
-# `release.yml` passes --build-arg VERSION=<tag>; local `docker build`
-# gets the default "dev".
-ARG VERSION=dev
-RUN printf '%s\n' "$VERSION" > /app/VERSION \
- && chmod 0644 /app/VERSION \
+# VERSION comes from the repo: GitHub builds this file on the runner
+# without build args, and entrypoint.sh prints it on the first line.
+COPY entrypoint.sh lib.sh VERSION /app/
+RUN chmod 0644 /app/VERSION \
  && chmod 0755 /app/entrypoint.sh
 
 # B-03 / B-14: the script writes the .netrc file at $HOME/.netrc, so
