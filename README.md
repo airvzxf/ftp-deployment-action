@@ -532,50 +532,38 @@ basics and are implemented by every FTP server
 (vsftpd, proftpd, Pure-FTPd, SFTP-via-FTP-gateways, etc.).
 `mkdir` is atomic on virtually every UNIX-like filesystem
 (returning `EEXIST` if the dir already exists), so the
-race window between two clients is microseconds and the
-worst-case outcome is that the lock briefly stays held by
-a dead runner — which the `concurrency_lock_timeout`
-catches.
+race window between two clients is microseconds.
 
-**Stale lock risk and auto-recovery (v2.9.0).** If the holder
-dies before RMD (runner OOM, the 5h hard timeout, a
-`kill -9` from the runner host), v2.9.0+ writes a
-timestamp-encoded sentinel file at the FTP root before
-starting the mirror. The next runner sees the lock held,
-`LIST`s the FTP root, parses the sentinel's timestamp, and:
+**A live holder keeps the lock; a dead one is recovered after
+6 hours.** When the action acquires the lock it also writes a
+timestamp-encoded sentinel file at the FTP root, e.g.
+`.lftp-deployment.lock.20260707T080000Z.1234.info` (stamp and
+runner PID; it sits next to the lock dir so `quote RMD` works
+without a recursive delete). A runner that finds the lock held
+reads that stamp:
 
-- If the sentinel is **older** than `concurrency_lock_timeout`
-  seconds: treats the lock as stale, `DELE`s the sentinel,
-  `RMD`s the lock dir, and retries the high-level `mkdir`
-  command immediately.
-- If the sentinel is **recent** (legitimate holder): polls
-  normally up to `concurrency_lock_timeout` and then fails.
-- If the lock dir exists but **no sentinel** is present
-  (the previous holder died between MKD and the sentinel
-  PUT, a microsecond race): also treats as stale and
-  takes over.
+- **Sentinel younger than 6 hours**: the holder may still be
+  mirroring (a large deploy can take longer than
+  `concurrency_lock_timeout`), so the lock is respected. The
+  runner polls up to `concurrency_lock_timeout` seconds and then
+  fails with exit 1 and an error that names the lock and the
+  sentinel.
+- **Sentinel older than 6 hours**: 6 hours is GitHub's maximum
+  job time, so that run is gone (runner OOM, `kill -9`). The
+  runner `DELE`s the sentinel, `RMD`s the lock dir and takes the
+  lock.
+- **Lock dir without a sentinel** (the holder died between the
+  `mkdir` and the sentinel upload): taken over immediately.
 
-The sentinel filename encodes the timestamp and the runner
-PID, e.g.
-`.lftp-deployment.lock.20260707T080000Z.1234.info`. The
-file lives at the FTP root as a sibling of the lock dir so
-the release path can do `quote RMD` without recursive
-delete (FTP RMD on a non-empty dir returns 550).
-
-If you need to force-recover a stuck lock *without* waiting
-for the auto-detection (e.g. you want to push a hotfix and
-`concurrency_lock_timeout` is set to a high value), log in
-to the FTP and remove the sentinel + the lock dir manually:
+If a holder died less than 6 hours ago, the next deploys fail
+with that error until you clear the lock. Delete the two entries
+the error names, for example:
 
 ```sh
-lftp -u user,pw ftp://example.com \
+lftp -u user ftp://example.com \
   -e "quote DELE .lftp-deployment.lock.<stamp>.<pid>.info; \
       quote RMD .lftp-deployment.lock; quit;"
 ```
-
-The manual recovery is rarely needed with the default
-`concurrency_lock_timeout: 300` (5 minutes): a stale lock
-surfaces within a normal workflow run.
 
 **Customizing the lock path.** If you have several
 deployments against the same FTP server (e.g. one for
@@ -645,7 +633,7 @@ remote directory), give each its own lock path:
 |                          |
 |  5b. Acquire server lock  |--- only if concurrency_lock=true
 |      (acquire_lock_with_  |   high-level `mkdir <path>`; checks for
-|       recovery)           |   stale sentinels and polls up to
+|       recovery)           |   sentinels older than 6 h; polls up to
 |                          |   concurrency_lock_timeout s
 |                          |   then fails with exit 1
 |                          |

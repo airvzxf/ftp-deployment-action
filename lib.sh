@@ -1079,6 +1079,9 @@ run_lftp_once() {
     2>&1 | tee -a "${_rlo_log}"
 }
 
+# 6 h is GitHub's maximum job time, so an older sentinel cannot belong to a live run.
+LOCK_STALE_AFTER=21600
+
 # ------------------------------------------------------------------------------
 # acquire_lock_with_recovery SERVER LOCK_PATH TIMEOUT_SECS POLL_SECS USER
 #   Acquire the server-side concurrency lock at LOCK_PATH on SERVER,
@@ -1091,7 +1094,7 @@ run_lftp_once() {
 #   Stale-lock recovery: on every MKD failure (550, lock held), the
 #   function does a `cls -la .` (lftp's high-level ls) to look for
 #   sentinel files at the FTP root. If the OLDEST sentinel exists
-#   and its embedded timestamp is older than TIMEOUT_SECS, the
+#   and its embedded timestamp is older than LOCK_STALE_AFTER, the
 #   function assumes the previous holder died (OOM, SIGKILL, 6h job
 #   limit) and takes over: it runs ONE lftp invocation that lists
 #   the directory AND DELEs every parsed sentinel AND RMDs the
@@ -1116,7 +1119,9 @@ run_lftp_once() {
 #       an empty listing we cannot distinguish from a failure.
 #
 #   Returns 0 on a successful acquire, 1 if the timeout is
-#   exhausted or the lock is held and timeout=0. The caller MUST
+#   exhausted or the lock is held and timeout=0. On timeout it
+#   prints which sentinel holds the lock and how to clear it.
+#   The caller MUST
 #   have a writable ${NETRC} at $HOME and MUST have `set -e`
 #   disabled around the call to this function (or check the
 #   return value explicitly), because intermediate lftp calls may
@@ -1138,6 +1143,8 @@ acquire_lock_with_recovery() {
   _alwr_timeout=$3
   _alwr_poll=$4
   _alwr_user=$5
+  _alwr_holder=""
+  _alwr_holder_age=""
 
   # v2.11.x (#132): rewrite the URL when it has a scheme but no
   # embedded user. Without this, lftp 4.9.3 falls back to USER
@@ -1188,7 +1195,9 @@ acquire_lock_with_recovery() {
   # FTP_SETTINGS does not include (those are tuned for the mirror
   # itself, which the user might WANT to ride out transient
   # issues).
-  _alwr_preamble="set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5;"
+  # `ftp:list-options -a` makes `cls` send `LIST -a`: the sentinel is a
+  # dot-file, and vsftpd hides dot-files from a plain LIST.
+  _alwr_preamble="set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5; set ftp:list-options -a;"
 
   while :; do
 
@@ -1297,7 +1306,7 @@ acquire_lock_with_recovery() {
 
     # Probe for a stale sentinel. We list the FTP root and grep
     # for the sentinel pattern; if the timestamp in the filename
-    # is older than TIMEOUT_SECS, we take over.
+    # is older than LOCK_STALE_AFTER, we take over.
     # Use lftp's high-level `cls` (alias for `ls`) rather than the
     # raw `quote LIST` because vsftpd requires the data connection
     # (PASV/PORT) to be negotiated before answering LIST, and the
@@ -1350,17 +1359,10 @@ acquire_lock_with_recovery() {
         set -e
         if [ "${_alwr_age_rc}" -ne 0 ]; then
           _alwr_took_over=0
-        elif [ "${_alwr_age}" -le "${_alwr_timeout}" ]; then
-          # `<= timeout` (not `<`) — the timeout represents the maximum
-          # age at which we still consider the sentinel recent, so a
-          # sentinel whose age is exactly `timeout` is at the boundary
-          # and must still be respected. Using `<` here would make
-          # the comparison racy when `_alwr_now` and the sentinel's
-          # timestamp straddle a second boundary (test #19 catches
-          # this: a sentinel stamped at "now" but observed one
-          # second later would have age=1 vs timeout=1 and be
-          # mis-classified as stale, triggering an unwanted DELE/RMD).
+        elif [ "${_alwr_age}" -le "${LOCK_STALE_AFTER}" ]; then
           _alwr_took_over=0
+          _alwr_holder=${_alwr_oldest}
+          _alwr_holder_age=${_alwr_age}
         fi
       fi
     fi
@@ -1402,6 +1404,10 @@ EOF
     sleep "${_alwr_poll}"
   done
 
+  if [ -n "${_alwr_holder}" ]; then
+    printf 'ERROR: lock %s is held by %s (age %s s); if that run is gone, delete %s and %s on the server\n' \
+      "${_alwr_path}" "${_alwr_holder}" "${_alwr_holder_age}" "${_alwr_path}" "${_alwr_holder}" >&2
+  fi
   return 1
 }
 

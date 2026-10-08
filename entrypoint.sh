@@ -275,17 +275,10 @@ fi
 # mirror loop. The lock is held for the entire deployment
 # (including the retry sequence) and released by the EXIT trap
 # installed above. If the lock cannot be acquired within
-# INPUT_CONCURRENCY_LOCK_TIMEOUT seconds (and the existing holder
-# is not detected as stale), print a clear error and exit 1 so
-# the workflow fails fast.
-#
-# Stale-lock auto-recovery (v2.9.0): if the existing holder's
-# sentinel is older than INPUT_CONCURRENCY_LOCK_TIMEOUT seconds,
-# acquire_lock_with_recovery takes over by DELEing the stale
-# sentinel and RMDing the lock dir, then retrying MKD. This
-# closes the residual risk from v2.8.0 documented in the README
-# ("if the holder dies before RMD, subsequent runs will wait
-# until `concurrency_lock_timeout` and then fail with exit 1").
+# INPUT_CONCURRENCY_LOCK_TIMEOUT seconds, print a clear error and
+# exit 1 so the workflow fails fast. A holder's sentinel older than
+# 6 h (LOCK_STALE_AFTER) is taken over; a younger one belongs to a
+# live run and is respected.
 # ------------------------------------------------------------------------------
 if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
   printf '::group::Concurrency lock acquire\n'
