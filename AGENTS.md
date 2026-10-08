@@ -28,7 +28,7 @@ page from the `CHANGELOG.md` section for the new version.
 | Registries | ghcr.io (primary), docker.io (optional), public.ecr.aws (optional) |
 | Image signing | cosign keyless via OIDC (Sigstore Fulcio) |
 | SBOM | CycloneDX JSON via `anchore/sbom-action`, attached as in-toto attestation |
-| Tag signing | PGP (v1.5.0 – v2.10.0, v2.11.7 – v2.11.8) and SSH (v2.11.0 – v2.11.6, v2.11.9+) — see "Tag signature guard" |
+| Tag signing | PGP (v1.5.0 – v2.10.0, v2.11.7 – v2.11.8, v2.11.12+) and SSH (v2.11.0 – v2.11.6, v2.11.9 – v2.11.11) — see "Tag signature guard" |
 
 ## Stack
 
@@ -157,10 +157,11 @@ hold.
    consult.
 
    ```bash
-   # PGP (legacy):
+   # PGP (current, every tag since v2.11.12; the maintainer's
+   # git has gpg.format=openpgp, so plain `git tag -s` uses it):
    git tag -s vX.Y.Z -u 414687A3CD7E65B9 "$(git rev-parse HEAD)"
-   # SSH (current, used since v2.11.0):
-   git tag -s vX.Y.Z "$(git rev-parse HEAD)"
+   # SSH (v2.11.0 – v2.11.6, v2.11.9 – v2.11.11):
+   git -c gpg.format=ssh tag -s vX.Y.Z "$(git rev-parse HEAD)"
    git push origin vX.Y.Z
    ```
 
@@ -246,7 +247,8 @@ being verified.
   `82DE44111B30F91F55BCEB1F414687A3CD7E65B9`) in ASCII-armored
   form. Imported into the runner's keyring **only when the tag
   being verified is PGP-signed** (`v1.5.0`–`v2.10.0` and
-  `v2.11.7`–`v2.11.8`). The `.asc` is **not** optional today:
+  `v2.11.7`–`v2.11.8`, and every tag since `v2.11.12`). The
+  `.asc` is **not** optional today:
   the maintainer alternates between the two backends and both
   keys are load-bearing for at least one shipped release. Do
   not remove the file until the most recent PGP-signed tag is
