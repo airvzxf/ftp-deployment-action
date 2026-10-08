@@ -378,7 +378,7 @@ pass "A6 classifier does not flag transient connection errors as permanent"
 # INPUT_DEBUG=true makes print_resolved_config dump MIRROR_COMMAND.
 # ----------------------------------------------------------------------------
 out=$(run_init "INPUT_DRY_RUN=true" "INPUT_DEBUG=true" 30)
-echo "${out}" | grep -q "MIRROR_COMMAND.*quote NOOP && mirror .*--dry-run" \
+echo "${out}" | grep -q "MIRROR_COMMAND.*quote NOOP > /dev/null && mirror .*--dry-run" \
   || fail "INPUT_DRY_RUN=true was not reflected in MIRROR_COMMAND; output was:\n${out}"
 echo "${out}" | grep -q "^EXIT=1" \
   || fail "dry run against an unreachable server did not exit 1; output was:\n${out}"

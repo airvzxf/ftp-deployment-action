@@ -275,7 +275,7 @@ setup() {
   INPUT_DRY_RUN="true"
   run build_mirror_command
   [ "$status" -eq 0 ]
-  [ "$output" = "quote NOOP && mirror --continue --reverse --verbose=1 --dry-run" ]
+  [ "$output" = "quote NOOP > /dev/null && mirror --continue --reverse --verbose=1 --dry-run" ]
 }
 
 @test "build_mirror_command: all flags together" {
@@ -285,7 +285,7 @@ setup() {
   INPUT_DRY_RUN="true"
   run build_mirror_command
   [ "$status" -eq 0 ]
-  [ "$output" = "quote NOOP && mirror --continue --reverse --verbose=3 --no-symlinks --delete --dry-run" ]
+  [ "$output" = "quote NOOP > /dev/null && mirror --continue --reverse --verbose=3 --no-symlinks --delete --dry-run" ]
 }
 
 @test "build_mirror_command: INPUT_EXCLUDE='*.map' stays literal when the cwd has a.map" {
