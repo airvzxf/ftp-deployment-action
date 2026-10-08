@@ -123,15 +123,25 @@ when configured); a third (ECR Public) is currently disabled — see below:
 | Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.12.1` | `uses: docker://docker.io/airvzxf/ftp-deployment-action:v2.12.1` |
 
 Both carry the same OCI image bytes (one `docker buildx build`,
-one digest), the same `cosign` keyless signature
-(`cosign verify --certificate-identity-regexp ... --certificate-oidc-issuer ...`
-against either image ref), and the same CycloneDX SBOM
+one digest), the same `cosign` keyless signature, and the same CycloneDX SBOM
 attestation (attached via `actions/attest`). ghcr.io is always
 published; Docker Hub is **conditional on the repo having the
 right secrets configured** (see the [Maintainer setup](#maintainer-setup-publishing-to-docker-hub)
 section below). If the Docker Hub secrets are missing, the
 release pipeline emits a `::notice::` and skips that registry —
 the v2.9.0 behaviour (ghcr.io only) is preserved bit-for-bit.
+
+To verify the signature, use **cosign v3 or later**. The release
+pipeline signs with cosign v3, which stores the signature in the
+new bundle format, and cosign v2 reports `no signatures found`.
+
+```sh
+cosign verify \
+  --certificate-identity "https://github.com/airvzxf/ftp-deployment-action/.github/workflows/release.yml@refs/tags/v2.12.1" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/airvzxf/ftp-deployment-action:v2.12.1
+gh attestation verify oci://ghcr.io/airvzxf/ftp-deployment-action:v2.12.1 --owner airvzxf
+```
 
 > **Note on ECR Public**: A third registry (`public.ecr.aws/m2z1h0m9/...`)
 > exists for enterprise visibility but is **currently disabled** —

@@ -31,7 +31,8 @@ to publish an image whose tag does not verify.
 | `v1.5.0` … `v2.10.0` | PGP (RSA) | `.github/trusted-signers.asc` | `82DE44111B30F91F55BCEB1F414687A3CD7E65B9` (long ID `414687A3CD7E65B9`) |
 | `v2.11.0` … `v2.11.6` | SSH (ED25519) | `.github/trusted-signers` | `SHA256:POu2Sr8ILb1IM05Vh1cGU3xivjx05QjWoWYhdLc6YHA` (principal `israel.alberto.rv@gmail.com`) |
 | `v2.11.7` … `v2.11.8` | PGP (RSA) | `.github/trusted-signers.asc` | `82DE44111B30F91F55BCEB1F414687A3CD7E65B9` (long ID `414687A3CD7E65B9`) |
-| `v2.11.9` (and later, see the per-release notes) | SSH (ED25519) | `.github/trusted-signers` | `SHA256:POu2Sr8ILb1IM05Vh1cGU3xivjx05QjWoWYhdLc6YHA` (principal `israel.alberto.rv@gmail.com`) |
+| `v2.11.9` … `v2.11.11` | SSH (ED25519) | `.github/trusted-signers` | `SHA256:POu2Sr8ILb1IM05Vh1cGU3xivjx05QjWoWYhdLc6YHA` (principal `israel.alberto.rv@gmail.com`) |
+| `v2.11.12` and later (current) | PGP (RSA) | `.github/trusted-signers.asc` | `82DE44111B30F91F55BCEB1F414687A3CD7E65B9` (long ID `414687A3CD7E65B9`) |
 
 The maintainer alternates between the two backends; both
 allow-lists are committed to the repo and both keys are
@@ -43,7 +44,8 @@ the backend; the workflow's `verify-tag-signature` job
 imports the PGP keyring only when the tag is PGP-signed and
 the SSH allow-list only when the tag is SSH-signed. The
 `.asc` file is **not** optional — it is required to verify
-`v1.5.0`–`v2.10.0` and `v2.11.7`–`v2.11.8`. Do not remove
+`v1.5.0`–`v2.10.0`, `v2.11.7`–`v2.11.8` and every tag since
+`v2.11.12`. Do not remove
 it until the most recent PGP-signed tag is at least one
 minor version old (see AGENTS.md §"Tag signature guard" →
 "Removing a signer").
@@ -52,8 +54,8 @@ The maintainer's PGP public key can be fetched from
 <https://keys.openpgp.net/search?q=82DE44111B30F91F55BCEB1F414687A3CD7E65B9>
 or with
 `gpg --keyserver keys.openpgp.net --recv-keys 82DE44111B30F91F55BCEB1F414687A3CD7E65B9`
-to verify PGP-signed tags (`v1.5.0`–`v2.10.0` and
-`v2.11.7`–`v2.11.8`) locally. The SSH key is the maintainer's
+to verify PGP-signed tags (`v1.5.0`–`v2.10.0`, `v2.11.7`–`v2.11.8`
+and `v2.11.12` onwards) locally. The SSH key is the maintainer's
 standard GitHub authentication key (fingerprint on the user's
 GitHub settings page).
 
