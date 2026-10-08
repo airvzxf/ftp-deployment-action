@@ -293,6 +293,18 @@ in production. The `scripts/verify-tag.sh` script re-verifies
 the tag against the current allow-list, so a removed signer
 surfaces immediately for the operator who removes it.
 
+## Design decisions
+
+Settled; reopen one only when its "revisit" condition holds.
+
+| # | Decision | Why | Revisit when |
+|---|---|---|---|
+| 1 | Stay a Docker action (`runs.using: docker`), not a JS/TS action that spawns lftp. | lftp is the engine; the container gives it a pinned, clean environment and keeps the action POSIX sh with no Node toolchain. A port would cost weeks to save seconds of cold start. | GitHub deprecates Docker actions, or startup time becomes a real user complaint. |
+| 2 | `lftp_settings` stays a deny-list (control characters, backtick, `$`, `!`, more than 3 `;`; see `validate_lftp_settings`). A setting many users need is promoted to its own input instead. | An allow-list of lftp settings is unbounded maintenance. Promotion works: `exclude` (v2.6.0) replaced `set mirror:exclude …` in `lftp_settings`. | A security issue shows the deny-list misses a dangerous directive. |
+| 3 | Pin third-party actions by commit SHA with the tag as a comment (`uses: owner/action@<40-hex> # vX.Y.Z`). For an annotated tag, use the commit SHA, not the tag-object SHA. | Every third-party `uses:` in the workflows already does; Dependabot keeps them current. PR #96 had to fix two tag-object SHAs. | Never. |
+| 4 | Single-stage Alpine image; no `scratch` or multi-stage build. | The saving is tens to hundreds of KB, and `scratch` would drop busybox (`sh`, `awk`, `timeout`), which entrypoint.sh and lib.sh need, and empty the SBOM. | Alpine ships a static lftp and image size matters to someone. |
+| 5 | Watch item: lftp 5.x. Alpine ships only lftp 4.9.3 (edge included, checked 2026-10-08). | When 5.x appears it is a reviewed bump: mirror semantics have shifted between versions before (see "Stack"). | Alpine packages lftp 5.x. |
+
 ## No-go list
 
 - No secret literals in code, CLI flags, or committed config

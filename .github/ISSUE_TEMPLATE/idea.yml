@@ -23,7 +23,7 @@ body:
       value: |
         Before opening an idea:
 
-        * Skim the [ROADMAP](https://github.com/airvzxf/ftp-deployment-action/blob/main/ROADMAP.md) — items already tracked there are not accepted as duplicates.
+        * Check the [milestones](https://github.com/airvzxf/ftp-deployment-action/milestones) — items already planned there are not accepted as duplicates.
         * Search [open and closed issues](https://github.com/airvzxf/ftp-deployment-action/issues?q=is%3Aissue) for prior discussions of the same idea; link them in the description below.
         * Test against the latest tag (`@v2`, or the newest `v2.x.y` release) — ideas that hinge on behaviour already fixed in a newer release will be closed as wontfix.
 

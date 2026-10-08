@@ -1361,7 +1361,7 @@ malformed input).
   log by default.
 
 
-## [1.3.3] - 2024-XX-XX
+## [1.3.3] - 2026-01-29
 
 Historical. See git history for changes prior to `CHANGELOG.md` adoption.
 
