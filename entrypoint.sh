@@ -4,7 +4,8 @@
 # This file is the entrypoint of the Docker image. It does the
 # following, in order:
 #
-#   1. Source lib.sh (pure functions and IO helpers).
+#   1. Source lib.sh (pure functions and IO helpers) and print the
+#      release version.
 #   2. Apply effective defaults to every INPUT_* (B-07 / smoke-test
 #      safety: works with `set -u` and with direct `docker run`).
 #   3. Mask sensitive inputs in the runner log (::add-mask::).
@@ -34,6 +35,9 @@ set -o pipefail
 
 # shellcheck source=lib.sh
 . /app/lib.sh
+
+# First line of every run, so a support log shows which release ran.
+printf 'ftp-deployment-action v%s\n' "$(cat /app/VERSION)"
 
 # ------------------------------------------------------------------------------
 # B-07 / smoke-test: normalize all input vars to their effective

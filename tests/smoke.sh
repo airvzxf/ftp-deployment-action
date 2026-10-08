@@ -67,9 +67,8 @@ common_env() {
 #   Each ENV_VAR_N is a "KEY=value" string written as a separate
 #   line in the env file. The last argument, if numeric, is the
 #   outer timeout for the lftp call inside the container.
-#   Reads /app/VERSION from the bind-mount of the repo root, which
-#   is the 'dev' string committed in VERSION. release.yml passes
-#   the resolved tag as --build-arg VERSION in production images.
+#   /app is a bind-mount of the repo root, so /app/VERSION is the
+#   repo's VERSION file, as in the image.
 run_init() {
   _t=15
   # Pop the trailing numeric argument as the timeout, if any.

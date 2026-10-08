@@ -119,25 +119,23 @@ rm -f "${_log}" "${_env_file}"
 pass "container runs and validate_path rejects '..' with exit 2"
 
 # ---------------------------------------------------------------------------
-# Check 2: the image prints the right version string. This is the
-# canary that catches the kind of bug that hit v2.3.0: the
-# /app/VERSION file was supposed to be baked at build time with
-# the resolved tag, but if the build-arg wiring regressed the
-# file would not contain the tag.
-#
+# Check 2: the first line of a run names the release
+# (`ftp-deployment-action vX.Y.Z`, from the repo's VERSION file).
 # ---------------------------------------------------------------------------
-echo "=== Check 2: /app/VERSION is baked (build-arg VERSION reached the Dockerfile) ==="
-_log=$(mktemp)
-timeout 60 "${RUNTIME}" run --rm --entrypoint cat "${IMAGE}" /app/VERSION >"${_log}" 2>&1 || true
-# /app/VERSION must exist and be non-empty. A regression in the
-# build-arg wiring would leave the file empty or absent.
-_baked_version=$(cat "${_log}" 2>/dev/null || true)
-if [ -z "${_baked_version}" ] || [ "${_baked_version}" = "unknown" ]; then
+echo "=== Check 2: first line is 'ftp-deployment-action vX.Y.Z' ==="
+_log=$(mktemp); _env_file=$(mktemp)
+{
+  COMMON_ENV
+  printf 'INPUT_LOCAL_DIR=../etc\n'
+} > "${_env_file}"
+timeout 15 "${RUNTIME}" run --rm --env-file "${_env_file}" "${IMAGE}" >"${_log}" 2>&1 || true
+_first=$(head -n 1 "${_log}")
+if ! printf '%s\n' "${_first}" | grep -qE '^ftp-deployment-action v[0-9]+\.[0-9]+\.[0-9]+$'; then
   cat "${_log}" >&2
-  rm -f "${_log}"
-  fail "build-arg VERSION did not reach /app/VERSION; got: '${_baked_version}'"
+  rm -f "${_log}" "${_env_file}"
+  fail "first line is '${_first}', expected 'ftp-deployment-action vX.Y.Z'"
 fi
-rm -f "${_log}"
-pass "build-arg VERSION was baked into /app/VERSION: ${_baked_version}"
+rm -f "${_log}" "${_env_file}"
+pass "first line names the release: ${_first}"
 
 printf '\nAll release smoke tests passed for %s.\n' "${IMAGE}"

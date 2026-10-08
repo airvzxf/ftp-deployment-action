@@ -683,14 +683,14 @@ make build IMAGE=ftp-deployment-action:local
 make release-smoke IMAGE=ftp-deployment-action:local
 ```
 
-`make build` runs `docker build --build-arg VERSION=dev` and
+`make build` runs `docker build` and
 `make release-smoke` runs the same two checks the release
 workflow runs against the just-pushed image:
 
 1. The container starts and `validate_path` rejects a `..`
    path-traversal in `local_dir` with exit 2.
-2. The `VERSION` build-arg was baked into `/app/VERSION`
-   (the file would be empty or missing otherwise).
+2. The first line of a run is `ftp-deployment-action vX.Y.Z`
+   (the repo's `VERSION` file, copied into the image).
 
 These checks catch the kind of regression that broke the v2.3.0
 release (Dependabot bumped the alpine base image, the lftp
