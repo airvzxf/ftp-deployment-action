@@ -152,6 +152,8 @@ assert_present "${_ftp_home}" "about.html"
 # subdirectory landed on the server.
 assert_present "${_ftp_home}" "assets"
 
+assert_server_alive
+
 log_pass "scenario 04 passed: action uploaded fixtures over FTPS implicit (TLS from byte 0 on port ${FTP_IMPLICIT_PORT})"
 
 exit 0
