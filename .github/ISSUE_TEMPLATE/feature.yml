@@ -22,11 +22,11 @@ body:
 
         Before you file, please make sure the work is not already planned or shipped:
 
-        - Skim the [ROADMAP](https://github.com/airvzxf/ftp-deployment-action/blob/main/ROADMAP.md) for items in flight and the LP/MP backlog.
+        - Check the [milestones](https://github.com/airvzxf/ftp-deployment-action/milestones) for work already planned.
         - Read the `## [Unreleased]` and current `v2.x` sections of the [CHANGELOG](https://github.com/airvzxf/ftp-deployment-action/blob/main/CHANGELOG.md) for recently shipped or in-flight work.
         - Search [open and closed issues](https://github.com/airvzxf/ftp-deployment-action/issues?q=is%3Aissue) for prior discussion of the same idea.
 
-        If the feature is already on the roadmap or has been discussed, link to the existing issue below and add only the new context. Do **not** paste credentials, your real `server` hostname, or any `password:` value into any field on this form, even inside example workflow YAML. Redact the password as `<REDACTED>` and the server as `<your.ftp.host>` if you need to show a snippet.
+        If the feature is already planned or has been discussed, link to the existing issue below and add only the new context. Do **not** paste credentials, your real `server` hostname, or any `password:` value into any field on this form, even inside example workflow YAML. Redact the password as `<REDACTED>` and the server as `<your.ftp.host>` if you need to show a snippet.
 
   - type: dropdown
     id: action-version
