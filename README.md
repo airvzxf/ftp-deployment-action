@@ -352,15 +352,15 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 
 | Option                 | Description                                                                           | Required | Default | Example                                                                                           |
 |------------------------|---------------------------------------------------------------------------------------|----------|---------|---------------------------------------------------------------------------------------------------|
-| server                 | FTP Server.                                                                           | Yes      | N/A     | rovisoft.net                                                                                      |
+| server                 | FTP server: `ftp://host[:port]` or `ftps://host[:port]` (implicit TLS); a bare `host[:port]` means `ftp://`. IPv6 in brackets (`ftp://[2001:db8::1]:21`). No `user:pass@` in the URL (exit 2): use `user` / `password`. The target directory is `remote_dir`, not the URL path. | Yes      | N/A     | rovisoft.net                                                                                      |
 | user                   | FTP Username.                                                                         | Yes      | N/A     | myself@rovisoft.net                                                                               |
 | password               | FTP Password.                                                                         | Yes      | N/A     | ExampleOnlyAlphabets                                                                              |
 | local_dir              | Local directory.                                                                      | No       | "./"    | "./public_html"                                                                                   |
 | remote_dir             | Remote directory.                                                                     | No       | "./"    | "/www/user/home"                                                                                  |
-| max_retries            | Number of retries on error. `0` = retry forever; `1` = no retries.                  | No       | 10      | N/A                                                                                               |
+| max_retries            | Number of tries on error; `1` = no retries. `0` = retry until success, a permanent error, or the job is stopped (set `timeout-minutes`). Each attempt is limited to 5 h. | No       | 10      | N/A                                                                                               |
 | delete                 | Delete remote files that do not exist locally (files matching `exclude` are kept).   | No       | false   | N/A                                                                                               |
 | no_symlinks            | Do not create symbolic links.                                                         | No       | true    | N/A                                                                                               |
-| mirror_verbose         | Mirror verbosity level.                                                               | No       | 1       | N/A                                                                                               |
+| mirror_verbose         | Mirror verbosity: 0 (quiet) to 3 (most verbose); higher values behave like 3. | No       | 1       | N/A                                                                                               |
 | ftp_ssl_allow          | FTP - Allow SSL encryption.                                                           | No       | true    | N/A                                                                                               |
 | ssl_verify_certificate | FTP - Verify SSL certificate.                                                         | No       | true    | N/A                                                                                               |
 | ssl_check_hostname     | FTP - Check certificate hostname.                                                     | No       | true    | N/A                                                                                               |
@@ -630,7 +630,7 @@ remote directory), give each its own lock path:
 |                          |   concurrency_lock_timeout s
 |                          |   then fails with exit 1
 |                          |
-|  5. lftp -e "..."        |--- +global 5h timeout
+|  5. lftp -e "..."        |--- +5h timeout per attempt
 |     (run_lftp_once +     |   + exponential backoff with jitter
 |      retry loop,         |   + per-attempt net/dns timeouts
 |      max_retries=0..N)   |   + releases lock via `quote RMD` + EXIT trap

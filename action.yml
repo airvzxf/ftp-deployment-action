@@ -5,7 +5,7 @@ description: >-
   optionally deleting remote files that no longer exist locally.
 inputs:
   server:
-    description: 'FTP Server.'
+    description: 'FTP server: `ftp://host[:port]` (plain FTP, or explicit TLS when `ftp_ssl_allow` is "true") or `ftps://host[:port]` (implicit TLS); a bare `host[:port]` means `ftp://`. IPv6 addresses go in brackets: `ftp://[2001:db8::1]:21`. Credentials go in `user` and `password`: a URL with `user:pass@` is rejected with exit 2 (a bare `user@` is accepted). Set the target directory with `remote_dir`, not in the URL.'
     required: true
   user:
     description: 'FTP User.'
@@ -26,7 +26,7 @@ inputs:
     required: false
     default: 'false'
   max_retries:
-    description: 'Number of times the lftp command will be executed on error. `0` means retry forever (the only exits are lftp success or the global 5h timeout). `1` means no retries.'
+    description: 'Number of times the lftp command will be executed on error. `1` means no retries. `0` retries until lftp succeeds, a permanent error (e.g. a wrong password) is detected, or the job is stopped; set `timeout-minutes` on the job to bound it. Each attempt is limited to 5 hours.'
     required: false
     default: '10'
   no_symlinks:
@@ -34,7 +34,7 @@ inputs:
     required: false
     default: 'true'
   mirror_verbose:
-    description: 'Mirror verbosity level (0-3). Passed as --verbose=N to lftp mirror.'
+    description: 'Mirror verbosity, passed as --verbose=N to lftp mirror: 0 (quiet) to 3 (most verbose); higher values behave like 3.'
     required: false
     default: '1'
   ftp_ssl_allow:
