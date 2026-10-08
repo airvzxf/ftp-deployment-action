@@ -39,6 +39,11 @@ for _f in index.html about.html; do
     log_fail "dry-run plan does not mention ${_f} (the user sees no plan)"
   fi
 done
+# The connection check's reply is noise, not part of the plan.
+if grep -q "200 NOOP" "${_log}"; then
+  sed 's/^/    | /' "${_log}" >&2
+  log_fail "dry-run output shows the NOOP reply"
+fi
 
 _ftp_home="${FTP_DATA_DIR}/${FTP_USER}"
 assert_absent "${_ftp_home}" "index.html"

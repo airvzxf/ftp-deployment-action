@@ -681,7 +681,7 @@ build_ftp_settings() {
 # build_mirror_command
 #   Echo the assembled `mirror --continue --reverse ...` command line
 #   fragment, including the optional --no-symlinks, --delete, and
-#   --dry-run flags (a dry run is prefixed with `quote NOOP &&`).
+#   --dry-run flags (a dry run is prefixed with `quote NOOP > /dev/null &&`).
 #   The fragment does NOT include local/remote
 #   directories; those are appended by the caller when building the
 #   final lftp `-e` script.
@@ -732,8 +732,9 @@ build_mirror_command() {
   # mirror --dry-run treats an unreachable server as an empty remote
   # directory and exits 0, so `quote NOOP` first proves the server
   # answers and the login works; it leaves the working directory as is.
+  # Its "200 NOOP ok." reply goes to /dev/null; errors still reach stderr.
   if [ "$(_indirection INPUT_DRY_RUN)" = "true" ]; then
-    _bmc_command="quote NOOP && ${_bmc_command} --dry-run"
+    _bmc_command="quote NOOP > /dev/null && ${_bmc_command} --dry-run"
   fi
 
   printf '%s' "${_bmc_command}"
