@@ -461,6 +461,79 @@ FAKE
   [ -z "${ACQUIRED_LOCK_SENTINEL:-}" ]
 }
 
+# #250: a sentinel is only stale once it is older than 6 h (GitHub's
+# maximum job time). An older-than-timeout but younger-than-6-h
+# sentinel belongs to a live run (a long mirror) and must be kept.
+_install_scripted_lftp() {
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/sh
+line=$(head -n 1 "${FAKE_LFTP_SCRIPT:-/dev/null}" 2>/dev/null) || true
+if [ -n "${line:-}" ]; then
+  sed -i '1d' "${FAKE_LFTP_SCRIPT}"
+  case "${line}" in
+    exit\ *) rc=${line#exit }; printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit "${rc}" ;;
+    echo\ *) payload=${line#echo }; printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; printf '%s\n' "${payload}"; exit 0 ;;
+    *) printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit 0 ;;
+  esac
+fi
+printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"; exit 0
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/lftp"
+}
+
+_stamp_seconds_ago() {
+  date -u -d "@$(( $(date +%s) - $1 ))" +%Y%m%dT%H%M%SZ
+}
+
+@test "acquire_lock_with_recovery: sentinel older than timeout but younger than 6 h is a live holder (issue #250)" {
+  export FAKE_LFTP_SCRIPT="${BATS_TEST_TMPDIR}/fake-lftp-script.txt"
+  live_stamp=$(_stamp_seconds_ago 600)
+  printf 'exit 1\necho .lftp-deployment.lock.%s.7.info\n' "${live_stamp}" > "${FAKE_LFTP_SCRIPT}"
+  _install_scripted_lftp
+
+  unset ACQUIRED_LOCK_SENTINEL
+  acquire_lock_with_recovery \
+    "ftp://example.test" ".lftp-deployment.lock" "1" "1" "ftptest" \
+    2> "${BATS_TEST_TMPDIR}/stderr" || rc=$?
+  [ "${rc:-0}" -eq 1 ]
+  if grep -qE "quote (DELE|RMD)|put " "${FAKE_LFTP_LOG}"; then
+    echo "a 600 s old sentinel belongs to a live run; it must not be taken over"; cat "${FAKE_LFTP_LOG}"; false
+  fi
+  # The sentinel is a dot-file; vsftpd only lists it for `LIST -a`.
+  grep -q "set ftp:list-options -a; cls -la ." "${FAKE_LFTP_LOG}"
+  [ -z "${ACQUIRED_LOCK_SENTINEL:-}" ]
+}
+
+@test "acquire_lock_with_recovery: sentinel older than 6 h is stale and taken over (issue #250)" {
+  export FAKE_LFTP_SCRIPT="${BATS_TEST_TMPDIR}/fake-lftp-script.txt"
+  stale_stamp=$(_stamp_seconds_ago 21660)
+  printf 'exit 1\necho .lftp-deployment.lock.%s.7.info\nexit 0\nexit 0\nexit 0\n' "${stale_stamp}" > "${FAKE_LFTP_SCRIPT}"
+  _install_scripted_lftp
+
+  unset ACQUIRED_LOCK_SENTINEL
+  acquire_lock_with_recovery \
+    "ftp://example.test" ".lftp-deployment.lock" "5" "1" "ftptest" || rc=$?
+  [ "${rc:-0}" -eq 0 ]
+  grep -q "quote DELE .lftp-deployment.lock.${stale_stamp}.7.info" "${FAKE_LFTP_LOG}"
+  grep -q "quote RMD .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
+  [ -n "${ACQUIRED_LOCK_SENTINEL:-}" ]
+}
+
+@test "acquire_lock_with_recovery: on timeout, names the holder's sentinel and how to clear it (issue #250)" {
+  export FAKE_LFTP_SCRIPT="${BATS_TEST_TMPDIR}/fake-lftp-script.txt"
+  live_stamp=$(_stamp_seconds_ago 600)
+  printf 'exit 1\necho .lftp-deployment.lock.%s.7.info\n' "${live_stamp}" > "${FAKE_LFTP_SCRIPT}"
+  _install_scripted_lftp
+
+  unset ACQUIRED_LOCK_SENTINEL
+  acquire_lock_with_recovery \
+    "ftp://example.test" ".lftp-deployment.lock" "1" "1" "ftptest" \
+    2> "${BATS_TEST_TMPDIR}/stderr" || rc=$?
+  [ "${rc:-0}" -eq 1 ]
+  grep -qE "^ERROR: lock \.lftp-deployment\.lock is held by \.lftp-deployment\.lock\.${live_stamp}\.7\.info \(age 6[0-9]{2} s\); if that run is gone, delete \.lftp-deployment\.lock and \.lftp-deployment\.lock\.${live_stamp}\.7\.info on the server\$" "${BATS_TEST_TMPDIR}/stderr" \
+    || { echo "stderr:"; cat "${BATS_TEST_TMPDIR}/stderr"; false; }
+}
+
 # F2 audit (NEW): _lock_age_seconds must exit non-zero when
 # mktime() returns -1 (parse failure). Pre-fix: the function
 # would print `int(n - t)` with one or both -1 inputs, yielding a
