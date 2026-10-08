@@ -453,7 +453,9 @@ start_ftps_server() {
   # ${FTP_CONTAINER_NAME} (via docker/podman rm -f), so removing
   # `--rm` here buys us post-mortem diagnostics at no cleanup
   # cost.
-  if ! ${RUNTIME} run -d \
+  # --init: as PID 1, vsftpd also reaps orphaned processes it never
+  # forked and segfaults on them (#138); a real init reaps them instead.
+  if ! ${RUNTIME} run -d --init \
       --name "${_sfs_name}" \
       --network host \
       -p "${_sfs_host_port}:${_sfs_container_port}" \
