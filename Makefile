@@ -321,6 +321,10 @@ release:
 
 .PHONY: clean
 clean:
-	-$(RUNTIME) rmi -f $(IMAGE) 2>/dev/null
-	-$(RUNTIME) rmi -f $(TEST_SERVER_IMAGE) 2>/dev/null
-	-$(RUNTIME) rmi -f $(SMOKE_IMAGE) 2>/dev/null
+	@if [ -z "$(RUNTIME)" ]; then \
+		echo "make clean: no docker/podman on PATH; nothing to remove"; \
+	else \
+		$(RUNTIME) rmi -f $(IMAGE) 2>/dev/null || true; \
+		$(RUNTIME) rmi -f $(TEST_SERVER_IMAGE) 2>/dev/null || true; \
+		$(RUNTIME) rmi -f $(SMOKE_IMAGE) 2>/dev/null || true; \
+	fi

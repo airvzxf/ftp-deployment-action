@@ -58,6 +58,11 @@ server image (used by scenarios 03 / 04). The build context is
 `tests/integration` so only the Dockerfile and adjacent files
 are sent to the docker daemon.
 
+The servers use host ports 2121 (control), 2122 (implicit FTPS) and
+31100-31110 (PASV). To run a second suite on the same host, give it
+other ports: `FTP_CONTROL_PORT=2141 FTP_IMPLICIT_PORT=2142
+FTP_PASV_MIN_PORT=31200 FTP_PASV_MAX_PORT=31210 make integration ...`.
+
 `make integration` invokes `tests/integration/run-integration-tests.sh`,
 which discovers and runs every `*.sh` under `tests/integration/scenarios/`
 in lexical order. The CI workflow's job name is also `integration` and

@@ -65,10 +65,10 @@ fi
 #
 # The container INSIDE fauria/vsftpd still binds to vsftpd's default
 # port 21; pasta/slirp4netns only needs the host-side port to be
-# unprivileged.
-FTP_CONTROL_PORT=2121
-FTP_PASV_MIN_PORT=31100
-FTP_PASV_MAX_PORT=31110
+# unprivileged. Override the three by env to run two suites side by side.
+FTP_CONTROL_PORT=${FTP_CONTROL_PORT:-2121}
+FTP_PASV_MIN_PORT=${FTP_PASV_MIN_PORT:-31100}
+FTP_PASV_MAX_PORT=${FTP_PASV_MAX_PORT:-31110}
 
 # Repository root (great-grandparent of tests/integration/lib/common.sh:
 # lib -> integration -> tests -> <repo>). Scenarios use $ROOT to bind-
