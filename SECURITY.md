@@ -8,15 +8,14 @@
 | Legacy support window  | `v1.4` — `v1.9`                            | Security-only backports on a best-effort basis.                       |
 | End-of-life            | `v1.0-alpha.*`, `v1.1`, `v1.2.0`, `v1.3.x`  | No support.                                                           |
 
-Floating refs like `@latest`, `@master`, `@main`, and `@v2` are
-**not** in the support matrix — pin to a specific tag (e.g.
-`@v2.11.9`) or a full commit SHA so the maintainer can reproduce
-the exact image you are running. The `@v2` floating major alias
-is stale (it still points at the v2.0.x-era image and the
-release pipeline does not move it), so following it silently
-skips every fix between v2.1.0 and the present. See the
-"Pin to a specific tag" note in the README for the recommended
-pattern.
+Floating refs like `@latest`, `@master`, `@main`, and the major
+alias `@v2` are **not** in the support matrix — pin to a specific
+tag (e.g. `@v2.12.1`) or a full commit SHA so the maintainer can
+reproduce the exact image you are running. The release pipeline
+does not move `@v2` or `@latest`; the maintainer moves them by
+hand after each release, so they can lag behind the newest tag
+for a while. See the "Pin to a specific tag" note in the README
+for the recommended pattern.
 
 ## Tag signing policy
 

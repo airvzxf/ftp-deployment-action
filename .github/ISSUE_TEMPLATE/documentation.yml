@@ -13,7 +13,7 @@ body:
         - Read the [README troubleshooting table](https://github.com/airvzxf/ftp-deployment-action#troubleshooting).
         - Search [closed issues](https://github.com/airvzxf/ftp-deployment-action/issues?q=is%3Aissue+is%3Aclosed) for an existing report.
         - Try the latest tag (`@v2`, or a specific tag) when the report concerns action behavior.
-        - Check the [README](https://github.com/airvzxf/ftp-deployment-action/blob/main/README.md), [CHANGELOG](https://github.com/airvzxf/ftp-deployment-action/blob/main/CHANGELOG.md), [SECURITY](https://github.com/airvzxf/ftp-deployment-action/blob/main/SECURITY.md), [ROADMAP](https://github.com/airvzxf/ftp-deployment-action/blob/main/ROADMAP.md), and [`action.yml`](https://github.com/airvzxf/ftp-deployment-action/blob/main/action.yml) as needed.
+        - Check the [README](https://github.com/airvzxf/ftp-deployment-action/blob/main/README.md), [CHANGELOG](https://github.com/airvzxf/ftp-deployment-action/blob/main/CHANGELOG.md), [SECURITY](https://github.com/airvzxf/ftp-deployment-action/blob/main/SECURITY.md), and [`action.yml`](https://github.com/airvzxf/ftp-deployment-action/blob/main/action.yml) as needed.
         - Do not paste FTP credentials. Redact the resolved `server`, `user`, and `password` values; use `ftp://` or `ftps://` placeholders when needed.
 
   - type: input

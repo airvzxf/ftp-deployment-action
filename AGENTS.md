@@ -21,9 +21,9 @@ page from the `CHANGELOG.md` section for the new version.
 |---|---|
 | Repo | https://github.com/airvzxf/ftp-deployment-action |
 | Type | Docker action (`runs.using: docker`) |
-| Stack | POSIX sh (busybox ash) + Alpine 3.24 + lftp 4.9.3 + curl 8.22.0 |
+| Stack | POSIX sh (busybox ash) + Alpine 3.24 + lftp 4.9.3 |
 | License | AGPL-3.0 (re-licensed from GPL-3.0 in v2.2.0) |
-| Image base | `alpine@sha256:28bd5…` (digest pinned in `Dockerfile`) |
+| Image base | Alpine 3.24, pinned by digest on line 1 of `Dockerfile` |
 | Default branch | `main` |
 | Registries | ghcr.io (primary), docker.io (optional), public.ecr.aws (optional) |
 | Image signing | cosign keyless via OIDC (Sigstore Fulcio) |
@@ -34,12 +34,12 @@ page from the `CHANGELOG.md` section for the new version.
 
 - POSIX `sh` (busybox ash on the runtime side; the source has to
   be `/bin/sh`-clean because the action's container is alpine).
-- `lftp` 4.9.3 pinned by `apk add lftp=4.9.3-r0` in the
-  `Dockerfile`. Bumping `lftp` is a routine change but has
-  historically been risky (mirror semantics occasionally shift
-  between minor versions); review any lftp bump carefully.
-- `curl` 8.22.0 pinned by `apk add curl=8.22.0-r0`. Same caveat
-  as lftp.
+- `lftp` 4.9.3 pinned by version (`lftp~4.9.3`) in the
+  `Dockerfile`, never by Alpine revision (`-rN`): Alpine deletes
+  old revisions, and a revision pin breaks every published tag.
+  Bumping `lftp` is a routine change but has historically been
+  risky (mirror semantics occasionally shift between minor
+  versions); review any lftp bump carefully.
 - No other runtime dependencies. No Python, no Node, no `sudo`.
 
 ## Coding conventions
