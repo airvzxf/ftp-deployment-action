@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-10-12
+
+Major release. The only breaking change is the removed
+`fail_on_deprecated` input: delete it from your workflow if you set it
+(see "Upgrading" in the README). `@v3` is the new major alias; v2.x is
+end-of-life and `@v2` stays on v2.12.1.
+
+### Removed
+
+- **BREAKING:** the `fail_on_deprecated` input, and the warnings for `@latest`, `@main`/`@master` and v1 refs. A workflow pinned to a v1 tag runs v1 code, so the end-of-life check could never fire. A workflow that still sets the input gets GitHub's "Unexpected input" warning and deploys as before. (#324)
+
+### Fixed
+
+- `concurrency_lock` never takes the lock from a run that is still deploying. A waiter used to take over once the holder's sentinel was older than `concurrency_lock_timeout` (5 minutes by default), and on vsftpd it never saw the sentinel at all (a dot-file hidden from `LIST`), so it took over at once. A sentinel now counts as abandoned only after 6 hours (GitHub's maximum job time); before that the waiter fails after its timeout with an error that names the sentinel and how to clear it. (#250)
+- A dry run no longer prints the server's `200 NOOP ok.` above the plan.
+
+### Changed
+
+- The first line of every run is `ftp-deployment-action vX.Y.Z`, so a log shows which release `@v3` or `@latest` resolved to. The image reads it from the repo's `VERSION` file; the `VERSION` build arg is gone.
+- `server`, `mirror_verbose` and `max_retries` descriptions say what the code does. (#189, #200, #201)
+- Support policy: only v3.x is maintained; v2.x and v1.x are end-of-life (SECURITY.md, issue forms).
+
+### Tests
+
+- The FTPS integration tests no longer fail at random: vsftpd ran as PID 1 in the test container and crashed on every run; it now runs under an init, and a crash fails the test. The v2.12.1 notes credited this fix to #349; the fix is #358. (#138)
+- Integration ports can be overridden by env; `make clean` says when there is no container runtime. (#161, #223)
+- New checks fail when SECURITY.md or an issue form names another major line than `VERSION`, when a file links the removed ROADMAP.md, or when AGENTS.md describes a different image than the Dockerfile.
+
+### Docs
+
+- Dead ROADMAP links removed; AGENTS.md records the design decisions and describes the image as the Dockerfile builds it (no curl, `lftp~4.9.3`). SECURITY.md no longer claims `@v2` is stuck on v2.0.x. (#237, #238)
+
 ## [2.12.1] - 2026-10-07
 
 Bug-fix release for two problems found while testing v2.12.0 against

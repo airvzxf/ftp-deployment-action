@@ -25,7 +25,7 @@ body:
 
         * Check the [milestones](https://github.com/airvzxf/ftp-deployment-action/milestones) — items already planned there are not accepted as duplicates.
         * Search [open and closed issues](https://github.com/airvzxf/ftp-deployment-action/issues?q=is%3Aissue) for prior discussions of the same idea; link them in the description below.
-        * Test against the latest tag (`@v2`, or the newest `v2.x.y` release) — ideas that hinge on behaviour already fixed in a newer release will be closed as wontfix.
+        * Test against the latest tag (`@v3`, or the newest `v3.x.y` release) — ideas that hinge on behaviour already fixed in a newer release will be closed as wontfix.
 
   - type: textarea
     id: idea
@@ -61,12 +61,11 @@ body:
     id: action-version
     attributes:
       label: Action version
-      description: 'Which version of the action did you test the idea against? Latest tag is `@v2`; if you tried a specific version, list it. Anchored to the "Supported versions" table in SECURITY.md.'
+      description: 'Which version of the action did you test the idea against? Latest tag is `@v3`; if you tried a specific version, list it. Anchored to the "Supported versions" table in SECURITY.md.'
       options:
-        - "@v2 (latest, current line)"
-        - "specific v2.x tag (e.g. @v2.11.3)"
-        - "v1.x (1.4 — 1.9, supported legacy)"
-        - "v1.x (1.3 or older, EOL)"
+        - "@v3 (latest, current line)"
+        - "specific v3.x tag (e.g. @v3.0.0)"
+        - "v2.x or v1.x (end of life)"
         - "@main / @master (development branch)"
         - local dev build
     validations:

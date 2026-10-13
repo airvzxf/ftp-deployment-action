@@ -8,7 +8,7 @@
 # public issue for vulns.
 
 name: Question
-description: Ask a question about inputs, FTPS modes, the concurrency_lock, v1.x → v2.x migration, or publishing targets.
+description: Ask a question about inputs, FTPS modes, the concurrency_lock, upgrading between major versions, or publishing targets.
 title: "[Question] "
 labels:
   - "question"
@@ -22,8 +22,8 @@ body:
 
         - **Read the [Troubleshooting table](https://github.com/airvzxf/ftp-deployment-action#troubleshooting)** in the README — it covers `530 Login authentication failed`, the `PROT command not understood` failure on legacy FTPS servers, exit code `1` vs `2`, `concurrency_lock` sentinel staleness, and more.
         - **Search [closed issues](https://github.com/airvzxf/ftp-deployment-action/issues?q=is%3Aissue+is%3Aclosed)** for your symptom. The archive is the first place to look for input combinations that already had a fix.
-        - **Reproduce against `@v2` (or the latest specific tag)**: many input / lftp bugs are fixed in the most recent release. Compare with the pinned tag you are using.
-        - **Not sure Question vs Discussion vs Stack Overflow?** Use Discussions for open-ended design questions and "what do others use" threads; use Stack Overflow for general lftp / FTPS questions unrelated to this action. Use **this** Question form only when you have a concrete, reproducible question about inputs, exit codes, the `concurrency_lock` sentinel, or the v1 → v2 migration.
+        - **Reproduce against `@v3` (or the latest specific tag)**: many input / lftp bugs are fixed in the most recent release. Compare with the pinned tag you are using.
+        - **Not sure Question vs Discussion vs Stack Overflow?** Use Discussions for open-ended design questions and "what do others use" threads; use Stack Overflow for general lftp / FTPS questions unrelated to this action. Use **this** Question form only when you have a concrete, reproducible question about inputs, exit codes, the `concurrency_lock` sentinel, or upgrading between major versions.
         - **Security issues are not filed here.** If you found a vulnerability, follow [SECURITY.md](https://github.com/airvzxf/ftp-deployment-action/blob/main/SECURITY.md) and email `israel.alberto.rv@gmail.com` privately. Public issues for security problems will be closed without triage.
 
   - type: dropdown
@@ -40,8 +40,8 @@ body:
           value: ftps-modes
         - label: "`concurrency_lock` (sentinel path, timeout, stale lock recovery)"
           value: concurrency-lock
-        - label: v1.x → v2.x migration (deprecated inputs, default behavior changes)
-          value: v1-to-v2-migration
+        - label: Upgrading between major versions (v1 → v2 → v3: removed inputs, changed defaults)
+          value: major-version-upgrade
         - label: Publishing (ghcr.io, Docker Hub, ECR Public; cosign / SBOM / attestation)
           value: publishing
         - label: Other
@@ -53,9 +53,9 @@ body:
     id: tried
     attributes:
       label: What you tried
-      description: Inputs you set, command or workflow you ran, and the observed output. Include the action tag (e.g. `@v2` or `@v2.11.3`) and the full exit code (`0`, `1`, or `2`).
+      description: Inputs you set, command or workflow you ran, and the observed output. Include the action tag (e.g. `@v3` or `@v3.0.0`) and the full exit code (`0`, `1`, or `2`).
       placeholder: |
-        Action tag used: @v2.11.3
+        Action tag used: @v3.0.0
         Relevant inputs:
           server: ftps://ftp.example.com
           user: ${{ secrets.FTP_USER }}
