@@ -175,6 +175,44 @@ else
   fail "S10 tests/contract.sh uses fail/ok (line ${_use:-?}) before defining them (line ${_def:-?})"
 fi
 
+# S11 — ROADMAP.md was removed (#238): no file outside CHANGELOG.md
+#       may still link to it.
+_s11=$(grep -rn 'ROADMAP' --exclude-dir=.git --exclude=CHANGELOG.md . 2>/dev/null \
+        | grep -v '^./tests/acceptance/static.sh:')
+if [ -z "${_s11}" ]; then
+  pass "S11 no reference to the removed ROADMAP.md"
+else
+  fail "S11 ROADMAP.md is gone but still referenced:"
+  printf '%s\n' "${_s11}" | cut -c1-140 | sed 's/^/     /'
+fi
+
+# S12 — AGENTS.md states what the Dockerfile installs: the same lftp
+#       pin, no curl in the "Stack" row or section (S5b), and any
+#       quoted base digest is a prefix of the one on Dockerfile line 1.
+_lftp_pin=$(grep -oE 'lftp~[0-9.]+' Dockerfile | head -n 1)
+_digest=$(sed -n '1s/^FROM alpine@sha256:\([0-9a-f]*\).*/\1/p' Dockerfile)
+_stack=$(awk '/^\| Stack \|/ { print } /^## / { s = ($0 == "## Stack") } s' AGENTS.md)
+_s12=""
+if [ -z "${_lftp_pin}" ] || ! grep -qF "${_lftp_pin}" AGENTS.md; then
+  _s12="${_s12} lftp(Dockerfile pins '${_lftp_pin:-?}', AGENTS.md does not say it)"
+fi
+if printf '%s\n' "${_stack}" | grep -qiw curl; then
+  _s12="${_s12} curl(AGENTS.md Stack lists curl)"
+fi
+while read -r _d; do
+  case "${_digest}" in
+    "${_d}"*) ;;
+    *) _s12="${_s12} digest(AGENTS.md ${_d} is not Dockerfile ${_digest:-?})" ;;
+  esac
+done <<EOF
+$(grep -oE 'alpine@sha256:[0-9a-f]+' AGENTS.md | sed 's/.*://')
+EOF
+if [ -z "${_s12}" ]; then
+  pass "S12 AGENTS.md stack matches the Dockerfile"
+else
+  fail "S12 AGENTS.md stack differs from the Dockerfile:${_s12}"
+fi
+
 if [ "${_failed}" -ne 0 ]; then
   printf '\nRESULT: FAIL\n'
   exit 1
