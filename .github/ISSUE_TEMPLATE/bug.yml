@@ -125,7 +125,7 @@ body:
     attributes:
       label: Last working ref
       description: If you picked "was working before" above, paste the tag / commit SHA / date of the last successful run. Otherwise leave blank.
-      placeholder: "v3.0.0 (2026-10-12) or 0123456789abcdef..."
+      placeholder: "v3.0.0 (2026-10-13) or 0123456789abcdef..."
 
   - type: checkboxes
     id: self-redaction

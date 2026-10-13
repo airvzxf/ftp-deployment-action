@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.0.0] - 2026-10-12
+## [3.0.0] - 2026-10-13
 
 Major release. The only breaking change is the removed
 `fail_on_deprecated` input: delete it from your workflow if you set it
@@ -19,13 +19,14 @@ end-of-life and `@v2` stays on v2.12.1.
 ### Fixed
 
 - `concurrency_lock` never takes the lock from a run that is still deploying. A waiter used to take over once the holder's sentinel was older than `concurrency_lock_timeout` (5 minutes by default), and on vsftpd it never saw the sentinel at all (a dot-file hidden from `LIST`), so it took over at once. A sentinel now counts as abandoned only after 6 hours (GitHub's maximum job time); before that the waiter fails after its timeout with an error that names the sentinel and how to clear it. (#250)
-- A dry run no longer prints the server's `200 NOOP ok.` above the plan.
+- A dry run no longer prints the server's `200 NOOP ok.` above the plan. (#357)
 
 ### Changed
 
 - The first line of every run is `ftp-deployment-action vX.Y.Z`, so a log shows which release `@v3` or `@latest` resolved to. The image reads it from the repo's `VERSION` file; the `VERSION` build arg is gone.
 - `server`, `mirror_verbose` and `max_retries` descriptions say what the code does. (#189, #200, #201)
 - Support policy: only v3.x is maintained; v2.x and v1.x are end-of-life (SECURITY.md, issue forms).
+- Release workflow: `actions/upload-artifact` v7.0.2 and `actions/download-artifact` v8.0.2. (#359)
 
 ### Tests
 
