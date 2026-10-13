@@ -20,7 +20,7 @@ body:
 
         1. Read the [troubleshooting table](https://github.com/airvzxf/ftp-deployment-action#troubleshooting) in the README — most "it doesn't work" reports map directly to one of its rows and the fix is already there.
         2. Search the [closed issues](https://github.com/airvzxf/ftp-deployment-action/issues?q=is%3Aissue+is%3Aclosed) for the same symptom before opening a new one.
-        3. Try the latest tag (`@v2`, or a specific tag like `@v2.11.3`) before filing against `@main` or a local dev build — your bug may already be fixed in a later release.
+        3. Try the latest tag (`@v3`, or a specific tag like `@v3.0.0`) before filing against `@main` or a local dev build — your bug may already be fixed in a later release.
 
   - type: dropdown
     id: action-version
@@ -28,10 +28,9 @@ body:
       label: Action version
       description: 'Which ref of `airvzxf/ftp-deployment-action` did you pin in `uses:`? Anchored to the "Supported versions" table in SECURITY.md.'
       options:
-        - "@v2 (latest, current line)"
-        - "specific v2.x tag (e.g. @v2.11.3)"
-        - "v1.x (1.4 — 1.9, supported legacy)"
-        - "v1.x (1.3 or older, EOL)"
+        - "@v3 (latest, current line)"
+        - "specific v3.x tag (e.g. @v3.0.0)"
+        - "v2.x or v1.x (end of life)"
         - "@main / @master (development branch)"
         - local dev build
     validations:
@@ -126,7 +125,7 @@ body:
     attributes:
       label: Last working ref
       description: If you picked "was working before" above, paste the tag / commit SHA / date of the last successful run. Otherwise leave blank.
-      placeholder: "v2.11.3 (2026-09-04) or 0123456789abcdef..."
+      placeholder: "v3.0.0 (2026-10-13) or 0123456789abcdef..."
 
   - type: checkboxes
     id: self-redaction

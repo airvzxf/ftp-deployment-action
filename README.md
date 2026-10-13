@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@v4
       # Here is the deployment action
       - name: Upload from public_html via FTP
-        uses: airvzxf/ftp-deployment-action@v2.12.1
+        uses: airvzxf/ftp-deployment-action@v3.0.0
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -85,8 +85,8 @@ jobs:
 ```
 
 > **Pin to a specific tag (recommended)**: use an exact release
-> such as `@v2.12.1` (the examples below use it) or a full commit
-> SHA. Floating refs (`@v2`, `@v1`, `@latest`, `@main`, `@master`)
+> such as `@v3.0.0` (the examples below use it) or a full commit
+> SHA. Floating refs (`@v3`, `@v2`, `@v1`, `@latest`, `@main`, `@master`)
 > are not moved by the release pipeline, so they can lag behind
 > the latest release.
 >
@@ -99,7 +99,22 @@ jobs:
 > release pipeline's `verify-tag-signature` job runs the same
 > check on every push before any image is published.
 
-## Upgrading from v1.x or @latest
+## Upgrading
+
+### From v2.x to v3
+
+v3.0.0 removes one input, `fail_on_deprecated`. Delete it from your
+workflow if you set it, and change the ref:
+
+```yaml
+- uses: airvzxf/ftp-deployment-action@v3.0.0
+```
+
+If you leave the input in, GitHub prints an `Unexpected input` warning
+and the deploy runs as before. Nothing else changed: same inputs, same
+defaults, same exit codes. v2.x is end-of-life; `@v2` stays on v2.12.1.
+
+### From v1.x
 
 v1.x accepted any TLS certificate. Since v2.0.0 `ssl_verify_certificate`
 defaults to `true`. Plain FTP to an IP address works unchanged. FTPS to
@@ -110,7 +125,7 @@ extra input:
 ssl_verify_certificate: 'false'
 ```
 
-The `@latest` tag now points to the current v2 release.
+The `@latest` tag points to the newest release.
 
 ## Publishing targets
 
@@ -119,8 +134,8 @@ when configured); a third (ECR Public) is currently disabled — see below:
 
 | Registry | Image | How to consume |
 |---|---|---|
-| GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v2.12.1` | `uses: airvzxf/ftp-deployment-action@v2.12.1` (the example above) |
-| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v2.12.1` | `uses: docker://docker.io/airvzxf/ftp-deployment-action:v2.12.1` |
+| GitHub Container Registry (default) | `ghcr.io/airvzxf/ftp-deployment-action:v3.0.0` | `uses: airvzxf/ftp-deployment-action@v3.0.0` (the example above) |
+| Docker Hub | `docker.io/airvzxf/ftp-deployment-action:v3.0.0` | `uses: docker://docker.io/airvzxf/ftp-deployment-action:v3.0.0` |
 
 Both carry the same OCI image bytes (one `docker buildx build`,
 one digest), the same `cosign` keyless signature, and the same CycloneDX SBOM
@@ -137,10 +152,10 @@ new bundle format, and cosign v2 reports `no signatures found`.
 
 ```sh
 cosign verify \
-  --certificate-identity "https://github.com/airvzxf/ftp-deployment-action/.github/workflows/release.yml@refs/tags/v2.12.1" \
+  --certificate-identity "https://github.com/airvzxf/ftp-deployment-action/.github/workflows/release.yml@refs/tags/v3.0.0" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/airvzxf/ftp-deployment-action:v2.12.1
-gh attestation verify oci://ghcr.io/airvzxf/ftp-deployment-action:v2.12.1 --owner airvzxf
+  ghcr.io/airvzxf/ftp-deployment-action:v3.0.0
+gh attestation verify oci://ghcr.io/airvzxf/ftp-deployment-action:v3.0.0 --owner airvzxf
 ```
 
 > **Note on ECR Public**: A third registry (`public.ecr.aws/m2z1h0m9/...`)
@@ -412,7 +427,7 @@ jobs:
       - uses: actions/checkout@v4
       # Here is the deployment action
       - name: Upload from public_html via FTP
-        uses: airvzxf/ftp-deployment-action@v2.12.1
+        uses: airvzxf/ftp-deployment-action@v3.0.0
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -474,7 +489,7 @@ jobs:
       group: ftp-deploy-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - uses: airvzxf/ftp-deployment-action@v2.12.1
+      - uses: airvzxf/ftp-deployment-action@v3.0.0
         with:
           server: ${{ secrets.FTP_SERVER }}
           user: ${{ secrets.FTP_USERNAME }}
@@ -502,7 +517,7 @@ distinct workflows pointing to the same FTP and don't want
 to share a group name), opt in to the server-side lock:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2.12.1
+- uses: airvzxf/ftp-deployment-action@v3.0.0
   with:
     server: ${{ secrets.FTP_SERVER }}
     user: ${{ secrets.FTP_USERNAME }}
@@ -570,7 +585,7 @@ production, one for staging, each writing to a different
 remote directory), give each its own lock path:
 
 ```yaml
-- uses: airvzxf/ftp-deployment-action@v2.12.1
+- uses: airvzxf/ftp-deployment-action@v3.0.0
   with:
     concurrency_lock: "true"
     concurrency_lock_path: ".lftp-deployment.lock.prod"
