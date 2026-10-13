@@ -248,4 +248,24 @@ else
   ok "README.md 'airvzxf/ftp-deployment-action@v${_pin_version}' pins match VERSION (${VER})"
 fi
 
+# 6. Current major line follows VERSION (v3.0.0). SECURITY.md's
+# "Currently maintained" row (`vN.x`) and the issue forms' version
+# refs (`@vN`, `@vN.Y.Z`, "specific vN.x tag") name the supported
+# line. A major bump that leaves "@v2 (latest, current line)" in a
+# form or `v2.x` in that row fails here. End-of-life options such as
+# "v2.x and older" carry no `@` and no "specific", so they pass.
+_major=${VER%%.*}
+_line_bad=$(grep -E '^\| Currently maintained' "${ROOT}/SECURITY.md" \
+  | grep -oE 'v[0-9]+\.x' | grep -vx "v${_major}\.x" | sed 's/^/SECURITY.md: /')
+_forms_bad=$(grep -noE '@v[0-9]+(\.[0-9]+\.[0-9]+)?|specific v[0-9]+\.x' \
+    "${ROOT}"/.github/ISSUE_TEMPLATE/*.yml \
+  | grep -vE ":(@v${_major}([.]|\$)|specific v${_major}[.]x\$)" \
+  | sed "s|^${ROOT}/||")
+if [ -n "${_line_bad}${_forms_bad}" ]; then
+  printf 'refs that do not name the current major line v%s:\n' "${_major}" >&2
+  printf '%s\n' "${_line_bad}" "${_forms_bad}" | sed '/^$/d; s/^/  /' >&2
+  fail "SECURITY.md / issue forms do not name the v${_major} line of VERSION '${VER}'"
+fi
+ok "SECURITY.md and issue forms name the v${_major} line (${VER})"
+
 exit 0
