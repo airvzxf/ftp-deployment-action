@@ -58,7 +58,7 @@ body:
       description: 'Which action ref or build are you reporting against? Anchored to the "Supported versions" table in SECURITY.md.'
       options:
         - "@v3 (latest, current line)"
-        - "specific v3.x tag (e.g. @v3.0.0)"
+        - "specific v3.x tag (e.g. @v3.1.0)"
         - "v2.x or v1.x (end of life)"
         - "@main / @master (development branch)"
         - local dev build
