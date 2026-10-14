@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-10-14
+
+FTPS uploads to servers that negotiate TLS 1.3 no longer reset at the
+end of each file. No workflow change is needed: the fix is the new
+default.
+
+### Fixed
+
+- **FTPS to a TLS 1.3 server: uploads were truncated or many times slower.** lftp 4.9.3 closes each data connection without reading the session tickets a TLS 1.3 server sends after the handshake. The kernel then resets the connection and drops what lftp had not sent: its TLS `close_notify` and, over a real network, the tail of the file. The server replied `426 Failure reading network stream.`, lftp reconnected and resumed, and the log showed `file size increased during transfer`. Measured from a home connection to a TLS 1.3 vsftpd: a deploy took 786 s instead of 13 s, and with `max_retries: 1` it failed and left truncated files. The action now negotiates TLS 1.2 at most by default. (#361)
+
+### Added
+
+- `tls_max_version` input: `'1.2'` (default) or `'1.3'`. Set `'1.3'` only for a server that refuses TLS 1.2; it brings back the behaviour above. Other values exit 2. The cap is applied through OpenSSL (`/app/openssl-tls12.cnf`), because lftp's `ssl:priority` has no effect on its OpenSSL build. (#361)
+
+### Tests
+
+- Scenario 30 reads the TLS version vsftpd logs for each connection (`debug_ssl=YES`): TLS 1.2 by default, TLS 1.3 with `tls_max_version: '1.3'`. The test server keeps TLS 1.3 enabled. Unit and smoke tests cover the validator and the `OPENSSL_CONF` switch.
+
 ## [3.0.0] - 2026-10-13
 
 Major release. The only breaking change is the removed
