@@ -49,6 +49,10 @@ inputs:
     description: 'Check certificate hostname.'
     required: false
     default: 'true'
+  tls_max_version:
+    description: 'Highest TLS version for FTPS: `1.2` (default) or `1.3`. lftp 4.9.3, the client in this action, resets TLS 1.3 data connections when it closes them: the server replies `426 Failure reading network stream.`, may keep a truncated file, and lftp retries. Set `1.3` only if your server refuses TLS 1.2.'
+    required: false
+    default: '1.2'
   ftp_passive_mode:
     description: 'FTP - This can be useful if you are behind a firewall or a dumb masquerading router.'
     required: false

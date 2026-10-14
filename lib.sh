@@ -96,6 +96,39 @@ validate_bool() {
 }
 
 # ------------------------------------------------------------------------------
+# validate_tls_max_version VALUE
+#   Exit 2 unless VALUE is "1.2" or "1.3" (#361). entrypoint.sh
+#   applies the action.yml default before the check, so an empty
+#   value never reaches it.
+# ------------------------------------------------------------------------------
+validate_tls_max_version() {
+  case "$1" in
+    1.2|1.3) return 0 ;;
+    *)
+      printf 'ERROR: tls_max_version must be 1.2 or 1.3 (got: %s)\n' "$1" >&2
+      exit 2
+      ;;
+  esac
+}
+
+# ------------------------------------------------------------------------------
+# apply_tls_max_version VALUE
+#   "1.2": export OPENSSL_CONF=/app/openssl-tls12.cnf, which caps the
+#   TLS version lftp's OpenSSL negotiates. lftp 4.9.3 resets TLS 1.3
+#   data connections at close (#361; see openssl-tls12.cnf). lftp's
+#   `ssl:priority` has no effect on its OpenSSL build.
+#   "1.3": unset OPENSSL_CONF so OpenSSL uses its defaults.
+# ------------------------------------------------------------------------------
+apply_tls_max_version() {
+  if [ "$1" = "1.2" ]; then
+    OPENSSL_CONF=/app/openssl-tls12.cnf
+    export OPENSSL_CONF
+  else
+    unset OPENSSL_CONF
+  fi
+}
+
+# ------------------------------------------------------------------------------
 # normalize_bool NAME VALUE
 #   Echo the canonical lftp-style "true" or "false" for VALUE, after
 #   validating it through `validate_bool`. Used for the GATE inputs
@@ -508,6 +541,7 @@ print_inputs_dump() {
     printf '  %-26s %s\n' "ftp_ssl_allow:"           "$(_indirection INPUT_FTP_SSL_ALLOW)"
     printf '  %-26s %s\n' "ssl_verify_certificate:"  "$(_indirection INPUT_SSL_VERIFY_CERTIFICATE)"
     printf '  %-26s %s\n' "ssl_check_hostname:"      "$(_indirection INPUT_SSL_CHECK_HOSTNAME)"
+    printf '  %-26s %s\n' "tls_max_version:"         "$(_indirection INPUT_TLS_MAX_VERSION)"
     printf '  %-26s %s\n' "ftp_passive_mode:"        "$(_indirection INPUT_FTP_PASSIVE_MODE)"
     printf '  %-26s %s\n' "ftp_use_feat:"            "$(_indirection INPUT_FTP_USE_FEAT)"
     printf '  %-26s %s\n' "ftp_nop_interval:"        "$(_indirection INPUT_FTP_NOP_INTERVAL)"
@@ -530,7 +564,7 @@ print_inputs_dump() {
     for _pid_name in \
       SERVER USER PASSWORD LOCAL_DIR REMOTE_DIR DELETE MAX_RETRIES \
       NO_SYMLINKS MIRROR_VERBOSE FTP_SSL_ALLOW SSL_VERIFY_CERTIFICATE \
-      SSL_CHECK_HOSTNAME FTP_PASSIVE_MODE FTP_USE_FEAT FTP_NOP_INTERVAL \
+      SSL_CHECK_HOSTNAME TLS_MAX_VERSION FTP_PASSIVE_MODE FTP_USE_FEAT FTP_NOP_INTERVAL \
       NET_MAX_RETRIES NET_PERSIST_RETRIES NET_TIMEOUT DNS_MAX_RETRIES \
       DNS_FATAL_TIMEOUT LFTP_SETTINGS EXCLUDE DEBUG DRY_RUN \
       CONCURRENCY_LOCK CONCURRENCY_LOCK_PATH CONCURRENCY_LOCK_TIMEOUT \

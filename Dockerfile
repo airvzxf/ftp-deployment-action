@@ -16,8 +16,8 @@ RUN apk add --no-cache \
 
 # VERSION comes from the repo: GitHub builds this file on the runner
 # without build args, and entrypoint.sh prints it on the first line.
-COPY entrypoint.sh lib.sh VERSION /app/
-RUN chmod 0644 /app/VERSION \
+COPY entrypoint.sh lib.sh openssl-tls12.cnf VERSION /app/
+RUN chmod 0644 /app/VERSION /app/openssl-tls12.cnf \
  && chmod 0755 /app/entrypoint.sh
 
 # B-03 / B-14: the script writes the .netrc file at $HOME/.netrc, so
