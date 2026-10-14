@@ -628,5 +628,16 @@ if echo "${out}" | grep -q "Concurrency lock acquire"; then
 fi
 pass "INPUT_CONCURRENCY_LOCK=false (disabled) reaches the mirror and exits 1"
 
+# ----------------------------------------------------------------------------
+# Test 36 (#361): tls_max_version accepts only 1.2 and 1.3; any other
+# value, including a command payload, exits 2 before lftp runs.
+# ----------------------------------------------------------------------------
+out=$(run_init 'INPUT_TLS_MAX_VERSION=1.2; !cat /home/lftp/.netrc' 10)
+echo "${out}" | grep -q "tls_max_version must be" \
+  || fail "INPUT_TLS_MAX_VERSION with payload was not rejected; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "INPUT_TLS_MAX_VERSION with payload did not exit 2; output was:\n${out}"
+pass "INPUT_TLS_MAX_VERSION='1.2; !cat ...' is rejected (exit 2)"
+
 printf 'All smoke tests passed.\n'
 exit 0

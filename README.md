@@ -57,6 +57,19 @@ the action does not set it.
 > keeping `ftp_ssl_allow: "true"`. See the
 > [Troubleshooting](#troubleshooting) table below.
 
+### TLS version
+
+The action negotiates **TLS 1.2 at most** by default
+(`tls_max_version: "1.2"`). lftp 4.9.3, the FTPS client inside the
+action, mishandles TLS 1.3: it closes each data connection without
+reading the session tickets the server sent, so the connection is
+reset. The server then replies `426 Failure reading network stream.`
+and may keep a truncated file. lftp reconnects and resumes, so a
+deploy either fails or takes many times longer than it should (#361).
+
+Set `tls_max_version: "1.3"` only if your server refuses TLS 1.2.
+Plain FTP (`ftp_ssl_allow: "false"`) is not affected.
+
 ## Usage Example
 
 Add this code in `./.github/workflows/your_action.yml`.
@@ -379,6 +392,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | ftp_ssl_allow          | FTP - Allow SSL encryption.                                                           | No       | true    | N/A                                                                                               |
 | ssl_verify_certificate | FTP - Verify SSL certificate.                                                         | No       | true    | N/A                                                                                               |
 | ssl_check_hostname     | FTP - Check certificate hostname.                                                     | No       | true    | N/A                                                                                               |
+| tls_max_version        | Highest TLS version for FTPS: `1.2` or `1.3`. See [TLS version](#tls-version).        | No       | 1.2     | N/A                                                                                               |
 | ftp_passive_mode       | FTP - This can be useful if you are behind a firewall or a dumb masquerading router.  | No       | true    | N/A                                                                                               |
 | ftp_use_feat           | FTP - FEAT: Determining what extended features the FTP server supports.               | No       | false   | N/A                                                                                               |
 | ftp_nop_interval       | FTP - Delay in seconds between NOOP commands when downloading tail of a file.         | No       | 2       | N/A                                                                                               |
@@ -440,6 +454,7 @@ jobs:
           ftp_ssl_allow: "false"
           ssl_verify_certificate: "true"
           ssl_check_hostname: "false"
+          tls_max_version: "1.2"
           ftp_use_feat: "true"
           ftp_nop_interval: "9"
           net_max_retries: "3"
@@ -726,6 +741,7 @@ log for debugging).
 | `Fatal error: max-retries exceeded` with no reason in parentheses, and the banner says `lftp got no reply from the server` | The connection never got an FTP greeting: a firewall drops the packets, the host or port is wrong, or the server closes the connection before replying. Each try waits for `net_timeout`, so the step looks like a slow loop of the same message. | Same checks as `Connection refused`. GitHub-hosted runners connect from Azure IP ranges: hosters and VPS firewalls often block them, so allow-list the range or use a self-hosted runner. To see each connect attempt and its timeout, add `lftp_settings: "debug 3;"` for one run. |
 | `mirror: Access failed: 550 ... No such file or directory` | The remote path does not exist or the FTP user has no permission to create it. | Create the `remote_dir` manually (or set `delete: false` and accept a partial mirror) and confirm the FTP user owns it. |
 | `getpeername: Connection refused` on `ftps://host:990` | The server is **not** speaking implicit FTPS — it is almost certainly explicit FTPS on port 21. The `ftps://` URL forces TLS from byte 0, which the server rejects. | Switch `server` to `ftp://host:21` and keep `ftp_ssl_allow: "true"`. See the "Plain FTP vs FTPS" table in [Security and SSL](#security-and-ssl). |
+| `426 Failure reading network stream.` after `STOR`, `file size increased during transfer`, or an FTPS deploy that is slow and reconnects every few files | The server negotiated TLS 1.3, which lftp 4.9.3 mishandles at the end of each upload (#361). | Keep `tls_max_version` at its default `"1.2"`. If you set `"1.3"`, remove it. |
 | lftp logs `PROT command not understood` then drops the data connection | Some legacy FTPS servers do not support `PROT P` even though they accept `AUTH TLS`. lftp falls back to `PROT C` (clear data channel) by default; if the server closes the data connection instead, the action exits 1. | Add `lftp_settings: "set ftps:initial-prot C;"` to the step, or ask the hoster to enable `PROT P` server-side. |
 | `can't create /<some-path>/.netrc: Permission denied` (or `Read-only file system`) on self-hosted runners | The runner is forwarding its host `HOME` into the container. The action tried to write `<HOME>/.netrc`, but the directory is read-only or owned by a different uid than the in-container `lftp` user. | `entrypoint.sh` pins `NETRC=/home/lftp/.netrc` and `export HOME=/home/lftp` regardless of any inherited `HOME`, so this error means an image older than v2.11.0: pin a current release. See [Self-hosted runners](#self-hosted-runners) below for the full picture. |
 

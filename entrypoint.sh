@@ -64,6 +64,7 @@ printf 'ftp-deployment-action v%s\n' "$(cat /app/VERSION)"
 : "${INPUT_FTP_SSL_ALLOW:=true}"
 : "${INPUT_SSL_VERIFY_CERTIFICATE:=true}"
 : "${INPUT_SSL_CHECK_HOSTNAME:=true}"
+: "${INPUT_TLS_MAX_VERSION:=1.2}"
 : "${INPUT_FTP_PASSIVE_MODE:=true}"
 : "${INPUT_FTP_USE_FEAT:=false}"
 : "${INPUT_FTP_NOP_INTERVAL:=2}"
@@ -146,6 +147,10 @@ validate_bool     "ftp_passive_mode"       "${INPUT_FTP_PASSIVE_MODE}"
 validate_bool     "ftp_use_feat"           "${INPUT_FTP_USE_FEAT}"
 validate_duration "net_timeout"            "${INPUT_NET_TIMEOUT}"
 validate_duration "dns_fatal_timeout"      "${INPUT_DNS_FATAL_TIMEOUT}"
+# #361: cap TLS at 1.2 unless the workflow asks for 1.3. Exported
+# here, before the first lftp call (lock, dry-run probe, mirror).
+validate_tls_max_version "${INPUT_TLS_MAX_VERSION}"
+apply_tls_max_version    "${INPUT_TLS_MAX_VERSION}"
 # B-16: light sanitization of the free-form lftp_settings input.
 validate_lftp_settings "${INPUT_LFTP_SETTINGS}"
 # v2.11.8 (#190): INPUT_SERVER flows verbatim into the lftp URL

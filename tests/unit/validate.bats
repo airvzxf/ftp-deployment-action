@@ -590,3 +590,40 @@ bar'
   run validate_lftp_settings 'set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent "firefox";'
   [ "$status" -eq 0 ]
 }
+
+# ------------------------------------------------------------------------------
+# tls_max_version — #361
+# ------------------------------------------------------------------------------
+@test "validate_tls_max_version accepts 1.2 and 1.3" {
+  for v in 1.2 1.3; do
+    run validate_tls_max_version "$v"
+    [ "$status" -eq 0 ]
+  done
+}
+
+@test "validate_tls_max_version rejects other versions, spellings and payloads with exit 2" {
+  for v in "" 1.1 1.0 1.4 TLSv1.2 "1.2 " "1.2; !id" 'TLSv1.3$(id)'; do
+    run validate_tls_max_version "$v"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"tls_max_version must be"* ]]
+  done
+}
+
+@test "apply_tls_max_version 1.2 points OPENSSL_CONF at the TLS 1.2 config" {
+  unset OPENSSL_CONF
+  apply_tls_max_version "1.2"
+  [ "${OPENSSL_CONF}" = "/app/openssl-tls12.cnf" ]
+}
+
+@test "apply_tls_max_version 1.3 leaves OpenSSL on its defaults" {
+  OPENSSL_CONF=/app/openssl-tls12.cnf
+  export OPENSSL_CONF
+  apply_tls_max_version "1.3"
+  [ -z "${OPENSSL_CONF+set}" ]
+}
+
+@test "openssl-tls12.cnf caps the protocol at TLS 1.2" {
+  _cnf="${BATS_TEST_DIRNAME}/../../openssl-tls12.cnf"
+  [ -f "${_cnf}" ]
+  grep -qx 'MaxProtocol = TLSv1.2' "${_cnf}"
+}
