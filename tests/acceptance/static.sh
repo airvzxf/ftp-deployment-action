@@ -213,6 +213,17 @@ else
   fail "S12 AGENTS.md stack differs from the Dockerfile:${_s12}"
 fi
 
+# S13 — the FTPS test server is built on the same Alpine digest as the
+#       action image ("Bump this digest in lockstep with Dockerfile:1"
+#       in Dockerfile.test-server), so both sides of the integration
+#       tests run the same OpenSSL.
+_ts_digest=$(sed -n 's/^FROM alpine@sha256:\([0-9a-f]*\).*/\1/p' tests/integration/Dockerfile.test-server)
+if [ -n "${_digest}" ] && [ "${_ts_digest}" = "${_digest}" ]; then
+  pass "S13 Dockerfile.test-server uses the Dockerfile:1 Alpine digest"
+else
+  fail "S13 Dockerfile.test-server digest ${_ts_digest:-?} is not Dockerfile:1 ${_digest:-?}"
+fi
+
 if [ "${_failed}" -ne 0 ]; then
   printf '\nRESULT: FAIL\n'
   exit 1
