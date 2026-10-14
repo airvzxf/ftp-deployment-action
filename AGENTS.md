@@ -304,6 +304,7 @@ Settled; reopen one only when its "revisit" condition holds.
 | 3 | Pin third-party actions by commit SHA with the tag as a comment (`uses: owner/action@<40-hex> # vX.Y.Z`). For an annotated tag, use the commit SHA, not the tag-object SHA. | Every third-party `uses:` in the workflows already does; Dependabot keeps them current. PR #96 had to fix two tag-object SHAs. | Never. |
 | 4 | Single-stage Alpine image; no `scratch` or multi-stage build. | The saving is tens to hundreds of KB, and `scratch` would drop busybox (`sh`, `awk`, `timeout`), which entrypoint.sh and lib.sh need, and empty the SBOM. | Alpine ships a static lftp and image size matters to someone. |
 | 5 | Watch item: lftp 5.x. Alpine ships only lftp 4.9.3 (edge included, checked 2026-10-08). | When 5.x appears it is a reviewed bump: mirror semantics have shifted between versions before (see "Stack"). | Alpine packages lftp 5.x. |
+| 6 | No GitHub Actions cache in any workflow (`type=gha`, `actions/cache`). Acceptance check S14 enforces it. | A cache entry is scoped to the ref that wrote it; a tag or branch run reads only its own ref and the default branch. The release build's cache never hit: each tag wrote its own ~6 MB and left it behind on the caches page. The image build takes about a second. | A workflow on `main` (push or schedule) gains a step slow enough that a cache saved on `main` would pay for itself. |
 
 ## No-go list
 
