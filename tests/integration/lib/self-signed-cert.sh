@@ -274,6 +274,12 @@ _write_ftps_vsftpd_conf() {
     printf 'ssl_ciphers=HIGH:MEDIUM:!DHE:!DH\n'
     printf 'force_local_logins_ssl=YES\n'
     printf 'force_local_data_ssl=NO\n'
+    # TLS 1.3 stays enabled (the vsftpd default), so the scenarios
+    # exercise what a TLS 1.3 server does to lftp (#361). debug_ssl
+    # logs "SSL version: TLSvX.Y" for every connection; scenario 30
+    # reads it to check which version the action negotiated.
+    printf 'debug_ssl=YES\n'
+    printf 'vsftpd_log_file=/var/log/vsftpd/vsftpd.log\n'
   } > "${_wfvc_out}"
 }
 

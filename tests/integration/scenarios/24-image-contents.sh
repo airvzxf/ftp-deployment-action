@@ -27,7 +27,7 @@ printf '%s\n' "${_out}" | sed 's/^/    /'
 printf '%s\n' "${_out}" | grep -q '^lftp=.*Version 4\.9\.' || log_fail "lftp 4.9.x not found in the image"
 printf '%s\n' "${_out}" | grep -q '^curl=absent$'          || log_fail "curl is still installed in the image"
 printf '%s\n' "${_out}" | grep -q '^user=lftp$'            || log_fail "image does not run as user lftp"
-printf '%s\n' "${_out}" | grep -q '^app=VERSION entrypoint.sh lib.sh $' || log_fail "/app has unexpected content"
+printf '%s\n' "${_out}" | grep -q '^app=VERSION entrypoint.sh lib.sh openssl-tls12.cnf $' || log_fail "/app has unexpected content"
 
 log_pass "scenario 24 passed: image contents are minimal"
 exit 0
