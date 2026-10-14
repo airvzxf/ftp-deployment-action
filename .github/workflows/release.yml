@@ -544,14 +544,12 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.licenses=AGPL-3.0
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
-          # GHA cache is keyed on the image hash, not the ref,
-          # so it survives the tag-to-tag transition. This
-          # differs from moagan's rust-cache decision (the rust
-          # cache is keyed on Cargo.lock + ref and is wasted
-          # per release). Keep the GHA cache for the docker
-          # build path.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # No build cache. A GitHub Actions cache entry is scoped
+          # to the ref that wrote it, and a tag run reads only its
+          # own ref and the default branch, so no release could
+          # reuse an earlier release's layers. The build installs
+          # two apk packages in about a second. See AGENTS.md
+          # design decision 6; acceptance check S14 enforces it.
 
       # v2.10.0+: ECR Public is a SECONDARY publish target. OIDC
       # role assumption (no static AWS secrets) is configured in
