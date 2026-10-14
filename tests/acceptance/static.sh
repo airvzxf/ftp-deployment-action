@@ -229,6 +229,22 @@ else
   fail "S13 not on the Dockerfile:1 digest ${_digest:-?}:${_s13}"
 fi
 
+# S14 — no workflow uses the GitHub Actions cache. A cache entry is
+#       scoped to the ref that wrote it, and a tag or branch run reads
+#       only its own ref and the default branch. The release build
+#       wrote one entry set per tag and no later run could read it, so
+#       every release missed the cache and left ~6 MB of entries
+#       behind. The build installs two apk packages in about a second;
+#       there is nothing to cache. See AGENTS.md design decision 6.
+_s14=$(grep -nE 'type=gha|cache-(from|to):|actions/cache[@/]' \
+    .github/workflows/*.yml | grep -vE '^[^:]*:[0-9]+:[[:space:]]*#')
+if [ -z "${_s14}" ]; then
+  pass "S14 no workflow reads or writes the GitHub Actions cache"
+else
+  fail "S14 workflows use the GitHub Actions cache:"
+  printf '%s\n' "${_s14}" | sed 's/^/  /'
+fi
+
 if [ "${_failed}" -ne 0 ]; then
   printf '\nRESULT: FAIL\n'
   exit 1
