@@ -213,6 +213,22 @@ else
   fail "S12 AGENTS.md stack differs from the Dockerfile:${_s12}"
 fi
 
+# S13 — the test images are built on the same Alpine digest as the
+#       action image, so the tests run the OpenSSL / busybox users get.
+#       Dependabot bumps all three in one grouped PR
+#       (.github/dependabot.yml, group dockerfile-base).
+_s13=""
+for _f in tests/integration/Dockerfile.test-server tests/Dockerfile.smoke; do
+  _d13=$(sed -n 's/^FROM alpine@sha256:\([0-9a-f]*\).*/\1/p' "${_f}")
+  [ -n "${_digest}" ] && [ "${_d13}" = "${_digest}" ] \
+    || _s13="${_s13} ${_f}(${_d13:-?})"
+done
+if [ -z "${_s13}" ]; then
+  pass "S13 test Dockerfiles use the Dockerfile:1 Alpine digest"
+else
+  fail "S13 not on the Dockerfile:1 digest ${_digest:-?}:${_s13}"
+fi
+
 if [ "${_failed}" -ne 0 ]; then
   printf '\nRESULT: FAIL\n'
   exit 1
