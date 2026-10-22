@@ -717,11 +717,10 @@ build_mirror_command() {
 #
 #   where TIMESTAMP is YYYYMMDDTHHMMSSZ (UTC, the format produced
 #   by `date -u +%Y%m%dT%H%M%SZ`, sortable as a string) and PID is
-#   the runner shell PID. The sentinel lives at the FTP root, as
-#   a SIBLING of the lock dir, NOT inside it: that way the release
-#   path can do `quote RMD <lock_dir>` without first having to
-#   recursively clear its contents (FTP RMD on a non-empty dir
-#   returns 550, and there is no portable recursive RMD).
+#   the runner shell PID. The sentinel lives INSIDE the lock dir
+#   (FND-0004), so it belongs to that lock path only, and RMD of the
+#   dir fails (550, non-empty) while another holder's sentinel is in
+#   it. Release therefore DELEs the sentinel first, then RMDs the dir.
 #
 #   Pure: no IO, no side effects.
 # ------------------------------------------------------------------------------
@@ -768,7 +767,7 @@ _lock_age_seconds() {
 
 # ------------------------------------------------------------------------------
 # _lock_parse_sentinel_listing LISTING_TEXT
-#   Given the captured stdout of `lftp ... -e 'cls -la .; quit;'`,
+#   Given the captured stdout of `lftp ... -e 'cls -la LOCK_PATH; quit;'`,
 #   extract every filename matching the sentinel pattern
 #   `.lftp-deployment.lock.<digits>.info`. Echoes one name per
 #   line on stdout, sorted ascending by stamp (so the OLDEST
@@ -1059,14 +1058,14 @@ LOCK_EMPTY_GRACE=120
 # acquire_lock_with_recovery SERVER LOCK_PATH TIMEOUT_SECS POLL_SECS USER
 #   Acquire the server-side concurrency lock at LOCK_PATH on SERVER,
 #   polling up to TIMEOUT_SECS (with POLL_SECS between attempts).
-#   On a successful acquire, write a sentinel file at the FTP root
+#   On a successful acquire, write a sentinel file inside LOCK_PATH
 #   named `.lftp-deployment.lock.<TIMESTAMP>.<PID>.info` and store
 #   the sentinel name in the global `ACQUIRED_LOCK_SENTINEL` so
 #   `release_lock_safely` (and the EXIT trap) can clean it up.
 #
 #   Stale-lock recovery: on every MKD failure (550, lock held), the
-#   function does a `cls -la .` (lftp's high-level ls) to look for
-#   sentinel files at the FTP root. If the OLDEST sentinel exists
+#   function does a `cls -la LOCK_PATH` (lftp's high-level ls) to look
+#   for sentinel files inside the lock dir. If the OLDEST sentinel exists
 #   and its embedded timestamp is older than LOCK_STALE_AFTER, the
 #   function assumes the previous holder died (OOM, SIGKILL, 6h job
 #   limit) and takes over: it runs ONE lftp invocation that lists
@@ -1081,9 +1080,11 @@ LOCK_EMPTY_GRACE=120
 #   F2 audit hardening (closes #173, #176, #178, #184, #251, #268):
 #     * #173 — every parsed sentinel is DELE'd in one lftp
 #       invocation, so orphan sentinels no longer accumulate.
-#     * #176 — the LIST+DELE+RMD runs in a single TCP control
-#       session, so a concurrent holder's PUT-in-progress is
-#       preserved across our recovery.
+#     * #176 — the DELE+RMD runs in a single TCP control session.
+#       Since FND-0004 the sentinel lives inside the lock dir, so a
+#       sentinel PUT that lands after our listing is not in the DELE
+#       list and makes the RMD fail (non-empty dir): the new holder
+#       keeps its lock.
 #     * #178 + #184 — the mktemp fallback for the sentinel body
 #       uses /dev/urandom entropy and chmod 0600.
 #     * #251 — when TIMEOUT_SECS=0 (fail-fast mode) the function
@@ -1231,7 +1232,7 @@ acquire_lock_with_recovery() {
       chmod 600 "${_alwr_sentinel_body}" 2>/dev/null || true
       set +e
       timeout 30s lftp "${_alwr_server_eff}" \
-        -e "${_alwr_preamble} put ${_alwr_sentinel_body} -o ${_alwr_sentinel}; quit;" \
+        -e "${_alwr_preamble} put ${_alwr_sentinel_body} -o ${_alwr_path}/${_alwr_sentinel}; quit;" \
         >/dev/null 2>&1
       _alwr_put_rc=$?
       set -e
@@ -1250,15 +1251,16 @@ acquire_lock_with_recovery() {
       # v2.11.8 (#254): MKD succeeded (this process owns the lock
       # dir) but the sentinel PUT failed — ACQUIRED_LOCK_SENTINEL is
       # never set, so release_lock_safely's post-#188 no-sentinel
-      # guard will short-circuit, leaving the dir behind. RMD
-      # best-effort before retrying so the next iteration either wins
+      # guard will short-circuit, leaving the dir behind. DELE any
+      # partial sentinel inside it, then RMD, best-effort before
+      # retrying so the next iteration either wins
       # MKD against a clean tree or hands off to stale-recovery.
       # Mirrors the recovery branch's set +e / set -e / >/dev/null
       # swallow semantics (transient RMD failures are not actionable).
       if [ "${_alwr_put_rc}" -ne 0 ]; then
         set +e
         timeout 10s lftp "${_alwr_server_eff}" \
-          -e "${_alwr_preamble} quote RMD ${_alwr_path}; quit;" \
+          -e "${_alwr_preamble} quote DELE ${_alwr_path}/${_alwr_sentinel}; quote RMD ${_alwr_path}; quit;" \
           >/dev/null 2>&1
         set -e
         continue
@@ -1281,7 +1283,7 @@ acquire_lock_with_recovery() {
       return 1
     fi
 
-    # Probe for a stale sentinel. We list the FTP root and grep
+    # Probe for a stale sentinel. We list the lock dir and grep
     # for the sentinel pattern; if the timestamp in the filename
     # is older than LOCK_STALE_AFTER, we take over.
     # Use lftp's high-level `cls` (alias for `ls`) rather than the
@@ -1292,7 +1294,7 @@ acquire_lock_with_recovery() {
     # PASV automatically and returns a usable directory listing.
     set +e
     _alwr_listing=$(timeout 10s lftp "${_alwr_server_eff}" \
-      -e "${_alwr_preamble} cls -la .; quit;" \
+      -e "${_alwr_preamble} cls -la ${_alwr_path}; quit;" \
       2>/dev/null)
     _alwr_listing_rc=$?
     set -e
@@ -1357,20 +1359,18 @@ acquire_lock_with_recovery() {
 
     if [ "${_alwr_took_over}" -eq 1 ]; then
       # F2 audit (#173 + #176): take over with ONE lftp script
-      # that lists the directory and DELEs every parsed sentinel
-      # in the same control connection. The single-invocation
-      # shape makes the snapshot atomic against the FTP server's
-      # view: any sentinel PUT that arrives between our `cls` and
-      # our first `quote DELE` survives the loop, which is the
-      # desired behaviour — that sentinel belongs to a live
-      # concurrent runner and we must not touch it. RMD fires
-      # whenever we have decided to take over (including a lock dir
-      # that stayed sentinel-less past LOCK_EMPTY_GRACE).
+      # that DELEs every sentinel parsed from the lock-dir listing
+      # above, then RMDs the dir. A sentinel PUT by a live runner
+      # that lands after that listing is not in the DELE list, so
+      # it survives and the RMD fails on the non-empty dir
+      # (FND-0004); the leading `cls -la .` plays no part in that.
+      # RMD fires whenever we have decided to take over (including
+      # a lock dir that stayed sentinel-less past LOCK_EMPTY_GRACE).
       _alwr_recover_script="${_alwr_preamble} cls -la .;"
       if [ -n "${_alwr_stale_files}" ]; then
         while IFS= read -r _alwr_name; do
           [ -z "${_alwr_name}" ] && continue
-          _alwr_recover_script="${_alwr_recover_script} quote DELE ${_alwr_name};"
+          _alwr_recover_script="${_alwr_recover_script} quote DELE ${_alwr_path}/${_alwr_name};"
         done <<EOF
 ${_alwr_stale_files}
 EOF
@@ -1389,8 +1389,8 @@ EOF
   done
 
   if [ -n "${_alwr_holder}" ]; then
-    printf 'ERROR: lock %s is held by %s (age %s s); if that run is gone, delete %s and %s on the server\n' \
-      "${_alwr_path}" "${_alwr_holder}" "${_alwr_holder_age}" "${_alwr_path}" "${_alwr_holder}" >&2
+    printf 'ERROR: lock %s is held by %s (age %s s); if that run is gone, delete %s/%s and then %s on the server\n' \
+      "${_alwr_path}" "${_alwr_holder}" "${_alwr_holder_age}" "${_alwr_path}" "${_alwr_holder}" "${_alwr_path}" >&2
   fi
   return 1
 }
@@ -1398,7 +1398,7 @@ EOF
 # ------------------------------------------------------------------------------
 # release_lock_safely SERVER LOCK_PATH [SENTINEL] [USER]
 #   Best-effort release of the server-side concurrency lock:
-#   DELE the sentinel file (if SENTINEL is provided or
+#   DELE the sentinel file inside LOCK_PATH (if SENTINEL is provided or
 #   $ACQUIRED_LOCK_SENTINEL is set), then RMD the lock dir. All
 #   failures are silently swallowed because the caller is
 #   typically on the way out (EXIT trap); the whole point of
@@ -1468,7 +1468,7 @@ release_lock_safely() {
   set +e
   if [ -n "${_rls_sentinel}" ]; then
     timeout 30s lftp "${_rls_server_eff}" \
-      -e "${_rls_preamble} quote DELE ${_rls_sentinel}; quote RMD ${_rls_path}; quit;" \
+      -e "${_rls_preamble} quote DELE ${_rls_path}/${_rls_sentinel}; quote RMD ${_rls_path}; quit;" \
       >/dev/null 2>&1
   else
     timeout 30s lftp "${_rls_server_eff}" \

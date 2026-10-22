@@ -12,7 +12,7 @@
 # than the 6 h LOCK_STALE_AFTER), then invokes the action with a HIGH
 # timeout (900 seconds). The only way the action can complete in
 # under 30 seconds is by taking over the stale lock via the
-# acquire_lock_with_recovery path: list the FTP root, parse the
+# acquire_lock_with_recovery path: list the lock dir, parse the
 # sentinel, observe its age is over LOCK_STALE_AFTER (so the previous
 # holder is treated as dead), DELE the sentinel +
 # RMD the lock dir, then immediately retry MKD. If the
@@ -53,8 +53,8 @@ _ftp_home="${FTP_DATA_DIR}/${FTP_USER}"
 # successful acquire (see lib.sh::_lock_sentinel_name):
 #
 #   FTP user home /
-#   ├── .lftp-deployment.lock/                       (lock dir; lock lives here)
-#   └── .lftp-deployment.lock.<STAMP>.<PID>.info     (sentinel; sibling of lock dir)
+#   └── .lftp-deployment.lock/                       (lock dir; lock lives here)
+#       └── .lftp-deployment.lock.<STAMP>.<PID>.info (sentinel; inside the lock dir)
 #
 # Permissions: chmod 0777 so the in-container ftp user can RMD the
 # lock dir during recovery (vsftpd creates it as ftp:ftp but the
@@ -80,10 +80,10 @@ chmod 0777 "${_lockdir}"
   printf 'pid=%s\n' "${_stale_pid}"
   printf 'started_at=%s\n' "${_stale_ts}"
   printf 'host=stale-holder-from-scenario-10\n'
-} > "${_ftp_home}/${_stale_sentinel}"
+} > "${_lockdir}/${_stale_sentinel}"
 
 assert_present "${_ftp_home}" ".lftp-deployment.lock"
-assert_present "${_ftp_home}" "${_stale_sentinel}"
+assert_present "${_lockdir}" "${_stale_sentinel}"
 
 # Build the env-file. INPUT_SERVER uses the bare-host form
 # `ftp://127.0.0.1:${FTP_CONTROL_PORT}` (no embedded user). The
@@ -170,8 +170,9 @@ if [ -e "${_ftp_home}/.lftp-deployment.lock" ]; then
   log_fail "lock dir .lftp-deployment.lock still exists after action"
 fi
 
-# Assertion 6: the stale sentinel was DELE'd during the takeover.
-assert_absent "${_ftp_home}" "${_stale_sentinel}"
+# Assertion 6: the stale sentinel was DELE'd during the takeover
+# (the lock dir is gone too, see assertion 5).
+assert_absent "${_lockdir}" "${_stale_sentinel}"
 
 # Assertion 7: fixture files are present.
 assert_present "${_ftp_home}" "index.html"
