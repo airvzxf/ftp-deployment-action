@@ -278,7 +278,7 @@ run: build
 	trap 'rm -f "$${tmp}"' EXIT; \
 	{ printf '%s\n' "INPUT_SERVER=$${FTP_SERVER:-ftp://example.com}"; \
 	  printf '%s\n' "INPUT_USER=$${FTP_USERNAME:-anonymous}"; \
-	  printf '%s\n' "INPUT_PASSWORD=$${FTP_PASSWORD:-}"; \
+	  printf '%s\n' "INPUT_PASSWORD=$${FTP_PASSWORD:-anonymous@}"; \
 	  printf '%s\n' "INPUT_LOCAL_DIR=/data"; \
 	} > "$${tmp}"; \
 	chmod 0600 "$${tmp}"; \
