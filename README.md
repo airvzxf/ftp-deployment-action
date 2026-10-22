@@ -571,11 +571,12 @@ race window between two clients is microseconds.
 
 **A live holder keeps the lock; a dead one is recovered after
 6 hours.** When the action acquires the lock it also writes a
-timestamp-encoded sentinel file at the FTP root, e.g.
-`.lftp-deployment.lock.20260707T080000Z.1234.info` (stamp and
-runner PID; it sits next to the lock dir so `quote RMD` works
-without a recursive delete). A runner that finds the lock held
-reads that stamp:
+timestamp-encoded sentinel file inside the lock dir, e.g.
+`.lftp-deployment.lock/.lftp-deployment.lock.20260707T080000Z.1234.info`
+(stamp and runner PID). Only that lock dir's own sentinel counts,
+so different `concurrency_lock_path` values never affect each
+other, and `RMD` of the dir fails while a sentinel is still in it.
+A runner that finds the lock held reads that stamp:
 
 - **Sentinel younger than 6 hours**: the holder may still be
   mirroring (a large deploy can take longer than
@@ -587,8 +588,11 @@ reads that stamp:
   job time, so that run is gone (runner OOM, `kill -9`). The
   runner `DELE`s the sentinel, `RMD`s the lock dir and takes the
   lock.
-- **Lock dir without a sentinel** (the holder died between the
-  `mkdir` and the sentinel upload): taken over immediately.
+- **Lock dir without a sentinel**: the holder may be between its
+  `mkdir` and the sentinel upload (at most 30 seconds), or it
+  died there. The runner treats the lock as held and takes it
+  over only after it has seen the dir without a sentinel for 120
+  seconds in a row.
 
 If a holder died less than 6 hours ago, the next deploys fail
 with that error until you clear the lock. Delete the two entries
@@ -596,7 +600,7 @@ the error names, for example:
 
 ```sh
 lftp -u user ftp://example.com \
-  -e "quote DELE .lftp-deployment.lock.<stamp>.<pid>.info; \
+  -e "quote DELE .lftp-deployment.lock/.lftp-deployment.lock.<stamp>.<pid>.info; \
       quote RMD .lftp-deployment.lock; quit;"
 ```
 

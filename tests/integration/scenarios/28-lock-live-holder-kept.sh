@@ -38,7 +38,7 @@ _live_sentinel=".lftp-deployment.lock.${_live_ts}.4242.info"
 mkdir -p "${_ftp_home}/.lftp-deployment.lock"
 chmod 0777 "${_ftp_home}/.lftp-deployment.lock"
 printf 'pid=4242\nstarted_at=%s\nhost=live-holder-scenario-28\n' "${_live_ts}" \
-  > "${_ftp_home}/${_live_sentinel}"
+  > "${_ftp_home}/.lftp-deployment.lock/${_live_sentinel}"
 
 _env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env failed"
 build_action_env_file "${_env}" "${IMAGE}" /data / \
@@ -83,13 +83,13 @@ if ! grep -q "is held by ${_live_sentinel}" "${_log}"; then
   log_fail "error does not name the holder's sentinel ${_live_sentinel}"
 fi
 
-if ! grep -q "delete .lftp-deployment.lock and ${_live_sentinel} on the server" "${_log}"; then
+if ! grep -q "delete .lftp-deployment.lock/${_live_sentinel} and then .lftp-deployment.lock on the server" "${_log}"; then
   _dump_log
   log_fail "error does not say how to clear the lock"
 fi
 
 assert_present "${_ftp_home}" ".lftp-deployment.lock"
-assert_present "${_ftp_home}" "${_live_sentinel}"
+assert_present "${_ftp_home}/.lftp-deployment.lock" "${_live_sentinel}"
 assert_absent "${_ftp_home}" "index.html"
 assert_absent "${_ftp_home}" "about.html"
 assert_absent "${_ftp_home}" "assets"
