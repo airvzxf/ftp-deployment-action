@@ -467,6 +467,35 @@ validate_lftp_settings() {
 }
 
 # ------------------------------------------------------------------------------
+# validate_required NAME VALUE
+#   Exit 2 if VALUE is empty. server, user and password are required:
+#   a missing secret expands to '' and would otherwise reach lftp
+#   (anonymous login, retries) instead of failing at once.
+# ------------------------------------------------------------------------------
+validate_required() {
+  if [ -z "$2" ]; then
+    printf 'ERROR: %s must not be empty\n' "$1" >&2
+    exit 2
+  fi
+}
+
+# ------------------------------------------------------------------------------
+# validate_credential NAME VALUE
+#   Exit 2 if VALUE contains whitespace (space, tab, CR, LF) or any
+#   other control character. write_netrc writes user and password
+#   into the whitespace-delimited .netrc, which cannot hold them.
+#   The value is never echoed: it is a secret.
+# ------------------------------------------------------------------------------
+validate_credential() {
+  case "$2" in
+    *[[:space:][:cntrl:]]*)
+      printf 'ERROR: %s must not contain whitespace or control characters (.netrc cannot hold them)\n' "$1" >&2
+      exit 2
+      ;;
+  esac
+}
+
+# ------------------------------------------------------------------------------
 # add_masks
 #   Defence-in-depth: ask the runner to mask sensitive values in the
 #   log even if they ever leak outside the .netrc plumbing. GitHub
@@ -960,6 +989,12 @@ compute_backoff_seconds() {
 #     ftp://user:pw@host:21   + user -> ftp://user:pw@host:21 (no-op; B-03)
 #     host:21                 + user -> host:21                (no scheme)
 #     ftp://host:21           + ""   -> ftp://host:21          (no-op)
+#     ftp://host:21           + a@b  -> ftp://a%40b@host:21
+#
+#   USER is percent-encoded (`%` first, then `@`, `:`, `/`) so a cPanel
+#   `name@domain` user stays one userinfo token and a `:` in USER cannot
+#   smuggle in an embedded password (#195). lftp decodes the userinfo
+#   and looks up the raw user in ~/.netrc.
 # ------------------------------------------------------------------------------
 rewrite_lftp_url() {
   _rlu_server=$1
@@ -968,6 +1003,8 @@ rewrite_lftp_url() {
     printf '%s\n' "${_rlu_server}"
     return 0
   fi
+  _rlu_user=$(printf '%s' "${_rlu_user}" \
+    | sed -e 's/%/%25/g' -e 's/@/%40/g' -e 's/:/%3A/g' -e 's|/|%2F|g')
   case "${_rlu_server}" in
     *://*@*) printf '%s\n' "${_rlu_server}" ;;
     *://*)   printf '%s\n' "${_rlu_server%%://*}://${_rlu_user}@${_rlu_server#*://}" ;;

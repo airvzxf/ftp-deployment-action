@@ -639,5 +639,41 @@ echo "${out}" | grep -q "^EXIT=2" \
   || fail "INPUT_TLS_MAX_VERSION with payload did not exit 2; output was:\n${out}"
 pass "INPUT_TLS_MAX_VERSION='1.2; !cat ...' is rejected (exit 2)"
 
+# ----------------------------------------------------------------------------
+# Test 37 (FND-0008): empty user / empty password / empty server exit 2
+# with "<name> must not be empty" before any network activity (no lftp
+# call, no retry loop, no UPLOAD FAILED banner).
+# ----------------------------------------------------------------------------
+for _name in user password server; do
+  _upper=$(printf '%s' "${_name}" | tr '[:lower:]' '[:upper:]')
+  out=$(run_init "INPUT_${_upper}=" 15)
+  echo "${out}" | grep -qF "ERROR: ${_name} must not be empty" \
+    || fail "empty ${_name} was not rejected; output was:\n${out}"
+  echo "${out}" | grep -q "^EXIT=2" \
+    || fail "empty ${_name} did not exit 2; output was:\n${out}"
+  if echo "${out}" | grep -qE "lftp exited|Backing off|UPLOAD FAILED|Resolved configuration"; then
+    fail "empty ${_name} reached the network/lftp phase; output was:\n${out}"
+  fi
+done
+pass "empty user, password and server exit 2 before any network activity (FND-0008)"
+
+# ----------------------------------------------------------------------------
+# Test 38 (FND-0014): a password with whitespace exits 2 and the value is
+# never echoed. The only occurrence allowed is the ::add-mask:: line
+# (add_masks runs before validation, by design; same as Test 4).
+# ----------------------------------------------------------------------------
+out=$(run_init 'INPUT_PASSWORD=SecretSpaceXYZ tail' 15)
+echo "${out}" | grep -qF "ERROR: password must not contain whitespace or control characters" \
+  || fail "password with a space was not rejected; output was:\n${out}"
+echo "${out}" | grep -q "^EXIT=2" \
+  || fail "password with a space did not exit 2; output was:\n${out}"
+if echo "${out}" | grep -v '^::add-mask::' | grep -qF 'SecretSpaceXYZ'; then
+  fail "rejected password value leaked outside the ::add-mask:: line; output was:\n${out}"
+fi
+if echo "${out}" | grep -qE "lftp exited|Backing off|UPLOAD FAILED"; then
+  fail "password with a space reached the network/lftp phase; output was:\n${out}"
+fi
+pass "password with a space exits 2 and the value is not echoed (FND-0014)"
+
 printf 'All smoke tests passed.\n'
 exit 0

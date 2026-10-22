@@ -592,6 +592,45 @@ bar'
 }
 
 # ------------------------------------------------------------------------------
+# validate_required / validate_credential — FND-0008 / FND-0014
+# ------------------------------------------------------------------------------
+@test "validate_required rejects an empty value with exit 2 naming the input" {
+  for n in server user password; do
+    run validate_required "$n" ""
+    [ "$status" -eq 2 ]
+    [ "$output" = "ERROR: $n must not be empty" ]
+  done
+}
+
+@test "validate_required accepts a non-empty value" {
+  run validate_required "user" "u"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "validate_credential accepts @ : / % and other printable characters" {
+  for v in 'deploy@example.com' 'a:b' 'a/b' '100%' 'p#ss?w0rd![]{}' 'pässwörd'; do
+    run validate_credential "user" "$v"
+    [ "$status" -eq 0 ]
+  done
+}
+
+@test "validate_credential rejects whitespace and control characters without echoing the value" {
+  tab=$(printf '\t')
+  cr=$(printf '\r')
+  esc=$(printf '\033')
+  del=$(printf '\177')
+  nl='Secret
+default'
+  for v in "Secret pw" "Secret${tab}pw" "Secret${cr}pw" "$nl" "Secret${esc}pw" "Secret${del}pw" " "; do
+    run validate_credential "password" "$v"
+    [ "$status" -eq 2 ]
+    [ "$output" = "ERROR: password must not contain whitespace or control characters (.netrc cannot hold them)" ]
+    [[ "$output" != *Secret* ]]
+  done
+}
+
+# ------------------------------------------------------------------------------
 # tls_max_version — #361
 # ------------------------------------------------------------------------------
 @test "validate_tls_max_version accepts 1.2 and 1.3" {
