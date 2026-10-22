@@ -15,8 +15,10 @@
 #      cannot acquire it — its lock-acquire loop persists and
 #      retries MKD until it succeeds (lock was released by the
 #      first action's EXIT trap) OR until its TIMEOUT elapses.
-#   3. After both actions complete, the lock dir and any sentinel
-#      file are gone (both EXIT traps ran the release path).
+#   3. After the first action, the lock dir is gone (its EXIT trap
+#      ran the release path); a sentinel-less lock dir pre-created
+#      afterwards is respected for LOCK_EMPTY_GRACE, so the second
+#      action exits 1 after its timeout and leaves the dir alone.
 #
 # What this scenario does NOT assert:
 #
@@ -131,15 +133,15 @@ fi
 # --- Step 2: second action with the lock dir PRE-CREATED ------------------
 #
 # Pre-create the lock dir but NOT the sentinel. The next action
-# should see the MKD return 550, fall into the stale-recovery
-# branch in acquire_lock_with_recovery, find no sentinel in the
-# listing, treat the held lock as "stale (or empty)" (the
-# `_alwr_took_over=1` default in the recovery branch), RMD the
-# lock dir, retry MKD, succeed. This proves:
+# should see the MKD return 550, find no sentinel in the listing
+# and, because that may be a live holder between its MKD and its
+# sentinel PUT (FND-0042), treat the lock as held for
+# LOCK_EMPTY_GRACE (120 s). That is longer than the 20 s timeout,
+# so the action must give up with exit 1 and leave the dir alone.
+# This proves:
 #   * The lock acquire path detects contention (MKD fails).
-#   * The recovery path takes over and clears the dir without
-#     waiting for the held-lock branch.
-#   * The subsequent release path still cleans up.
+#   * A sentinel-less lock dir is not taken over before the grace
+#     period (the takeover after it is covered by lock.bats).
 
 mkdir -p "${_ftp_home}/.lftp-deployment.lock"
 chmod 0777 "${_ftp_home}/.lftp-deployment.lock"
@@ -177,7 +179,7 @@ fi
 
 _log2=$(mktemp -t lockB.XXXXXX) || log_fail "mktemp log_b failed"
 
-log_info "second action (lock dir pre-created, no sentinel): should hit MKD-550, take over via recovery, exit 0"
+log_info "second action (lock dir pre-created, no sentinel): should hit MKD-550, respect the lock, exit 1 after its timeout"
 set +e
 timeout 60 ${RUNTIME} run --rm \
     --network host \
@@ -187,32 +189,16 @@ timeout 60 ${RUNTIME} run --rm \
 _rc_b=$?
 set -e
 
-# Step 2's success is B exits 0 with the success banner. The lock
-# was "held" (MKD would 550), but with no sentinel there,
-# acquire_lock_with_recovery's empty-listing default kicks in, and
-# the recovery branch handles it: RMD + retry MKD succeed.
-assert_action_success "${_log2}" "${_rc_b}"
-
-# --- Step 3: cleanup verification -------------------------------------------
-
-if [ -e "${_ftp_home}/.lftp-deployment.lock" ]; then
-  ls -la "${_ftp_home}/.lftp-deployment.lock" >&2 || true
-  printf '%s\n' "---- captured second action log ----" >&2
+# Step 2's success is B exits 1 without acquiring: the lock dir
+# had no sentinel, but the grace period outlasts the timeout.
+if [ "${_rc_b}" -ne 1 ] || grep -q 'Acquired concurrency lock' "${_log2}"; then
+  printf '%s\n' "---- captured second action log (exit ${_rc_b}) ----" >&2
   cat "${_log2}" >&2
-  log_fail "lock dir .lftp-deployment.lock still exists after second action"
+  log_fail "second action exited ${_rc_b}; expected 1 (sentinel-less lock dir respected within the grace period)"
 fi
 
-# Belt-and-braces: any stray sentinel the action wrote should also
-# be gone.
-for _stale in "${_ftp_home}"/.lftp-deployment.lock.*.info; do
-  if [ -e "${_stale}" ]; then
-    log_fail "stray sentinel remained after second action: ${_stale}"
-  fi
-done
+# --- Step 3: the pre-created lock dir is untouched ----------------------------
 
-# Fixture files from the second action's mirror are present.
-assert_present "${_ftp_home}" "index.html"
-assert_present "${_ftp_home}" "about.html"
-assert_present "${_ftp_home}" "assets"
+assert_present "${_ftp_home}" ".lftp-deployment.lock"
 
-log_pass "scenario 09 passed: lock acquire + release on a fresh server, then stale-recovery on a held lock"
+log_pass "scenario 09 passed: lock acquire + release on a fresh server, then a sentinel-less held lock was respected"

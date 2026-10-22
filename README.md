@@ -587,8 +587,11 @@ reads that stamp:
   job time, so that run is gone (runner OOM, `kill -9`). The
   runner `DELE`s the sentinel, `RMD`s the lock dir and takes the
   lock.
-- **Lock dir without a sentinel** (the holder died between the
-  `mkdir` and the sentinel upload): taken over immediately.
+- **Lock dir without a sentinel**: the holder may be between its
+  `mkdir` and the sentinel upload (at most 30 seconds), or it
+  died there. The runner treats the lock as held and takes it
+  over only after it has seen the dir without a sentinel for 120
+  seconds in a row.
 
 If a holder died less than 6 hours ago, the next deploys fail
 with that error until you clear the lock. Delete the two entries

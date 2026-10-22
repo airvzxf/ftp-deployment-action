@@ -560,14 +560,16 @@ _stamp_seconds_ago() {
 }
 
 # F2 audit (#268 + #173, paired): when LIST returns an EMPTY
-# listing (no sentinels, no other files), the recovery branch
-# must STILL RMD the lock dir and take over (the
-# "previous-holder-died-between-MKD-and-PUT" race). This is the
-# regression guard for the `|| _alwr_stale_files=""` fallback
-# at lib.sh:1196: without it, grep's exit 1 (no match in an
+# listing (no sentinels, no other files) and the lock dir has been
+# sentinel-less for LOCK_EMPTY_GRACE seconds (FND-0042; forced to 0
+# here), the recovery branch must STILL RMD the lock dir and take
+# over (the "previous-holder-died-between-MKD-and-PUT" race). This
+# is the regression guard for the `|| _alwr_stale_files=""` fallback:
+# without it, grep's exit 1 (no match in an
 # empty listing) propagates through `set -o pipefail` and `set
 # -e` and aborts the function before recovery can run.
-@test "acquire_lock_with_recovery: MKD 550 + empty listing -> RMDs lock dir (no sentinel to DELE), takes over" {
+@test "acquire_lock_with_recovery: MKD 550 + empty listing past LOCK_EMPTY_GRACE -> RMDs lock dir (no sentinel to DELE), takes over" {
+  LOCK_EMPTY_GRACE=0
   # Scripted fake-lftp sequence:
   #   1) MKD  -> exit 1 (held)
   #   2) LIST -> echo '' (empty listing: the lock dir exists but
@@ -614,6 +616,129 @@ FAKE
   fi
   grep -q "quote RMD .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
   [ -n "${ACQUIRED_LOCK_SENTINEL:-}" ]
+}
+
+# ----------------------------------------------------------------------------
+# FND-0042 / FND-0004 helpers: a virtual clock and a path-aware fake lftp.
+#
+# The lock loop reads time through `date +%s` and waits through `sleep`.
+# _install_lock_fakes replaces both with stubs driven by one counter file
+# (FAKE_CLOCK), so the grace period can be exercised in milliseconds and
+# deterministically: `sleep N` advances the clock by N, and every lftp call
+# advances it by FAKE_LFTP_STEP (default 1) so a loop that never sleeps
+# still terminates. Other `date` invocations (the sentinel stamp) go to the
+# real date.
+#
+# The fake lftp logs every call, then:
+#   * `mkdir`: exit 0 once a RMD has been seen (or FAKE_MKD_OK=1), else 1;
+#   * `quote RMD` (any script containing it): records the RMD, exit 0;
+#   * `cls -la <target>;` (the waiter's LIST, never a recovery script):
+#     numbers the call ($n, 1-based, counted in FAKE_LIST_N) and sources
+#     $FAKE_LIST_SH, which prints the listing for $t (target) / $n;
+#   * anything else (the sentinel PUT): exit 0.
+# All assertions in the tests that use it are explicit (`|| exit 1`):
+# setup() runs `set +e` (FND-0080), so a bare `grep -q` never fails a test, and
+# neither does `return 1` (bats ignores it); these tests use `|| exit 1`.
+# ----------------------------------------------------------------------------
+
+_install_lock_fakes() {
+  export FAKE_CLOCK="${BATS_TEST_TMPDIR}/clock"
+  export FAKE_LIST_N="${BATS_TEST_TMPDIR}/list-n"
+  export FAKE_LIST_SH="${BATS_TEST_TMPDIR}/list.sh"
+  export FAKE_RMD_DONE="${BATS_TEST_TMPDIR}/rmd-done"
+  export FAKE_REAL_DATE
+  FAKE_REAL_DATE=$(command -v date)
+  rm -f "${FAKE_RMD_DONE}" "${FAKE_LIST_N}"
+  echo 1000000 > "${FAKE_CLOCK}"
+  : > "${FAKE_LIST_SH}"
+  cat > "${BATS_TEST_TMPDIR}/bin/date" <<'FAKE'
+#!/bin/sh
+if [ "$*" = "+%s" ]; then cat "${FAKE_CLOCK}"; exit 0; fi
+exec "${FAKE_REAL_DATE}" "$@"
+FAKE
+  cat > "${BATS_TEST_TMPDIR}/bin/sleep" <<'FAKE'
+#!/bin/sh
+echo $(( $(cat "${FAKE_CLOCK}") + $1 )) > "${FAKE_CLOCK}"
+FAKE
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"
+echo $(( $(cat "${FAKE_CLOCK}") + ${FAKE_LFTP_STEP:-1} )) > "${FAKE_CLOCK}"
+case "$*" in
+  *"quote RMD"*) : > "${FAKE_RMD_DONE}"; exit 0 ;;
+  *"mkdir "*)
+    if [ -e "${FAKE_RMD_DONE}" ] || [ "${FAKE_MKD_OK:-0}" = 1 ]; then exit 0; fi
+    exit 1 ;;
+  *"cls -la "*)
+    n=$(( $(cat "${FAKE_LIST_N}" 2>/dev/null || echo 0) + 1 ))
+    echo "${n}" > "${FAKE_LIST_N}"
+    t=$(printf '%s' "$*" | sed -n 's/.*cls -la \([^;]*\);.*/\1/p')
+    . "${FAKE_LIST_SH}"
+    exit 0 ;;
+esac
+exit 0
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/date" "${BATS_TEST_TMPDIR}/bin/sleep" "${BATS_TEST_TMPDIR}/bin/lftp"
+}
+
+# FND-0042: a lock dir with no sentinel may belong to a live holder that is
+# between its MKD and its sentinel PUT. With the default LOCK_EMPTY_GRACE a
+# waiter must keep waiting (and lose at its own timeout) instead of RMDing it.
+@test "acquire_lock_with_recovery: FND-0042: empty listing within the default LOCK_EMPTY_GRACE is never RMDd" {
+  _install_lock_fakes
+  # Every LIST is empty: the dir is permanently sentinel-less.
+  : > "${FAKE_LIST_SH}"
+  [ "${LOCK_EMPTY_GRACE}" -ge 60 ] || exit 1
+  unset ACQUIRED_LOCK_SENTINEL
+  rc=0
+  # 30 s timeout, 5 s poll: well inside the 120 s default grace.
+  acquire_lock_with_recovery \
+    "ftp://example.test" ".lftp-deployment.lock" "30" "5" "ftptest" || rc=$?
+  [ "${rc}" -eq 1 ] || exit 1
+  # The waiter really polled (otherwise the assertions below are vacuous).
+  [ "$(cat "${FAKE_LIST_N}")" -ge 3 ] || exit 1
+  if grep -q "quote RMD" "${FAKE_LFTP_LOG}"; then
+    echo "RMD issued within the grace period"; cat "${FAKE_LFTP_LOG}"; exit 1
+  fi
+  if grep -q "quote DELE" "${FAKE_LFTP_LOG}"; then
+    echo "DELE issued within the grace period"; cat "${FAKE_LFTP_LOG}"; exit 1
+  fi
+  if grep -q "put " "${FAKE_LFTP_LOG}"; then
+    echo "lock must not be acquired within the grace period"; cat "${FAKE_LFTP_LOG}"; exit 1
+  fi
+  [ -z "${ACQUIRED_LOCK_SENTINEL:-}" ] || exit 1
+}
+
+# FND-0042: the grace clock restarts whenever a sentinel is seen. Timeline
+# (virtual seconds; per iteration: mkdir +1, cls +1, sleep +5 = 7 s) with
+# LOCK_EMPTY_GRACE=20: LIST 1-3 empty, LIST 4 shows a fresh sentinel, LIST
+# 5-8 empty. If the clock were NOT reset by LIST 4, the dir would count as
+# sentinel-less since LIST 1 and be taken over at LIST 5 (28 s >= 20 s).
+# With the reset, the empty period restarts at LIST 5 and ends at LIST 8
+# (21 s >= 20 s): the first RMD must come after exactly 8 waiter LISTs.
+@test "acquire_lock_with_recovery: FND-0042: grace clock resets when a sentinel is seen between empty polls" {
+  _install_lock_fakes
+  LOCK_EMPTY_GRACE=20
+  fresh_stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  cat > "${FAKE_LIST_SH}" <<LIST
+if [ "\${n}" -eq 4 ]; then echo ".lftp-deployment.lock.${fresh_stamp}.1.info"; fi
+LIST
+  unset ACQUIRED_LOCK_SENTINEL
+  rc=0
+  acquire_lock_with_recovery \
+    "ftp://example.test" ".lftp-deployment.lock" "200" "5" "ftptest" || rc=$?
+  [ "${rc}" -eq 0 ] || exit 1
+  # The fresh sentinel is a live holder: it is never DELEd.
+  if grep -q "quote DELE" "${FAKE_LFTP_LOG}"; then
+    echo "a fresh sentinel must not be DELEd"; cat "${FAKE_LFTP_LOG}"; exit 1
+  fi
+  grep -q "quote RMD .lftp-deployment.lock" "${FAKE_LFTP_LOG}" || exit 1
+  # Waiter LISTs (the "cls -la <dir>;" lines) logged before the first RMD.
+  lists_before_rmd=$(sed '/quote RMD/q' "${FAKE_LFTP_LOG}" | grep -c "set ftp:list-options -a; cls -la [^;]*; quit;") || true
+  if [ "${lists_before_rmd}" -ne 8 ]; then
+    echo "expected RMD after exactly 8 waiter LISTs, got ${lists_before_rmd}"; cat "${FAKE_LFTP_LOG}"; exit 1
+  fi
+  [ -n "${ACQUIRED_LOCK_SENTINEL:-}" ] || exit 1
 }
 
 # F2 audit v2.11.10 (#294): pre-fix the loop ran

@@ -1051,6 +1051,9 @@ run_lftp_once() {
 
 # 6 h is GitHub's maximum job time, so an older sentinel cannot belong to a live run.
 LOCK_STALE_AFTER=21600
+# A lock dir without a sentinel may belong to a holder between its MKD and its
+# sentinel PUT (30 s hard cap), so wait 4x that before treating it as abandoned.
+LOCK_EMPTY_GRACE=120
 
 # ------------------------------------------------------------------------------
 # acquire_lock_with_recovery SERVER LOCK_PATH TIMEOUT_SECS POLL_SECS USER
@@ -1069,8 +1072,11 @@ LOCK_STALE_AFTER=21600
 #   limit) and takes over: it runs ONE lftp invocation that lists
 #   the directory AND DELEs every parsed sentinel AND RMDs the
 #   lock dir, then immediately retries MKD (no sleep). If the
-#   sentinel is recent or missing, the function sleeps POLL_SECS
-#   and tries again.
+#   sentinel is recent, the function sleeps POLL_SECS and tries
+#   again. A missing sentinel is treated the same way until the
+#   lock dir has been sentinel-less for LOCK_EMPTY_GRACE seconds
+#   (measured on this runner's clock, reset whenever a sentinel is
+#   seen); only then is it taken over.
 #
 #   F2 audit hardening (closes #173, #176, #178, #184, #251, #268):
 #     * #173 — every parsed sentinel is DELE'd in one lftp
@@ -1115,6 +1121,7 @@ acquire_lock_with_recovery() {
   _alwr_user=$5
   _alwr_holder=""
   _alwr_holder_age=""
+  _alwr_empty_since=""
 
   # v2.11.x (#132): rewrite the URL when it has a scheme but no
   # embedded user. Without this, lftp 4.9.3 falls back to USER
@@ -1301,7 +1308,16 @@ acquire_lock_with_recovery() {
 
     _alwr_stale_files=$(_lock_parse_sentinel_listing "${_alwr_listing}") || _alwr_stale_files=""
     _alwr_took_over=1
-    if [ -n "${_alwr_stale_files}" ]; then
+    if [ -z "${_alwr_stale_files}" ]; then
+      # FND-0042: no sentinel may mean a live holder between MKD and
+      # PUT. Hold off until the dir has been sentinel-less for
+      # LOCK_EMPTY_GRACE seconds on our own clock.
+      [ -n "${_alwr_empty_since}" ] || _alwr_empty_since=$(date +%s)
+      if [ $(( $(date +%s) - _alwr_empty_since )) -lt "${LOCK_EMPTY_GRACE}" ]; then
+        _alwr_took_over=0
+      fi
+    else
+      _alwr_empty_since=""
       # F2 audit (#173): _lock_parse_sentinel_listing now returns
       # EVERY parsed sentinel (one per line, sorted ascending by
       # stamp). For the staleness check we consult the OLDEST
@@ -1336,9 +1352,8 @@ acquire_lock_with_recovery() {
         fi
       fi
     fi
-    # An empty or missing sentinel also counts as "stale" (the
-    # _alwr_took_over=1 default applies). This covers the race
-    # where the previous holder died between MKD and PUT.
+    # A lock dir that stays sentinel-less past LOCK_EMPTY_GRACE counts
+    # as "stale": the previous holder died between MKD and PUT.
 
     if [ "${_alwr_took_over}" -eq 1 ]; then
       # F2 audit (#173 + #176): take over with ONE lftp script
@@ -1349,9 +1364,8 @@ acquire_lock_with_recovery() {
       # our first `quote DELE` survives the loop, which is the
       # desired behaviour — that sentinel belongs to a live
       # concurrent runner and we must not touch it. RMD fires
-      # unconditionally when we have decided to takeover (covers
-      # the PUT-failed-previous-holder case where the lock dir
-      # exists but no sentinel does).
+      # whenever we have decided to take over (including a lock dir
+      # that stayed sentinel-less past LOCK_EMPTY_GRACE).
       _alwr_recover_script="${_alwr_preamble} cls -la .;"
       if [ -n "${_alwr_stale_files}" ]; then
         while IFS= read -r _alwr_name; do
