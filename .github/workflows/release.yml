@@ -106,13 +106,22 @@ jobs:
           # validator. The shell sinks downstream (build meta
           # step, publish meta step) interpolated the input
           # directly into `run:` blocks, where GitHub Actions
-          # expands `${{ inputs.version }}` before shell
+          # expands the `inputs.version` expression before shell
           # execution. Tighten with an anchored regex via
           # `grep -Eq`: accepts the documented version shape
           # (single- or multi-digit components, optional
           # dash-suffix like `-rc.1`) and rejects everything
           # else, including `$`, `(`, `)`, backtick, `;`, `&`,
-          # `|`, and any other shell metacharacter.
+          # `|`, and any other shell metacharacter. grep anchors
+          # `^`/`$` per line, so the `case` first rejects any
+          # non-printable character (newline, CR, tab): the regex
+          # then applies to the whole value, not one of its lines.
+          case "${TAG}" in
+            *[![:print:]]*)
+              echo "ERROR: tag input contains a non-printable character (e.g. a line break)"
+              exit 1
+              ;;
+          esac
           if ! printf '%s' "${TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
             echo "ERROR: '${TAG}' is not vX.Y.Z (optionally -suffix)"
             exit 1
@@ -140,7 +149,7 @@ jobs:
         # here; SHA-pinning is the `build` job's responsibility.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.inputs.version || github.ref }}
+          ref: refs/tags/${{ needs.validate-tag-input.outputs.tag }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -219,7 +228,7 @@ jobs:
         # SHA pinning is `build`'s job).
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.inputs.version || github.ref }}
+          ref: refs/tags/${{ needs.validate-tag-input.outputs.tag }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -329,7 +338,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    needs: [verify-tag-reachability, verify-tag-signature]
+    needs: [validate-tag-input, verify-tag-reachability, verify-tag-signature]
     steps:
       # v2.10.0+: this step resolves the tag/version AND
       # decides which secondary registries are enabled, based
@@ -339,7 +348,7 @@ jobs:
       - name: Resolve tag, version and enabled registries
         id: meta
         env:
-          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_VERSION: ${{ needs.validate-tag-input.outputs.tag }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
@@ -738,7 +747,7 @@ jobs:
   # need it.
   publish:
     name: 'Publish · GitHub Release'
-    needs: build
+    needs: [validate-tag-input, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -753,7 +762,7 @@ jobs:
       - name: Extract metadata
         id: meta
         env:
-          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_VERSION: ${{ needs.validate-tag-input.outputs.tag }}
         run: |
           set -euo pipefail
           TAG="${INPUT_VERSION:-${GITHUB_REF_NAME}}"

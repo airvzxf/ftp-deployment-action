@@ -245,6 +245,69 @@ else
   printf '%s\n' "${_s14}" | sed 's/^/  /'
 fi
 
+# S15 — release.yml validate-tag-input (FND-0025, FND-0026). The
+#       workflow_dispatch `version` input is attacker-controlled text.
+#       (a) the validator's run block holds no `${{ }}` expression
+#           (a template expression in a shell comment is rendered
+#           before bash runs, so a newline in the input injects script
+#           lines ahead of the regex check);
+#       (b) the raw `github.event.inputs.version` is read only by the
+#           workflow concurrency group and the validator's RAW env;
+#           every other consumer uses the validated job output;
+#       (c) the validator rejects a multi-line value (grep anchors per
+#           line, so 'v9.9.9<LF>x' used to pass) and still accepts a
+#           plain tag.
+#       RELEASE_YML overrides the file under test (used to prove the
+#       check fails on the pre-fix workflow).
+_rel=${RELEASE_YML:-.github/workflows/release.yml}
+_s15=""
+_tmp15=$(mktemp -d) || _tmp15=""
+if [ -z "${_tmp15}" ] || [ ! -r "${_rel}" ] || ! command -v bash >/dev/null 2>&1; then
+  _s15="${_s15} setup(need mktemp, bash and a readable ${_rel})"
+else
+  awk '
+    /^      - name: Validate tag shape/ { step = 1; next }
+    step && /^        run: \|/            { cap = 1; next }
+    cap && /^          /                 { sub(/^          /, ""); print; next }
+    cap && /^[[:space:]]*$/              { print ""; next }
+    cap                                  { exit }
+  ' "${_rel}" > "${_tmp15}/validator.sh"
+  if [ ! -s "${_tmp15}/validator.sh" ]; then
+    _s15="${_s15} (a)(validate-tag-input run block not found)"
+  else
+    # shellcheck disable=SC2016
+    if grep -qF '${{' "${_tmp15}/validator.sh"; then
+      _s15="${_s15} (a)(validator run block contains a template expression)"
+    fi
+    # (c) run the extracted block the way Actions does (bash).
+    : > "${_tmp15}/out"
+    _ml=$(printf 'v9.9.9\nx')
+    if RAW="${_ml}" GITHUB_OUTPUT="${_tmp15}/out" bash "${_tmp15}/validator.sh" >/dev/null 2>&1 \
+        || [ -s "${_tmp15}/out" ]; then
+      _s15="${_s15} (c)(two-line value was accepted)"
+    fi
+    : > "${_tmp15}/out"
+    if ! RAW="v1.2.3-rc.1" GITHUB_OUTPUT="${_tmp15}/out" bash "${_tmp15}/validator.sh" >/dev/null 2>&1 \
+        || [ "$(cat "${_tmp15}/out")" != "TAG=v1.2.3-rc.1" ]; then
+      _s15="${_s15} (c)(valid tag v1.2.3-rc.1 was not accepted)"
+    fi
+  fi
+  rm -rf "${_tmp15}"
+  # (b)
+  _raw15=$(grep -n 'github\.event\.inputs\.version' "${_rel}" \
+      | grep -vE '^[0-9]+:[[:space:]]*#' \
+      | grep -vE '^[0-9]+:[[:space:]]*group: release-\$\{\{ github\.event\.inputs\.version \|\| github\.ref_name \}\}[[:space:]]*$' \
+      | grep -vE '^[0-9]+:[[:space:]]*RAW: \$\{\{ github\.event\.inputs\.version \|\| github\.ref_name \}\}[[:space:]]*$')
+  if [ -n "${_raw15}" ]; then
+    _s15="${_s15} (b)(raw input still read:$(printf '%s' "${_raw15}" | tr '\n' ' '))"
+  fi
+fi
+if [ -z "${_s15}" ]; then
+  pass "S15 release.yml validator is injection-safe and consumers use its output"
+else
+  fail "S15 release.yml tag-input handling:${_s15}"
+fi
+
 if [ "${_failed}" -ne 0 ]; then
   printf '\nRESULT: FAIL\n'
   exit 1
