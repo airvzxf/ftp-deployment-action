@@ -127,6 +127,14 @@ print_inputs_dump "${INPUT_DEBUG}"
 # The defaulting itself is performed by the parameter-expansion
 # block above; here we only enforce shape.
 # ------------------------------------------------------------------------------
+# server, user and password are required: a missing secret expands to
+# '' and must fail here, not after lftp retries an anonymous login.
+validate_required   "server"   "${INPUT_SERVER}"
+validate_required   "user"     "${INPUT_USER}"
+validate_required   "password" "${INPUT_PASSWORD}"
+# user and password go into the whitespace-delimited .netrc.
+validate_credential "user"     "${INPUT_USER}"
+validate_credential "password" "${INPUT_PASSWORD}"
 validate_int "max_retries"         "${INPUT_MAX_RETRIES}"
 validate_int "mirror_verbose"      "${INPUT_MIRROR_VERBOSE}"
 validate_int "ftp_nop_interval"    "${INPUT_FTP_NOP_INTERVAL}"

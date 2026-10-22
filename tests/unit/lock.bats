@@ -924,6 +924,30 @@ LIST
   [ "${result}" = "ftp://alice@[::1]:21" ]
 }
 
+# FND-0014: the user is percent-encoded in the userinfo. setup() runs
+# `set +e` (FND-0080) and bats 1.13 then does NOT fail a test on a
+# failing `[ ]`, not even the last command; only `exit 1` does. So
+# each assertion below is `|| exit 1`.
+@test "rewrite_lftp_url: cPanel user name@domain -> %40 (one userinfo token)" {
+  result=$(rewrite_lftp_url "ftp://host:21" "deploy@example.com")
+  [ "${result}" = "ftp://deploy%40example.com@host:21" ] || exit 1
+}
+
+@test "rewrite_lftp_url: ':' in user -> %3A (no embedded-password URL, #195)" {
+  result=$(rewrite_lftp_url "ftps://host:990" "a:b")
+  [ "${result}" = "ftps://a%3Ab@host:990" ] || exit 1
+}
+
+@test "rewrite_lftp_url: '/' in user -> %2F" {
+  result=$(rewrite_lftp_url "ftp://host" "a/b")
+  [ "${result}" = "ftp://a%2Fb@host" ] || exit 1
+}
+
+@test "rewrite_lftp_url: '%' in user is encoded first (no double encoding)" {
+  result=$(rewrite_lftp_url "ftp://[::1]:21" "a%40b@c:d/e")
+  [ "${result}" = "ftp://a%2540b%40c%3Ad%2Fe@[::1]:21" ] || exit 1
+}
+
 # ----------------------------------------------------------------------------
 # release_lock_safely — uses lftp, tested via fake
 # ----------------------------------------------------------------------------
