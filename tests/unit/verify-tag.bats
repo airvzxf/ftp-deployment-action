@@ -363,3 +363,68 @@ pgp_tag() {
   [ "$status" -eq 1 ]
   [[ "$output" != *"OK: v99.0.4"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# FND-0087: the signed tag object's own `tag` header must name the ref
+# ---------------------------------------------------------------------------
+
+# rename_tag OLD NEW: point refs/tags/NEW at the tag OBJECT of OLD (not
+# the commit), as an attacker re-pushing an old signed tag would.
+rename_tag() {
+  git -C "${FIX}/work" update-ref "refs/tags/$2" \
+    "$(git -C "${FIX}/work" rev-parse "refs/tags/$1")"
+}
+
+@test "FND-0087: SSH-signed tag object copied to another ref name is rejected" {
+  need_ssh
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  ssh_tag v99.1.0 keyA
+  rename_tag v99.1.0 v99.1.1
+
+  verify v99.1.1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"ERROR: tag object is named 'v99.1.0' but is stored as refs/tags/v99.1.1"* ]]
+  [[ "$output" != *"OK"* ]]
+}
+
+@test "FND-0087: control: SSH-signed tag whose header matches the ref name verifies" {
+  need_ssh
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  ssh_tag v99.1.0 keyA
+  rename_tag v99.1.0 v99.1.1
+
+  verify v99.1.0
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK: v99.1.0 is signed by a key in .github/trusted-signers"* ]]
+  [[ "$output" != *"is named"* ]]
+}
+
+@test "FND-0087: PGP-signed tag object copied to another ref name is rejected" {
+  need_ssh
+  pgp_setup
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  cp "${FIX}/pgp.asc" "${FIX}/seed/.github/trusted-signers.asc"
+  git -C "${FIX}/seed" add .github
+  git -C "${FIX}/seed" commit -q -m "add asc"
+  git -C "${FIX}/seed" push -q origin main
+  make_work
+  pgp_tag v99.1.2
+  rename_tag v99.1.2 v99.1.3
+
+  verify v99.1.2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK: v99.1.2 is signed by a key in .github/trusted-signers.asc"* ]]
+
+  verify v99.1.3
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"ERROR: tag object is named 'v99.1.2' but is stored as refs/tags/v99.1.3"* ]]
+  [[ "$output" != *"OK"* ]]
+}

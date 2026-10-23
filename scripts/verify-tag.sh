@@ -47,7 +47,8 @@
 #      .github/trusted-signers.asc (PGP), or is documented as
 #      lightweight / unsigned in SECURITY.md (informational).
 #   1  tag is missing on the remote, or its signature could not be
-#      verified against either allow-list, or origin/main (and so its
+#      verified against either allow-list, or its tag header does not
+#      name <tag>, or origin/main (and so its
 #      allow-list) could not be fetched or has no trusted-signers.
 #   2  usage error.
 #
@@ -154,6 +155,31 @@ verify_pgp() {
   GNUPGHOME="${_gnupghome}" ${GIT_PREFIX} verify-tag "${_tag}"
 }
 
+# Require the tag object's own `tag <name>` header to equal the ref
+# name. `git verify-tag` does not check it, so an old signed tag
+# object re-pushed under a new name would otherwise pass. Run only
+# after the signature verified, so the name is covered by it. The
+# object is captured first (POSIX sh has no pipefail) so a failing
+# cat-file cannot turn into a silently empty name.
+check_tag_name() {
+  _tag=$1
+  if ! _obj=$(git cat-file tag "refs/tags/${_tag}"); then
+    printf 'ERROR: could not read tag object refs/tags/%s\n' "${_tag}" >&2
+    exit 1
+  fi
+  _name=$(printf '%s\n' "${_obj}" | sed -n '1,/^$/s/^tag //p')
+  if [ -z "${_name}" ]; then
+    printf 'ERROR: refs/tags/%s has no tag header (not a tag object)\n' \
+      "${_tag}" >&2
+    exit 1
+  fi
+  if [ "${_name}" != "${_tag}" ]; then
+    printf "ERROR: tag object is named '%s' but is stored as refs/tags/%s\\n" \
+      "${_name}" "${_tag}" >&2
+    exit 1
+  fi
+}
+
 usage() {
   printf 'usage: %s <tag>\n' "$0" >&2
   printf '  e.g. %s v2.11.0\n' "$0" >&2
@@ -193,11 +219,13 @@ main() {
     ssh)
       fetch_allowlists
       verify_ssh "${tag}"
+      check_tag_name "${tag}"
       printf 'OK: %s is signed by a key in .github/trusted-signers\n' "${tag}"
       ;;
     pgp)
       fetch_allowlists
       verify_pgp "${tag}"
+      check_tag_name "${tag}"
       printf 'OK: %s is signed by a key in .github/trusted-signers.asc\n' "${tag}"
       ;;
     lightweight)

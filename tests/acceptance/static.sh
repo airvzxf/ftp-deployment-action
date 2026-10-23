@@ -434,6 +434,121 @@ else
   fail "S16 release.yml tag-commit binding:${_s16}"
 fi
 
+# S17 — release.yml binds the tag object's own name to the ref (FND-0087).
+#       `git verify-tag` checks the signature only, so an old signed tag
+#       object re-pushed as refs/tags/<new> passed the `verify` step. The
+#       step must now read the object's `tag` header (header block only)
+#       and fail unless it equals ${TAG}.
+#       (a) the verify run block is extracted and run under
+#           `bash -c 'set -euo pipefail'` semantics with a `git` shim on
+#           PATH (verify-tag succeeds, cat-file tag prints a crafted
+#           object): a matching name passes and writes VERIFIED_COMMIT;
+#           a different name, an empty name, a body line "tag <TAG>"
+#           under a different header name, and a failing cat-file all
+#           exit non-zero and write nothing;
+#       (b) the cat-file/sed line is exactly
+#           `sed -n '1,/^$/s/^tag //p'` (no `q`, so pipefail cannot
+#           SIGPIPE cat-file) and sits after `git verify-tag` and before
+#           the VERIFIED_COMMIT line.
+#       RELEASE_YML overrides the file under test.
+_s17=""
+_tmp17=$(mktemp -d) || _tmp17=""
+if [ -z "${_tmp17}" ] || [ ! -r "${_rel}" ] || ! command -v bash >/dev/null 2>&1; then
+  _s17="${_s17} setup(need mktemp, bash and a readable ${_rel})"
+else
+  mkdir "${_tmp17}/bin"
+  # git shim: verify-tag succeeds; cat-file tag prints $S17_OBJ (or fails
+  # when S17_CATFILE_FAIL is set); rev-parse prints a fixed SHA.
+  cat > "${_tmp17}/bin/git" <<'GITEOF'
+#!/bin/sh
+case "$1" in
+  verify-tag) exit 0 ;;
+  cat-file)
+    [ -z "${S17_CATFILE_FAIL:-}" ] || exit 128
+    printf '%s' "${S17_OBJ}"
+    ;;
+  rev-parse) echo "0123456789abcdef0123456789abcdef01234567" ;;
+  *) echo "git shim: unexpected: $*" >&2; exit 99 ;;
+esac
+GITEOF
+  chmod +x "${_tmp17}/bin/git"
+  awk '
+    /^      - name: Verify tag signature/ { step = 1; next }
+    step && /^        run: \|/            { cap = 1; next }
+    cap && /^          /                 { sub(/^          /, ""); print; next }
+    cap && /^[[:space:]]*$/              { print ""; next }
+    cap                                  { exit }
+  ' "${_rel}" > "${_tmp17}/verify.sh"
+  if [ ! -s "${_tmp17}/verify.sh" ]; then
+    _s17="${_s17} (a)(verify run block not found)"
+  else
+    # s17_run LABEL EXPECT(pass|fail) TAG OBJECT [catfile-fail] [pattern]
+    s17_run() {
+      : > "${_tmp17}/out"
+      S17_OBJ="$4" S17_CATFILE_FAIL="${5:-}" TAG="$3" \
+        GITHUB_OUTPUT="${_tmp17}/out" PATH="${_tmp17}/bin:${PATH}" \
+        bash -c 'set -euo pipefail; . "$1"' _ "${_tmp17}/verify.sh" \
+        > "${_tmp17}/log" 2>&1
+      _rc=$?
+      if [ "$2" = pass ]; then
+        if [ "${_rc}" -ne 0 ]; then
+          _s17="${_s17} (a)($1: rejected, rc=${_rc})"
+        elif ! grep -qx 'VERIFIED_COMMIT=0123456789abcdef0123456789abcdef01234567' "${_tmp17}/out"; then
+          _s17="${_s17} (a)($1: VERIFIED_COMMIT not written)"
+        fi
+      else
+        if [ "${_rc}" -eq 0 ]; then
+          _s17="${_s17} (a)($1: accepted)"
+        fi
+        if [ -s "${_tmp17}/out" ]; then
+          _s17="${_s17} (a)($1: wrote GITHUB_OUTPUT)"
+        fi
+        if [ -n "${6:-}" ] && ! grep -qF "$6" "${_tmp17}/log"; then
+          _s17="${_s17} (a)($1: missing message ${6})"
+        fi
+      fi
+    }
+    s17_obj() { # $1=header tag name, $2=message body
+      printf 'object 0123456789abcdef0123456789abcdef01234567\ntype commit\ntag %s\ntagger t <t@example.invalid> 1 +0000\n\n%s\n' "$1" "$2"
+    }
+    _o_match=$(s17_obj v9.9.9 "release")
+    _o_other=$(s17_obj v1.0.0 "release")
+    _o_body=$(s17_obj v1.0.0 "tag v9.9.9")
+    _o_none='object 0123456789abcdef0123456789abcdef01234567
+type commit
+tagger t <t@example.invalid> 1 +0000
+
+release'
+    s17_run "matching name" pass v9.9.9 "${_o_match}"
+    s17_run "different name" fail v9.9.9 "${_o_other}" "" "::error::tag object is named 'v1.0.0' but was pushed as refs/tags/v9.9.9"
+    s17_run "empty name (no tag header)" fail v9.9.9 "${_o_none}" "" "::error::refs/tags/v9.9.9 has no tag header"
+    s17_run "body line 'tag <TAG>' with another header name" fail v9.9.9 "${_o_body}" "" "::error::tag object is named 'v1.0.0'"
+    s17_run "cat-file failing" fail v9.9.9 "${_o_match}" 1
+    # (b) static shape and order, on the extracted block.
+    _l_sed=$(grep -n "git cat-file tag \"refs/tags/\${TAG}\" | sed -n '1,/^\$/s/^tag //p'" "${_tmp17}/verify.sh" | cut -d: -f1)
+    _l_ver=$(grep -n '^if git verify-tag ' "${_tmp17}/verify.sh" | head -n1 | cut -d: -f1)
+    _l_out=$(grep -n '^  *VERIFIED_COMMIT=' "${_tmp17}/verify.sh" | head -n1 | cut -d: -f1)
+    case "${_l_sed}" in
+      ''|*[!0-9]*) _s17="${_s17} (b)(exact cat-file | sed -n '1,/^\$/s/^tag //p' line not found exactly once)" ;;
+      *)
+        if [ -z "${_l_ver}" ] || [ -z "${_l_out}" ] \
+           || [ "${_l_sed}" -le "${_l_ver}" ] || [ "${_l_sed}" -ge "${_l_out}" ]; then
+          _s17="${_s17} (b)(tag-name check is not between git verify-tag (${_l_ver:-?}) and VERIFIED_COMMIT (${_l_out:-?}): line ${_l_sed})"
+        fi
+        ;;
+    esac
+    if grep -nE "sed -n '1,/\^\\\$/[^']*q" "${_tmp17}/verify.sh" >/dev/null; then
+      _s17="${_s17} (b)(sed range uses q)"
+    fi
+  fi
+fi
+rm -rf "${_tmp17}"
+if [ -z "${_s17}" ]; then
+  pass "S17 release.yml verify step requires the tag object name to equal the ref"
+else
+  fail "S17 release.yml tag-name binding:${_s17}"
+fi
+
 if [ "${_failed}" -ne 0 ]; then
   printf '\nRESULT: FAIL\n'
   exit 1

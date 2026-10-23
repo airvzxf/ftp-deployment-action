@@ -20,8 +20,9 @@ for the recommended pattern.
 
 Release tags are signed in one of two formats, depending on the
 tag's age. The release pipeline's `verify-tag-signature` job
-runs `git verify-tag` against an in-repo allow-list and refuses
-to publish an image whose tag does not verify.
+runs `git verify-tag` against an in-repo allow-list, checks that
+the signed tag object's own name matches the pushed tag, and
+refuses to publish an image whose tag fails either check.
 
 | Tag range | Format | Allow-list entry | Maintainer key |
 |---|---|---|---|
@@ -73,7 +74,12 @@ Or by hand (the script is a thin wrapper around these calls):
 ```sh
 git verify-tag <tag>      # exit 0 + "Good signature" for signed tags
 git cat-file -t <tag>     # 'tag' for annotated, 'commit' for lightweight
+git cat-file tag <tag> | sed -n '1,/^$/s/^tag //p'   # must print <tag>
 ```
+
+`git verify-tag` does not check the name inside the signed tag
+object, so an old signed tag re-pushed under a new name still
+shows "Good signature". The last line catches that.
 
 ### Legacy lightweight tags (v1.0-alpha.1 … v1.3.3)
 
