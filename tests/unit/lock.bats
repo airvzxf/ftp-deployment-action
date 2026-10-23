@@ -16,8 +16,10 @@
 #   * release_lock_safely — uses lftp; tested via fake lftp.
 
 setup() {
-  set +u
-  set +e
+  # No `set +e` here (FND-0080): bats runs the body under `set -eET`,
+  # and that errexit is what fails a test on ANY failing command, not
+  # only the last one. A call that is expected to fail is wrapped in
+  # `run` or `|| rc=$?`. bats does not enable nounset, so no `set +u`.
   LIB="${BATS_TEST_DIRNAME}/../../lib.sh"
   # shellcheck disable=SC1090
   . "${LIB}"
@@ -157,12 +159,12 @@ teardown() {
 # function WITHOUT `run` and inspect both the captured return
 # code and the global afterwards.
 #
-# bats runs every test body with `set -e` inherited, and the
-# function under test legitimately returns 1 on the timeout
-# path, so we wrap each call in `|| rc=$?`. The setup() above
-# does `set +e` so `set -e` inside the function (set before its
-# own internal lftp calls) does not cascade back and abort the
-# test body.
+# bats runs every test body with `set -e`, and the function under
+# test legitimately returns 1 on the timeout path, so we wrap each
+# call in `|| rc=$?`. Inside that `||` list bash ignores errexit,
+# including the `set -e` the function runs itself; the function
+# always leaves `set -e` on when it returns, so every assertion
+# after the call gates the test.
 # ----------------------------------------------------------------------------
 
 @test "acquire_lock_with_recovery: MKD success writes sentinel and returns 0" {
@@ -556,8 +558,9 @@ _stamp_seconds_ago() {
 @test "_lock_age_seconds: returns non-zero exit when mktime fails to parse" {
   # Non-numeric substring in 'now' forces mktime() to return -1
   # (verified empirically on both gawk and busybox awk).
-  _lock_age_seconds "2026ab07T080000Z" "20260707T080000Z" >/dev/null 2>&1
-  [ "$?" -ne 0 ]
+  rc=0
+  _lock_age_seconds "2026ab07T080000Z" "20260707T080000Z" >/dev/null 2>&1 || rc=$?
+  [ "${rc}" -ne 0 ]
 }
 
 # F2 audit (#268 + #173, paired): when LIST returns an EMPTY
@@ -637,9 +640,9 @@ FAKE
 #     numbers the call ($n, 1-based, counted in FAKE_LIST_N) and sources
 #     $FAKE_LIST_SH, which prints the listing for $t (target) / $n;
 #   * anything else (the sentinel PUT): exit 0.
-# All assertions in the tests that use it are explicit (`|| exit 1`):
-# setup() runs `set +e` (FND-0080), so a bare `grep -q` never fails a test, and
-# neither does `return 1` (bats ignores it); these tests use `|| exit 1`.
+# The tests that use it end their assertions in `|| exit 1`. They were
+# written while setup() still ran `set +e` (FND-0080); errexit now gates
+# every command, so the `|| exit 1` is redundant but harmless.
 # ----------------------------------------------------------------------------
 
 _install_lock_fakes() {
@@ -924,10 +927,9 @@ LIST
   [ "${result}" = "ftp://alice@[::1]:21" ]
 }
 
-# FND-0014: the user is percent-encoded in the userinfo. setup() runs
-# `set +e` (FND-0080) and bats 1.13 then does NOT fail a test on a
-# failing `[ ]`, not even the last command; only `exit 1` does. So
-# each assertion below is `|| exit 1`.
+# FND-0014: the user is percent-encoded in the userinfo. The `|| exit 1`
+# dates from when setup() ran `set +e` (FND-0080); errexit now gates
+# every command, so it is redundant but harmless.
 @test "rewrite_lftp_url: cPanel user name@domain -> %40 (one userinfo token)" {
   result=$(rewrite_lftp_url "ftp://host:21" "deploy@example.com")
   [ "${result}" = "ftp://deploy%40example.com@host:21" ] || exit 1

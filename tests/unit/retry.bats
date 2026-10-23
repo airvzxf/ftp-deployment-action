@@ -106,7 +106,8 @@ setup() {
     run compute_backoff_seconds 3
     [ "$status" -eq 0 ]
     n=$output
-    [ "$n" -ge 1 ] && [ "$n" -le 3 ]
+    [ "$n" -ge 1 ]
+    [ "$n" -le 3 ]
   done
 }
 
@@ -114,7 +115,8 @@ setup() {
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     run compute_backoff_seconds 4
     n=$output
-    [ "$n" -ge 2 ] && [ "$n" -le 6 ]
+    [ "$n" -ge 2 ]
+    [ "$n" -le 6 ]
   done
 }
 
@@ -122,7 +124,8 @@ setup() {
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     run compute_backoff_seconds 5
     n=$output
-    [ "$n" -ge 4 ] && [ "$n" -le 12 ]
+    [ "$n" -ge 4 ]
+    [ "$n" -le 12 ]
   done
 }
 
@@ -130,7 +133,8 @@ setup() {
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     run compute_backoff_seconds 6
     n=$output
-    [ "$n" -ge 8 ] && [ "$n" -le 24 ]
+    [ "$n" -ge 8 ]
+    [ "$n" -le 24 ]
   done
 }
 
@@ -138,7 +142,8 @@ setup() {
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     run compute_backoff_seconds 10
     n=$output
-    [ "$n" -ge 15 ] && [ "$n" -le 45 ]
+    [ "$n" -ge 15 ]
+    [ "$n" -le 45 ]
   done
 }
 
@@ -167,5 +172,6 @@ setup() {
   run compute_backoff_seconds 5
   [ "$status" -eq 0 ]
   n=$output
-  [ "$n" -ge 4 ] && [ "$n" -le 12 ]
+  [ "$n" -ge 4 ]
+  [ "$n" -le 12 ]
 }
