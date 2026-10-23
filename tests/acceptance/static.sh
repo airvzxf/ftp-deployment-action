@@ -891,6 +891,32 @@ else
   fail "S18 release.yml digest-first publishing:${_s18}"
 fi
 
+# S19 — the vsftpd test server is pinned by digest, the same one in the
+#       e2e service image and both integration defaults. No updater
+#       sees these references (.github/dependabot.yml notes); a
+#       floating tag would change the server under test silently.
+_s19=""
+_ref19=""
+for _f in .github/workflows/e2e.yml tests/integration/lib/common.sh \
+    tests/integration/run-integration-tests.sh; do
+  _r19=$(grep -v '^[[:space:]]*#' "${_f}" \
+    | grep -oE '[A-Za-z0-9./-]*fauria/vsftpd([@:][^[:space:]"}]*)?')
+  if [ "$(printf '%s\n' "${_r19}" | wc -l)" -ne 1 ] \
+      || ! printf '%s\n' "${_r19}" \
+      | grep -qxE '[A-Za-z0-9./-]*fauria/vsftpd@sha256:[0-9a-f]{64}'; then
+    _s19="${_s19} ${_f}(${_r19:-?})"
+  elif [ -z "${_ref19}" ]; then
+    _ref19="${_r19}"
+  elif [ "${_r19}" != "${_ref19}" ]; then
+    _s19="${_s19} ${_f}(${_r19})"
+  fi
+done
+if [ -z "${_s19}" ]; then
+  pass "S19 e2e.yml and the integration scripts pin the same vsftpd digest"
+else
+  fail "S19 vsftpd image not pinned to one digest ${_ref19:-?}:${_s19}"
+fi
+
 if [ "${_failed}" -ne 0 ]; then
   printf '\nRESULT: FAIL\n'
   exit 1

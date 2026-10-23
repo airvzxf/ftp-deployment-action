@@ -6,10 +6,21 @@
 # .github/workflows/*.yml).
 #
 # Notes:
-# * Dependabot's docker ecosystem updates `FROM` images only, not
-#   `apk add` packages; `lftp~4.9.3` is bumped by hand (see the
-#   "Stack" section in AGENTS.md). The lftp / ca-certificates ignore
-#   rules below are kept as a guard in case that changes.
+# * No ecosystem below updates these; they are bumped by hand:
+#   - `lftp~4.9.3`: the docker ecosystem updates `FROM` images only,
+#     not `apk add` packages (see the "Stack" section in AGENTS.md).
+#     The lftp / ca-certificates ignore rules below are kept as a
+#     guard in case that changes.
+#   - the fauria/vsftpd digest: the e2e.yml service image plus the
+#     FTP_SERVER_IMAGE defaults in tests/integration/lib/common.sh and
+#     tests/integration/run-integration-tests.sh, kept equal by
+#     tests/acceptance/static.sh S19. Upstream has not published
+#     since 2023-01.
+#   - actionlint: the `ver=` line in .github/workflows/ci.yml.
+#   - the `# syntax=docker/dockerfile:1.4` frontends of
+#     tests/Dockerfile.smoke and tests/integration/Dockerfile.test-server
+#     (the docker ecosystem documents `FROM` lines only; whether it
+#     also bumps `# syntax=` is unverified, so treat them as manual).
 # * `alpine` is pinned by digest in Dockerfile and in the two test
 #   images (tests/integration/Dockerfile.test-server,
 #   tests/Dockerfile.smoke). All three directories are listed so the

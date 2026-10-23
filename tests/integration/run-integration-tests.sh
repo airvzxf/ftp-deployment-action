@@ -14,8 +14,9 @@
 # Required env (set by the Makefile or the CI job):
 #   IMAGE              ftp-deployment-action:<tag> under test
 #                      (defaults to ftp-deployment-action:local).
-#   FTP_SERVER_IMAGE   fauria/vsftpd tag to use for the test server
-#                      (defaults to docker.io/fauria/vsftpd:latest).
+#   FTP_SERVER_IMAGE   fauria/vsftpd image to use for the test server
+#                      (defaults to the digest pinned in e2e.yml;
+#                      static.sh S19 keeps the copies equal).
 #
 # Exit code:
 #   0  all scenarios passed
@@ -84,7 +85,7 @@ fi
 # `docker/podman pull` so the developer gets a clear error if the
 # registry is unreachable, instead of a downstream failure when
 # scenario 01 tries to start vsftpd.
-: "${FTP_SERVER_IMAGE:=docker.io/fauria/vsftpd:latest}"
+: "${FTP_SERVER_IMAGE:=docker.io/fauria/vsftpd@sha256:6d71d7c7f1b0ab2844ec7dc7999a30aef6d758b6d8179cf5967513f87c79c177}"
 export FTP_SERVER_IMAGE
 
 # Pre-pull fauria/vsftpd (idempotent, fast if already cached). We do

@@ -46,10 +46,11 @@ fi
 # under test (CI builds ftp-deployment-action:ci-integration; the
 # developer who runs `make integration` locally can set IMAGE=...).
 # FTP_SERVER_IMAGE is the RFC-959-compliant FTP server used by every
-# scenario: docker.io/fauria/vsftpd (picked in #117 variant C).
+# scenario: docker.io/fauria/vsftpd (picked in #117 variant C), pinned
+# by digest; tests/acceptance/static.sh S19 keeps it equal to e2e.yml.
 # ------------------------------------------------------------------------------
 : "${IMAGE:=ftp-deployment-action:local}"
-: "${FTP_SERVER_IMAGE:=docker.io/fauria/vsftpd:latest}"
+: "${FTP_SERVER_IMAGE:=docker.io/fauria/vsftpd@sha256:6d71d7c7f1b0ab2844ec7dc7999a30aef6d758b6d8179cf5967513f87c79c177}"
 
 # FTP control + PASV data port range.
 #
