@@ -549,6 +549,348 @@ else
   fail "S17 release.yml tag-name binding:${_s17}"
 fi
 
+# S18 — release.yml publishes the public tags last (FND-0029, FND-0037).
+#       The build pushes the image by digest, untagged. Smoke, SBOM,
+#       cosign and attest use <image>@<digest>; only the final step
+#       (`publish-tags`) creates the public tags from that digest,
+#       version tags before :latest, never :latest for a pre-release.
+#       (a) step order and wiring in the `build` job, parsed as YAML:
+#           no step before publish-tags pushes a tag; publish-tags comes
+#           after smoke, SBOM, cosign and both attest steps and is the
+#           only `imagetools create`; digest directly follows build;
+#           build has no `tags:`/`push:` and an `outputs:` with
+#           push-by-digest/name-canonical/push and name= image_names;
+#           every consumer reads steps.digest.outputs.digest as @D, only
+#           the digest step reads steps.build.outputs.digest, and smoke
+#           and SBOM no longer use the version tag;
+#       (b) the digest regex and the per-tag digest comparison are in
+#           the run blocks, which hold no `${{`;
+#       (c) the digest step run under `bash -c 'set -euo pipefail'`:
+#           a valid digest passes and writes digest=; empty, short,
+#           uppercase and multi-line values fail and write nothing;
+#       (d) the publish-tags block run with a fake `docker` and `jq` on
+#           PATH (a tiny sed-based jq shim, with a NOTE, if jq is not
+#           installed): digest match, mismatch, empty digest, empty
+#           DIGEST and the pre-release cases;
+#       (e) the meta step run with a fake env: stable and rc versions
+#           give the right pre_release, all_tags and image_names.
+#       RELEASE_YML overrides the file under test.
+_s18=""
+_tmp18=$(mktemp -d) || _tmp18=""
+if [ -z "${_tmp18}" ] || [ ! -r "${_rel}" ] || ! command -v bash >/dev/null 2>&1; then
+  _s18="${_s18} setup(need mktemp, bash and a readable ${_rel})"
+else
+  # (a) wiring, parsed as YAML.
+  if "${PY}" -c 'import yaml' >/dev/null 2>&1; then
+    _w18=$("${PY}" -I - "${_rel}" <<'PYEOF'
+import re, sys, yaml
+
+path = sys.argv[1]
+doc = yaml.safe_load(open(path))
+steps = ((doc.get("jobs") or {}).get("build") or {}).get("steps") or []
+bad = []
+DIG = "${{ steps.digest.outputs.digest }}"
+IMG = "${{ steps.meta.outputs.image }}@" + DIG
+
+def idx(pred):
+    return [i for i, s in enumerate(steps) if pred(s)]
+
+def blob(s):
+    parts = [str(s.get("run") or "")]
+    parts += [str(v) for v in (s.get("env") or {}).values()]
+    parts += [str(v) for v in (s.get("with") or {}).values()]
+    return "\n".join(parts)
+
+def one(label, found):
+    if len(found) != 1:
+        bad.append("%s: expected 1 step, found %d" % (label, len(found)))
+        return None
+    return found[0]
+
+build = one("build", idx(lambda s: s.get("id") == "build"))
+digest = one("digest", idx(lambda s: s.get("id") == "digest"))
+smoke = one("smoke", idx(lambda s: s.get("name") == "Smoke test the just-pushed image"))
+sbom = one("sbom", idx(lambda s: str(s.get("uses") or "").startswith("anchore/sbom-action@")))
+cosign = one("cosign", idx(lambda s: "cosign sign" in str(s.get("run") or "")))
+pub = one("publish-tags", idx(lambda s: s.get("id") == "publish-tags"))
+attest = idx(lambda s: str(s.get("uses") or "").startswith("actions/attest@"))
+if len(attest) < 2:
+    bad.append("expected 2 active attest steps, found %d" % len(attest))
+
+creators = idx(lambda s: "imagetools create" in str(s.get("run") or ""))
+if pub is None or creators != [pub]:
+    bad.append("imagetools create runs in steps %r, expected only publish-tags (%r)" % (creators, pub))
+
+if None not in (pub, smoke, sbom, cosign) and attest:
+    for label, i in (("smoke", smoke), ("SBOM", sbom), ("cosign", cosign)):
+        if pub <= i:
+            bad.append("publish-tags (%d) is not after %s (%d)" % (pub, label, i))
+    for i in attest:
+        if pub <= i:
+            bad.append("publish-tags (%d) is not after attest step %d" % (pub, i))
+if None not in (build, digest) and digest != build + 1:
+    bad.append("digest step (%d) does not directly follow build (%d)" % (digest, build))
+
+# No step before publish-tags may push or move a tag.
+if pub is not None:
+    for i in range(pub):
+        s = steps[i]
+        w = s.get("with") or {}
+        r = str(s.get("run") or "")
+        if w.get("tags") or str(w.get("push")).lower() == "true":
+            bad.append("step %d (%s) has tags:/push: before publish-tags" % (i, s.get("name")))
+        if re.search(r"docker (push|tag)\b|buildx imagetools", r):
+            bad.append("step %d (%s) pushes or tags in its run block before publish-tags" % (i, s.get("name")))
+
+if build is not None:
+    w = steps[build].get("with") or {}
+    for k in ("tags", "push"):
+        if k in w:
+            bad.append("build step still has %s:" % k)
+    o = str(w.get("outputs") or "")
+    for need in ("type=image", "push-by-digest=true", "name-canonical=true", "push=true",
+                 '"name=${{ steps.meta.outputs.image_names }}"'):
+        if need not in o:
+            bad.append("build outputs lacks %s (outputs=%r)" % (need, o))
+
+def eq(label, got, want):
+    if got != want:
+        bad.append("%s is %r, expected %r" % (label, got, want))
+
+if smoke is not None:
+    eq("smoke env IMAGE", (steps[smoke].get("env") or {}).get("IMAGE"), IMG)
+if sbom is not None:
+    eq("SBOM image", (steps[sbom].get("with") or {}).get("image"), IMG)
+if cosign is not None:
+    eq("cosign env DIGEST", (steps[cosign].get("env") or {}).get("DIGEST"), DIG)
+    if "@${DIGEST}" not in steps[cosign].get("run", ""):
+        bad.append("cosign run does not sign <image>@${DIGEST}")
+for i in attest:
+    eq("attest[%d] subject-digest" % i, (steps[i].get("with") or {}).get("subject-digest"), DIG)
+for label, i in (("smoke", smoke), ("SBOM", sbom)):
+    if i is not None and re.search(r"steps\.meta\.outputs\.(version|tag)\b", blob(steps[i])):
+        bad.append("%s still references a tag (steps.meta.outputs.version/tag)" % label)
+
+# steps.build.outputs.digest: parsed steps (all but digest) ...
+for i, s in enumerate(steps):
+    if i != digest and "steps.build.outputs.digest" in blob(s):
+        bad.append("step %d (%s) reads steps.build.outputs.digest" % (i, s.get("name")))
+# ... and every non-comment line of the file: exactly one reader.
+n = sum(1 for l in open(path) if "steps.build.outputs.digest" in l and not l.lstrip().startswith("#"))
+if n != 1:
+    bad.append("steps.build.outputs.digest appears on %d non-comment lines, expected 1" % n)
+print("; ".join(bad))
+PYEOF
+    ) || _w18="could not parse ${_rel} as YAML"
+    if [ -n "${_w18}" ]; then
+      _s18="${_s18} (a)(${_w18})"
+    fi
+  else
+    _s18="${_s18} (a)(no YAML parser: install PyYAML or set PYTHON)"
+  fi
+
+  # run-block extraction, same awk as S15-S17.
+  s18_extract() { # $1=step name prefix $2=output file
+    awk -v name="      - name: $1" '
+      index($0, name) == 1                 { step = 1; next }
+      step && /^        run: \|/            { cap = 1; next }
+      cap && /^          /                 { sub(/^          /, ""); print; next }
+      cap && /^[[:space:]]*$/              { print ""; next }
+      cap                                  { exit }
+    ' "${_rel}" > "$2"
+  }
+  s18_extract "Validate the pushed image digest" "${_tmp18}/digest.sh"
+  s18_extract "Publish the release tags" "${_tmp18}/publish.sh"
+  s18_extract "Resolve tag, version and enabled registries" "${_tmp18}/meta.sh"
+
+  # (b) static content of the run blocks.
+  for _f in digest publish meta; do
+    if [ ! -s "${_tmp18}/${_f}.sh" ]; then
+      _s18="${_s18} (b)(${_f} run block not found)"
+    fi
+  done
+  # shellcheck disable=SC2016
+  if [ -s "${_tmp18}/digest.sh" ]; then
+    grep -qF '^sha256:[0-9a-f]{64}$' "${_tmp18}/digest.sh" \
+      || _s18="${_s18} (b)(digest regex missing from the digest step)"
+    grep -qF '${{' "${_tmp18}/digest.sh" \
+      && _s18="${_s18} (b)(digest run block contains a template expression)"
+  fi
+  # shellcheck disable=SC2016
+  if [ -s "${_tmp18}/publish.sh" ]; then
+    grep -qF "docker buildx imagetools inspect" "${_tmp18}/publish.sh" \
+      && grep -qF "jq -r '.digest // empty'" "${_tmp18}/publish.sh" \
+      && grep -qF '!= "${DIGEST}"' "${_tmp18}/publish.sh" \
+      || _s18="${_s18} (b)(per-tag digest comparison missing from publish-tags)"
+    grep -qF '${{' "${_tmp18}/publish.sh" \
+      && _s18="${_s18} (b)(publish-tags run block contains a template expression)"
+  fi
+  # shellcheck disable=SC2016
+  if [ -s "${_tmp18}/meta.sh" ]; then
+    grep -qF 'Pre-release tag ${tag} must not publish a :latest alias' "${_tmp18}/meta.sh" \
+      || _s18="${_s18} (e)(meta pre-release :latest guard missing)"
+  fi
+
+  _d_ok=$(printf 'a%.0s' $(seq 1 64))
+  _d_other=$(printf 'b%.0s' $(seq 1 64))
+  _D="sha256:${_d_ok}"
+  _DO="sha256:${_d_other}"
+
+  # (c) the digest step.
+  if [ -s "${_tmp18}/digest.sh" ]; then
+    s18_dig() { # $1=label $2=expect(pass|fail) $3=DIGEST
+      : > "${_tmp18}/out"
+      DIGEST="$3" GITHUB_OUTPUT="${_tmp18}/out" \
+        bash -c 'set -euo pipefail; . "$1"' _ "${_tmp18}/digest.sh" > "${_tmp18}/log" 2>&1
+      _rc=$?
+      if [ "$2" = pass ]; then
+        if [ "${_rc}" -ne 0 ]; then
+          _s18="${_s18} (c)($1: rejected, rc=${_rc})"
+        elif [ "$(cat "${_tmp18}/out")" != "digest=$3" ]; then
+          _s18="${_s18} (c)($1: digest= not written)"
+        fi
+      else
+        [ "${_rc}" -ne 0 ] || _s18="${_s18} (c)($1: accepted)"
+        [ ! -s "${_tmp18}/out" ] || _s18="${_s18} (c)($1: wrote GITHUB_OUTPUT)"
+      fi
+    }
+    s18_dig "valid digest" pass "${_D}"
+    s18_dig "empty digest" fail ""
+    s18_dig "short digest" fail "sha256:abc"
+    s18_dig "63 hex characters" fail "sha256:${_d_ok%a}"
+    s18_dig "uppercase hex" fail "sha256:$(printf 'A%.0s' $(seq 1 64))"
+    s18_dig "uppercase prefix" fail "SHA256:${_d_ok}"
+    s18_dig "no prefix" fail "${_d_ok}"
+    s18_dig "digest plus newline plus junk" fail "$(printf '%s\nx' "${_D}")"
+    s18_dig "newline before digest" fail "$(printf 'x\n%s' "${_D}")"
+  fi
+
+  # (d) the publish-tags step, with docker (and, if absent, jq) shims.
+  if [ -s "${_tmp18}/publish.sh" ]; then
+    mkdir "${_tmp18}/bin"
+    cat > "${_tmp18}/bin/docker" <<'DEOF'
+#!/bin/sh
+# Logs create calls; answers inspect according to S18_INSPECT.
+[ "$1 $2" = "buildx imagetools" ] || { echo "docker shim: unexpected: $*" >&2; exit 99; }
+case "$3" in
+  create) printf 'CREATE %s %s\n' "$5" "$6" >> "${S18_LOG}" ;;
+  inspect)
+    printf 'INSPECT %s\n' "$4" >> "${S18_LOG}"
+    case "${S18_INSPECT}" in
+      match) printf '{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"%s","size":1}\n' "${S18_D}" ;;
+      other) printf '{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"%s","size":1}\n' "${S18_DO}" ;;
+      nodigest) printf '{"mediaType":"application/vnd.oci.image.index.v1+json","size":1}\n' ;;
+      emptydigest) printf '{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"","size":1}\n' ;;
+      *) echo "docker shim: bad S18_INSPECT" >&2; exit 98 ;;
+    esac
+    ;;
+  *) echo "docker shim: unexpected: $*" >&2; exit 99 ;;
+esac
+DEOF
+    chmod +x "${_tmp18}/bin/docker"
+    if command -v jq >/dev/null 2>&1; then
+      _jq18=real
+    else
+      _jq18=shim
+      printf 'NOTE S18: jq is not installed here; using a sed-based jq shim for "-r .digest // empty"\n'
+      cat > "${_tmp18}/bin/jq" <<'JEOF'
+#!/bin/sh
+sed -n 's/.*"digest":"\([^"]*\)".*/\1/p'
+JEOF
+      chmod +x "${_tmp18}/bin/jq"
+    fi
+    _g=ghcr.io/acme/ftp-deployment-action
+    _h=docker.io/acme/ftp-deployment-action
+    _names="${_g},${_h}"
+    _stable=$(printf '%s\n' "${_g}:1.2.3" "${_g}:v1.2.3" "${_g}:latest" "${_h}:1.2.3" "${_h}:v1.2.3" "${_h}:latest")
+    _rc_tags=$(printf '%s\n' "${_g}:1.2.3-rc.1" "${_g}:v1.2.3-rc.1" "${_h}:1.2.3-rc.1" "${_h}:v1.2.3-rc.1")
+    _rc_latest=$(printf '%s\n%s\n' "${_rc_tags}" "${_g}:latest")
+    # s18_pub LABEL EXPECT DIGEST PRE TAGS INSPECT [nocreate]
+    s18_pub() {
+      : > "${_tmp18}/plog"
+      S18_LOG="${_tmp18}/plog" S18_INSPECT="$6" S18_D="${_D}" S18_DO="${_DO}" \
+        DIGEST="$3" PRE_RELEASE="$4" ALL_TAGS="$5" IMAGE_NAMES="${_names}" \
+        PATH="${_tmp18}/bin:${PATH}" \
+        bash -c 'set -euo pipefail; . "$1"' _ "${_tmp18}/publish.sh" > "${_tmp18}/log" 2>&1
+      _rc=$?
+      if [ "$2" = pass ]; then
+        [ "${_rc}" -eq 0 ] || _s18="${_s18} (d)($1: rejected, rc=${_rc})"
+      else
+        [ "${_rc}" -ne 0 ] || _s18="${_s18} (d)($1: accepted)"
+      fi
+      if [ "${7:-}" = nocreate ] && grep -q '^CREATE' "${_tmp18}/plog"; then
+        _s18="${_s18} (d)($1: created a tag before failing)"
+      fi
+    }
+    s18_pub "matching digest" pass "${_D}" false "${_stable}" match
+    # Order, source and coverage of the creates from that run.
+    if ! awk -v D="${_D}" '
+        $1 != "CREATE" { next }
+        { n++; ref = $2; repo = ref; sub(/:[^:]*$/, "", repo)
+          if ($3 != repo "@" D) { print "source of " ref " is " $3; bad = 1 }
+          if (ref ~ /:latest$/) { latest++; seen = 1; r[repo] = r[repo] "L" }
+          else { if (seen) { print "version tag " ref " after :latest"; bad = 1 }
+                 ver++; r[repo] = r[repo] "V" } }
+        END { if (n != 6 || ver != 4 || latest != 2) { print "creates: " n " (" ver " version, " latest " latest), expected 6 (4, 2)"; bad = 1 }
+              for (k in r) if (r[k] !~ /V.*L$/) { print k " lacks version tags before :latest"; bad = 1 }
+              if (length(r) != 2) { print "registries covered: " length(r); bad = 1 }
+              exit bad }
+      ' "${_tmp18}/plog" > "${_tmp18}/why"; then
+      _s18="${_s18} (d)(matching digest: $(tr '\n' ' ' < "${_tmp18}/why"))"
+    fi
+    # every created tag was inspected afterwards
+    if [ "$(grep -c '^INSPECT' "${_tmp18}/plog")" -ne 6 ]; then
+      _s18="${_s18} (d)(matching digest: not every created tag was inspected)"
+    fi
+    s18_pub "inspect returns a different digest" fail "${_D}" false "${_stable}" other
+    s18_pub "inspect returns no digest field" fail "${_D}" false "${_stable}" nodigest
+    s18_pub "inspect returns an empty digest" fail "${_D}" false "${_stable}" emptydigest
+    s18_pub "empty DIGEST" fail "" false "${_stable}" match nocreate
+    s18_pub "malformed DIGEST" fail "sha256:abc" false "${_stable}" match nocreate
+    s18_pub "pre-release with :latest in ALL_TAGS" fail "${_D}" true "${_rc_latest}" match nocreate
+    s18_pub "pre-release without :latest" pass "${_D}" true "${_rc_tags}" match
+    if grep -q ':latest' "${_tmp18}/plog" || [ "$(grep -c '^CREATE' "${_tmp18}/plog")" -ne 4 ]; then
+      _s18="${_s18} (d)(pre-release without :latest: expected exactly 4 creates and no :latest)"
+    fi
+  fi
+
+  # (e) the meta step with a fake environment.
+  if [ -s "${_tmp18}/meta.sh" ]; then
+    # shellcheck disable=SC2016
+    sed 's/\${{ github\.repository_owner }}/acme/' "${_tmp18}/meta.sh" > "${_tmp18}/meta_run.sh"
+    s18_meta() { # $1=label $2=tag $3=pre_release $4=expect :latest (yes|no)
+      : > "${_tmp18}/mout"
+      GITHUB_EVENT_NAME=push GITHUB_REF_NAME="$2" INPUT_VERSION="" \
+        DOCKERHUB_USERNAME=u DOCKERHUB_TOKEN=t AWS_ROLE_TO_ASSUME="" \
+        GITHUB_OUTPUT="${_tmp18}/mout" \
+        bash -c 'set -euo pipefail; . "$1"' _ "${_tmp18}/meta_run.sh" > "${_tmp18}/log" 2>&1 \
+        || { _s18="${_s18} (e)($1: meta step failed)"; return; }
+      grep -qx "pre_release=$3" "${_tmp18}/mout" \
+        || _s18="${_s18} (e)($1: pre_release is not $3)"
+      grep -qx "image_names=ghcr.io/acme/ftp-deployment-action,docker.io/acme/ftp-deployment-action" "${_tmp18}/mout" \
+        || _s18="${_s18} (e)($1: image_names wrong)"
+      _tags=$(sed -n '/^all_tags<<EOF$/,/^EOF$/p' "${_tmp18}/mout" | sed '1d;$d')
+      _nl=$(printf '%s\n' "${_tags}" | grep -c '.')
+      _lt=$(printf '%s\n' "${_tags}" | grep -c ':latest$')
+      if [ "$4" = yes ]; then
+        [ "${_nl}" -eq 6 ] && [ "${_lt}" -eq 2 ] \
+          || _s18="${_s18} (e)($1: all_tags has ${_nl} lines, ${_lt} :latest; expected 6 and 2)"
+      else
+        [ "${_nl}" -eq 4 ] && [ "${_lt}" -eq 0 ] \
+          || _s18="${_s18} (e)($1: all_tags has ${_nl} lines, ${_lt} :latest; expected 4 and 0)"
+      fi
+    }
+    s18_meta "stable v1.2.3" v1.2.3 false yes
+    s18_meta "pre-release v1.2.3-rc.1" v1.2.3-rc.1 true no
+  fi
+fi
+rm -rf "${_tmp18}"
+if [ -z "${_s18}" ]; then
+  pass "S18 release.yml pushes by digest and publishes the tags last, :latest after the gate"
+else
+  fail "S18 release.yml digest-first publishing:${_s18}"
+fi
+
 if [ "${_failed}" -ne 0 ]; then
   printf '\nRESULT: FAIL\n'
   exit 1

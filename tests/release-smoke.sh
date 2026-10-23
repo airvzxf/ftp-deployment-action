@@ -2,18 +2,18 @@
 # tests/release-smoke.sh — smoke tests run against an already-built
 # ftp-deployment-action image.
 #
-# Used by .github/workflows/release.yml between "Build and push
-# image" and "Generate SBOM" to catch Dockerfile / lftp pin /
-# runtime regressions before the image is signed and the SBOM is
-# attached. Also runnable locally against a freshly-built image.
+# Used by .github/workflows/release.yml right after the image is
+# pushed by digest, before the SBOM, the cosign signature and the
+# public tags, to catch Dockerfile / lftp pin / runtime regressions
+# before any tag points at the image. Also runnable locally against
+# a freshly-built image.
 #
 # Usage:
 #   tests/release-smoke.sh <image>
 #
-# Where <image> is the image:tag to test (e.g. the value of
-# `steps.meta.outputs.image:${{ steps.meta.outputs.version }}` from
-# the release workflow, or `ftp-deployment-action:local` for a
-# local build).
+# Where <image> is the image reference to test: `<image>@sha256:...`
+# in the release workflow, or `ftp-deployment-action:local` for a
+# local build.
 #
 # Exit code 0 if all checks pass, non-zero otherwise. The script
 # prints which check failed.
