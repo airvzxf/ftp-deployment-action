@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Release workflow: a broken image could replace `:latest` before the smoke test ran.** The build pushed every tag, `:latest` included, before the smoke test, SBOM, cosign signature and attestation, so a failure left an unsigned, broken image on the public tags; the smoke test and SBOM also read the mutable `:X.Y.Z` tag. The image is now pushed by digest only, untagged, to every enabled registry. The digest is validated, and the smoke test, SBOM, cosign and attestation all use `<image>@<digest>`. Only after all of them pass does the last step create the public tags from that digest in each registry: `:X.Y.Z` and `:vX.Y.Z` first, `:latest` last and never for a pre-release, and each tag must resolve to the digest. The first real release after this change should be a pre-release (e.g. `vX.Y.Z-rc.1`, which gets no `:latest`) to exercise the new flow end to end before a stable tag moves `:latest`.
+
 ## [3.1.0] - 2026-10-14
 
 FTPS uploads to servers that negotiate TLS 1.3 no longer reset at the

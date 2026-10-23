@@ -344,11 +344,16 @@ jobs:
           exit 1
 
   # Job 4: build. Gated on jobs 2 + 3. SHA-pinned checkout.
-  # Pushes to ghcr.io (always) plus Docker Hub and ECR Public
-  # (when the right secrets are set), signs with cosign
-  # keyless, attaches a CycloneDX SBOM attestation, extracts
-  # the CHANGELOG section for this version, and bundles the
-  # SBOM + body file for the publish job.
+  # Pushes the image by digest, untagged, to ghcr.io (always)
+  # plus Docker Hub and ECR Public (when the right secrets are
+  # set). Smoke-tests that digest, generates a CycloneDX SBOM
+  # from it, signs it with cosign keyless and attaches the SBOM
+  # attestation, extracts the CHANGELOG section for this
+  # version, and bundles the SBOM + body file for the publish
+  # job. Only then does its last step point the public tags at
+  # the digest: :X.Y.Z and :vX.Y.Z first, :latest last (never
+  # for a pre-release). A failure anywhere before that leaves
+  # every public tag where it was.
   build:
     name: 'Build · release image'
     runs-on: ubuntu-latest
@@ -424,6 +429,7 @@ jobs:
           case "${version}" in
             *-*) pre_release=true ;;
           esac
+          echo "pre_release=${pre_release}" >> "$GITHUB_OUTPUT"
 
           # ghcr.io is always published (GITHUB_TOKEN is automatic).
           tags="${image}:${version}"$'\n'"${image}:${tag}"
@@ -500,6 +506,17 @@ jobs:
             echo "::notice::ECR Public publishing disabled in release.yml (AWS IAM trust policy needs update); skipping public.ecr.aws publish"
           fi
 
+          # Comma-separated names the build pushes by digest to: the
+          # same registries, decided above, that `all_tags` covers.
+          image_names="${image}"
+          if [ -n "${dockerhub_image}" ]; then
+            image_names="${image_names},${dockerhub_image}"
+          fi
+          if [ -n "${ecr_image}" ]; then
+            image_names="${image_names},${ecr_image}"
+          fi
+          echo "image_names=${image_names}" >> "$GITHUB_OUTPUT"
+
           # Heredoc-style multi-line output for `all_tags`.
           # Each tag on its own line so the EOF delimiter lands
           # on its own line — `printf '%s'` would glue the last
@@ -544,7 +561,8 @@ jobs:
           fi
 
           echo "Resolved tag=${tag}, version=${version}"
-          echo "Tags to push:"
+          echo "Push by digest to: ${image_names}"
+          echo "Tags to publish after smoke, SBOM, sign and attest:"
           printf '%s\n' "${tags}"
 
       # SHA-pinned checkout: closes the TOCTOU gap. A tag
@@ -583,13 +601,12 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          push: true
-          # `all_tags` is a multi-line string emitted by the
-          # meta step. The buildx builder receives every tag
-          # exactly once and pushes each to the corresponding
-          # registry (docker/build-push-action routes per-tag
-          # based on the registry hostname).
-          tags: ${{ steps.meta.outputs.all_tags }}
+          # Push by digest only, with no tag, to every enabled
+          # registry (`image_names` from the meta step). The public
+          # tags in `all_tags` are added by the last step of this
+          # job, after the smoke test, SBOM, cosign and attestation
+          # have all passed on this digest.
+          outputs: type=image,"name=${{ steps.meta.outputs.image_names }}",push-by-digest=true,name-canonical=true,push=true
           labels: |
             org.opencontainers.image.title=ftp-deployment-action
             org.opencontainers.image.description=GitHub Action that copies files via FTP/FTPS using lftp
@@ -602,6 +619,21 @@ jobs:
           # reuse an earlier release's layers. The build installs
           # two apk packages in about a second. See AGENTS.md
           # design decision 6; acceptance check S14 enforces it.
+
+      # Every later step addresses the image as <image>@<digest>,
+      # so refuse anything but one sha256 digest before first use.
+      - name: Validate the pushed image digest
+        id: digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::build digest '${DIGEST}' is not sha256: followed by 64 lowercase hex characters"
+            exit 1
+          fi
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "✓ pushed digest ${DIGEST}"
 
       # v2.10.0+: ECR Public is a SECONDARY publish target. OIDC
       # role assumption (no static AWS secrets) is configured in
@@ -643,8 +675,12 @@ jobs:
       #     registry-type: public
 
       # v2.4.0+: smoke-test the just-pushed image before
-      # signing and attaching the SBOM. Catches Dockerfile /
-      # lftp pin / runtime regressions before they ship.
+      # signing and attaching the SBOM. The image is pushed by
+      # digest only, so a Dockerfile / lftp pin / runtime
+      # regression fails here before any public tag (:latest
+      # included) points at it; the tags are added by the last
+      # step of this job. Smoke, SBOM, cosign and attest all use
+      # <image>@<digest>, never a mutable tag.
       # v2.10.0+: smoke-test only the ghcr.io image. The
       # three registries receive the exact same image bytes
       # from a single `docker buildx build`, so a ghcr.io
@@ -652,7 +688,7 @@ jobs:
       # public.ecr.aws.
       - name: Smoke test the just-pushed image
         env:
-          IMAGE: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+          IMAGE: ${{ steps.meta.outputs.image }}@${{ steps.digest.outputs.digest }}
         run: |
           set -euo pipefail
           tests/release-smoke.sh "${IMAGE}"
@@ -660,7 +696,7 @@ jobs:
       - name: Generate SBOM (CycloneDX)
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
-          image: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+          image: ${{ steps.meta.outputs.image }}@${{ steps.digest.outputs.digest }}
           format: cyclonedx-json
           artifact-name: sbom.cyclonedx.json
 
@@ -676,7 +712,7 @@ jobs:
       - name: Sign image with cosign (keyless, OIDC)
         env:
           COSIGN_EXPERIMENTAL: '1'
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
         run: |
           set -euo pipefail
           cosign sign --yes "${{ steps.meta.outputs.image }}@${DIGEST}"
@@ -691,7 +727,7 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ steps.meta.outputs.image }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
           sbom-path: sbom.cyclonedx.json
           push-to-registry: true
 
@@ -700,7 +736,7 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ steps.meta.outputs.dockerhub_image }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
           sbom-path: sbom.cyclonedx.json
           push-to-registry: true
 
@@ -725,7 +761,7 @@ jobs:
       #   uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
       #   with:
       #     subject-name: ${{ steps.meta.outputs.ecr_image }}
-      #     subject-digest: ${{ steps.build.outputs.digest }}
+      #     subject-digest: ${{ steps.digest.outputs.digest }}
       #     sbom-path: sbom.cyclonedx.json
       #     push-to-registry: true
 
@@ -783,6 +819,79 @@ jobs:
           path: ${{ runner.temp }}/release-artifacts/
           retention-days: 7
           if-no-files-found: error
+
+      # Last image step: only now do the public tags move. Each tag
+      # in `all_tags` is created from the SAME registry's
+      # <image>@<digest> (the repository part of the tag itself,
+      # which must be one of the names the build pushed to), so no
+      # tag is copied across registries. :X.Y.Z and :vX.Y.Z go
+      # first in every registry, :latest last, and :latest is
+      # refused for a pre-release. After each create the tag is
+      # inspected and must resolve to the validated digest: whether
+      # `imagetools create` keeps the digest of a single-source
+      # index is not something this file relies on; this check is
+      # the guard.
+      - name: Publish the release tags (version tags first, :latest last)
+        id: publish-tags
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+          ALL_TAGS: ${{ steps.meta.outputs.all_tags }}
+          IMAGE_NAMES: ${{ steps.meta.outputs.image_names }}
+          PRE_RELEASE: ${{ steps.meta.outputs.pre_release }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::digest '${DIGEST}' is not sha256: followed by 64 lowercase hex characters"
+            exit 1
+          fi
+          case "${PRE_RELEASE}" in
+            true|false) ;;
+            *) echo "::error::pre_release is '${PRE_RELEASE}', expected true or false"; exit 1 ;;
+          esac
+
+          # publish_tag <repo>:<tag>: point the tag at <repo>@DIGEST
+          # and fail unless the registry now resolves it to DIGEST.
+          publish_tag() {
+            local ref="$1" repo got
+            repo="${ref%:*}"
+            docker buildx imagetools create --tag "${ref}" "${repo}@${DIGEST}"
+            got=$(docker buildx imagetools inspect "${ref}" --format '{{json .Manifest}}' | jq -r '.digest // empty')
+            if [ "${got}" != "${DIGEST}" ]; then
+              echo "::error::${ref} resolves to '${got}', expected ${DIGEST}"
+              return 1
+            fi
+            echo "✓ ${ref} -> ${DIGEST}"
+          }
+
+          version_tags=()
+          latest_tags=()
+          while IFS= read -r ref; do
+            [ -n "${ref}" ] || continue
+            # Checked for every tag before the first create.
+            case ",${IMAGE_NAMES}," in
+              *",${ref%:*},"*) ;;
+              *) echo "::error::${ref}: ${ref%:*} is not one of the pushed images (${IMAGE_NAMES})"; exit 1 ;;
+            esac
+            case "${ref}" in
+              *:latest) latest_tags+=("${ref}") ;;
+              *) version_tags+=("${ref}") ;;
+            esac
+          done <<< "${ALL_TAGS}"
+          if [ "${#version_tags[@]}" -eq 0 ]; then
+            echo "::error::all_tags holds no version tag"
+            exit 1
+          fi
+          if [ "${PRE_RELEASE}" = true ] && [ "${#latest_tags[@]}" -ne 0 ]; then
+            echo "::error::pre-release must not publish :latest (${latest_tags[*]})"
+            exit 1
+          fi
+
+          for ref in "${version_tags[@]}"; do
+            publish_tag "${ref}"
+          done
+          for ref in "${latest_tags[@]}"; do
+            publish_tag "${ref}"
+          done
 
   # Job 5: publish. Creates the GitHub Release page from the
   # CHANGELOG section extracted by `build`. `contents: write`
