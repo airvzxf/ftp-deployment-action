@@ -16,6 +16,12 @@
 # — and so any future contributor can re-verify a historical tag
 # without poking at the runner's `~/.gnupg`.
 #
+# Like release.yml, it reads the allow-lists from `origin/main`, not
+# from the working tree, so a key revoked on main is revoked here
+# too, whatever branch or tag is checked out. For a signed tag it runs
+# `git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main`
+# first and needs network access to `origin`; it cannot run offline.
+#
 # It deliberately writes **nothing** to the developer's environment:
 #
 #   * `GNUPGHOME` is a `mktemp -d` (cleaned by trap on exit) so the
@@ -23,6 +29,10 @@
 #   * Git config is passed via per-invocation `git -c` overrides (or
 #     `--local` config in a temp repo, see below) — never written to
 #     the developer's `.git/config`.
+#   * The allow-lists are copied out of `origin/main` into a
+#     `mktemp -d` (cleaned by trap on exit). The only change to the
+#     repository is the fetch refreshing `refs/remotes/origin/main`
+#     (and FETCH_HEAD); it never makes the clone shallow.
 #
 # Usage
 # -----
@@ -37,7 +47,8 @@
 #      .github/trusted-signers.asc (PGP), or is documented as
 #      lightweight / unsigned in SECURITY.md (informational).
 #   1  tag is missing on the remote, or its signature could not be
-#      verified against either allow-list.
+#      verified against either allow-list, or origin/main (and so its
+#      allow-list) could not be fetched or has no trusted-signers.
 #   2  usage error.
 #
 # Dependencies
@@ -53,12 +64,40 @@ set -eu
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
 
-TRUSTED_SSH="${REPO_ROOT}/.github/trusted-signers"
-TRUSTED_PGP="${REPO_ROOT}/.github/trusted-signers.asc"
+# The allow-lists are read from origin/main (see fetch_allowlists),
+# as release.yml does, into this temp dir.
+ALLOWLIST_DIR=$(mktemp -d)
+# shellcheck disable=SC2064  # expand the path now, not on exit.
+trap "rm -rf '${ALLOWLIST_DIR}'" EXIT INT TERM
+TRUSTED_SSH="${ALLOWLIST_DIR}/trusted-signers"
+TRUSTED_PGP="${ALLOWLIST_DIR}/trusted-signers.asc"
 
 # Default git-invocation prefix: `git -c` overrides. Used so the
 # script never touches the developer's `.git/config`.
 GIT_PREFIX="git -c gpg.format=ssh -c gpg.ssh.allowedsignersfile=${TRUSTED_SSH}"
+
+# Fetch origin/main and copy its allow-lists into ALLOWLIST_DIR,
+# mirroring release.yml's "Fetch allow-list from origin/main" step:
+# the SSH list is required and must be non-empty; the .asc is
+# optional (absent on origin/main is acceptable).
+fetch_allowlists() {
+  if ! git -C "${REPO_ROOT}" fetch --no-tags origin \
+      +refs/heads/main:refs/remotes/origin/main; then
+    printf 'ERROR: could not fetch origin main; the allow-list on origin/main is what CI uses, so the check cannot run offline\n' >&2
+    exit 1
+  fi
+  # Full ref: a bare `origin/main` would resolve to a local tag or
+  # branch of that name before the remote-tracking ref just fetched.
+  if ! git -C "${REPO_ROOT}" show "refs/remotes/origin/main:.github/trusted-signers" \
+      > "${TRUSTED_SSH}" || [ ! -s "${TRUSTED_SSH}" ]; then
+    printf 'ERROR: .github/trusted-signers missing or empty on origin/main\n' >&2
+    exit 1
+  fi
+  if ! git -C "${REPO_ROOT}" show "refs/remotes/origin/main:.github/trusted-signers.asc" \
+      > "${TRUSTED_PGP}" 2>/dev/null; then
+    rm -f "${TRUSTED_PGP}"
+  fi
+}
 
 # Detect the tag's signature format. Output: 'ssh', 'pgp', or
 # 'lightweight'.
@@ -84,7 +123,7 @@ detect_signature() {
 verify_ssh() {
   _tag=$1
   if [ ! -s "${TRUSTED_SSH}" ]; then
-    printf 'ERROR: %s missing or empty\n' "${TRUSTED_SSH}" >&2
+    printf 'ERROR: origin/main:.github/trusted-signers missing or empty\n' >&2
     return 1
   fi
   ${GIT_PREFIX} verify-tag "${_tag}"
@@ -95,7 +134,7 @@ verify_ssh() {
 verify_pgp() {
   _tag=$1
   if [ ! -s "${TRUSTED_PGP}" ]; then
-    printf 'ERROR: %s missing or empty\n' "${TRUSTED_PGP}" >&2
+    printf 'ERROR: origin/main:.github/trusted-signers.asc missing or empty\n' >&2
     return 1
   fi
   if ! command -v gpg >/dev/null 2>&1; then
@@ -107,7 +146,8 @@ verify_pgp() {
   # so the same call works with gpg 1.x and 2.x.
   _gnupghome=$(mktemp -d) || return 1
   # shellcheck disable=SC2064  # we want $? captured now, not on exit.
-  trap "rm -rf '${_gnupghome}'" EXIT INT TERM
+  # This replaces the top-level trap, so it also removes ALLOWLIST_DIR.
+  trap "rm -rf '${_gnupghome}' '${ALLOWLIST_DIR}'" EXIT INT TERM
 
   GNUPGHOME="${_gnupghome}" gpg --batch --import "${TRUSTED_PGP}" \
     >/dev/null 2>&1
@@ -151,10 +191,12 @@ main() {
 
   case ${sig} in
     ssh)
+      fetch_allowlists
       verify_ssh "${tag}"
       printf 'OK: %s is signed by a key in .github/trusted-signers\n' "${tag}"
       ;;
     pgp)
+      fetch_allowlists
       verify_pgp "${tag}"
       printf 'OK: %s is signed by a key in .github/trusted-signers.asc\n' "${tag}"
       ;;

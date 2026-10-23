@@ -290,8 +290,9 @@ trap on exit, and git config is passed via `git -c` overrides.
 signed by that key is at least one minor version old, so a
 compromise of the removed key cannot rewrite a release that's
 in production. The `scripts/verify-tag.sh` script re-verifies
-the tag against the current allow-list, so a removed signer
-surfaces immediately for the operator who removes it.
+the tag against the allow-list on `origin/main`, so it only
+sees a removal once that removal is merged to `main`, exactly
+like CI.
 
 ## Design decisions
 
