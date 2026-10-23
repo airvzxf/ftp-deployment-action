@@ -105,12 +105,15 @@ jobs:
 >
 > **Verify a tag's signature before pinning to it**:
 > `scripts/verify-tag.sh <tag>` checks the tag against the
-> in-repo allow-lists and auto-detects whichever backend the
+> allow-lists on `origin/main` (for a signed tag it fetches `main`
+> first, so it needs network access to `origin`, and never makes
+> the clone shallow) and auto-detects whichever backend the
 > tag used (`.github/trusted-signers` for SSH-signed tags,
 > `.github/trusted-signers.asc` for PGP-signed tags; see
 > [SECURITY.md](./SECURITY.md) for the per-tag range). The
-> release pipeline's `verify-tag-signature` job runs the same
-> check on every push before any image is published.
+> release pipeline's `verify-tag-signature` job uses the same
+> lists and runs the same check for signed tags on every push
+> before any image is published.
 
 ## Upgrading
 
