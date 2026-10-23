@@ -1317,11 +1317,13 @@ acquire_lock_with_recovery() { return "${FAKE_ACQ_RC}"; }
 STUB
   sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${BATS_TEST_TMPDIR}/home/lftp#g" \
     "${root}/entrypoint.sh" > "${app}/entrypoint.sh"
+  # bash, not sh: entrypoint.sh needs `set -o pipefail`, which the
+  # image's busybox ash has but dash (/bin/sh on ubuntu runners) lacks.
   FAKE_ACQ_RC="$1" \
   INPUT_SERVER="ftp://example.test" INPUT_USER="ftptest" INPUT_PASSWORD="pw" \
   INPUT_LOCAL_DIR="${BATS_TEST_TMPDIR}/" INPUT_REMOTE_DIR="./" \
   INPUT_CONCURRENCY_LOCK="true" INPUT_CONCURRENCY_LOCK_TIMEOUT="7" \
-    run sh -eu "${app}/entrypoint.sh"
+    run bash -eu "${app}/entrypoint.sh"
 }
 
 @test "entrypoint: FND-0043: lock status 2 (sentinel upload failed) exits 1 without the 'another deployment' line" {
