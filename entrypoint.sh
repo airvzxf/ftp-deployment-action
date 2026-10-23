@@ -285,16 +285,22 @@ fi
 # ------------------------------------------------------------------------------
 if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
   printf '::group::Concurrency lock acquire\n'
-  if ! acquire_lock_with_recovery \
+  LOCK_RC=0
+  acquire_lock_with_recovery \
        "${INPUT_SERVER}" \
        "${INPUT_CONCURRENCY_LOCK_PATH}" \
        "${INPUT_CONCURRENCY_LOCK_TIMEOUT}" \
        "${INPUT_CONCURRENCY_LOCK_POLL_INTERVAL}" \
-       "${INPUT_USER}"; then
+       "${INPUT_USER}" || LOCK_RC=$?
+  if [ "${LOCK_RC}" -ne 0 ]; then
     printf '::endgroup::\n'
     printf 'ERROR: could not acquire concurrency lock at %s within %s seconds\n' \
       "${INPUT_CONCURRENCY_LOCK_PATH}" "${INPUT_CONCURRENCY_LOCK_TIMEOUT}" >&2
-    printf 'ERROR: another deployment is currently in progress, or the previous holder crashed mid-mirror.\n' >&2
+    # FND-0043: status 2 = the sentinel upload failed (lib.sh printed
+    # why); the lock is not held by anyone else.
+    if [ "${LOCK_RC}" -ne 2 ]; then
+      printf 'ERROR: another deployment is currently in progress, or the previous holder crashed mid-mirror.\n' >&2
+    fi
     printf 'ERROR: see README "Concurrency / deployment lock" for manual recovery instructions.\n' >&2
     exit 1
   fi

@@ -15,7 +15,7 @@
 # acquire_lock_with_recovery path: list the lock dir, parse the
 # sentinel, observe its age is over LOCK_STALE_AFTER (so the previous
 # holder is treated as dead), DELE the sentinel +
-# RMD the lock dir, then immediately retry MKD. If the
+# RMD the lock dir, then wait one poll interval and retry MKD. If the
 # stale-recovery code path regresses, the action will spin on MKD
 # until its 900-second timeout expires — the timing assertion below
 # catches that.
