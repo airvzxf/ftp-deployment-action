@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **`ftp://` with `ftp_ssl_allow: "true"` is opportunistic TLS, not guaranteed TLS.** The `server` and `ftp_ssl_allow` descriptions, the README and a scenario 03 comment said or implied that the connection, password included, is always sent inside TLS, and that lftp needs `ftp:ssl-force` to send `AUTH TLS` at all. Checked with lftp 4.9.3 against a server that answers 534 to `AUTH TLS`: lftp sends `AUTH TLS`, and when it is refused it continues and sends `USER`/`PASS` in cleartext; with `ftp_use_feat: "true"` and no `AUTH TLS` in the `FEAT` reply it never tries TLS; with `set ftp:ssl-force true;` it aborts before `USER`. To require TLS, use `ftps://` or `lftp_settings: "set ftp:ssl-force true;"`. No behaviour change.
+
 ### Fixed
 
 - **Release workflow: a broken image could replace `:latest` before the smoke test ran.** The build pushed every tag, `:latest` included, before the smoke test, SBOM, cosign signature and attestation, so a failure left an unsigned, broken image on the public tags; the smoke test and SBOM also read the mutable `:X.Y.Z` tag. The image is now pushed by digest only, untagged, to every enabled registry. The digest is validated, and the smoke test, SBOM, cosign and attestation all use `<image>@<digest>`. Only after all of them pass does the last step create the public tags from that digest in each registry: `:X.Y.Z` and `:vX.Y.Z` first, `:latest` last and never for a pre-release, and each tag must resolve to the digest. The first real release after this change should be a pre-release (e.g. `vX.Y.Z-rc.1`, which gets no `:latest`) to exercise the new flow end to end before a stable tag moves `:latest`.

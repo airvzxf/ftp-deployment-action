@@ -75,11 +75,11 @@ start_ftps_server "${FTP_USER}" "${FTP_PASSWORD}" "${FTP_DATA_DIR}" "${_cert}" "
 #           is a no-op when the URL already has a user).
 #   * INPUT_FTP_SSL_ALLOW=true + INPUT_LFTP_SETTINGS with
 #     `set ftp:ssl-force true;`: lftp 4.9.3 (pinned in the action
-#     image) only triggers the AUTH TLS upgrade when ftp:ssl-force
-#     is also set; ftp:ssl-allow alone permits SSL but does not
-#     initiate it on a plain `ftp://` URL. This is the documented
-#     lftp behaviour — see the spec for scenario 03 in
-#     tests/integration/README.md.
+#     image) sends AUTH TLS with ftp:ssl-allow alone, but if the
+#     server refuses it lftp continues in cleartext. ftp:ssl-force
+#     makes that refusal fatal, so this scenario sets it to
+#     guarantee the session really is TLS. See the spec for
+#     scenario 03 in tests/integration/README.md.
 #   * INPUT_SSL_VERIFY_CERTIFICATE=false / INPUT_SSL_CHECK_HOSTNAME=
 #     false: the cert is self-signed and says CN=localhost but the
 #     action connects to 127.0.0.1, so neither check can pass on

@@ -5,7 +5,7 @@ description: >-
   optionally deleting remote files that no longer exist locally.
 inputs:
   server:
-    description: 'FTP server: `ftp://host[:port]` (plain FTP, or explicit TLS when `ftp_ssl_allow` is "true") or `ftps://host[:port]` (implicit TLS); a bare `host[:port]` means `ftp://`. IPv6 addresses go in brackets: `ftp://[2001:db8::1]:21`. Credentials go in `user` and `password`: a URL with `user:pass@` is rejected with exit 2 (a bare `user@` is accepted). Set the target directory with `remote_dir`, not in the URL.'
+    description: 'FTP server: `ftp://host[:port]` (plain FTP; with `ftp_ssl_allow` "true" it tries explicit TLS but falls back to cleartext if the server or a network attacker refuses it, so use `ftps://` or `lftp_settings` `set ftp:ssl-force true;` to require TLS) or `ftps://host[:port]` (implicit TLS); a bare `host[:port]` means `ftp://`. IPv6 addresses go in brackets: `ftp://[2001:db8::1]:21`. Credentials go in `user` and `password`: a URL with `user:pass@` is rejected with exit 2 (a bare `user@` is accepted). Set the target directory with `remote_dir`, not in the URL.'
     required: true
   user:
     description: 'FTP User.'
@@ -38,7 +38,7 @@ inputs:
     required: false
     default: '1'
   ftp_ssl_allow:
-    description: 'FTP - Allow SSL encryption.'
+    description: 'FTP - Try explicit TLS (AUTH TLS) on `ftp://`. Opportunistic: lftp falls back to cleartext, password included, if the server or a network attacker refuses it. To require TLS use `ftps://` or `lftp_settings` `set ftp:ssl-force true;`.'
     required: false
     default: 'true'
   ssl_verify_certificate:
@@ -58,7 +58,7 @@ inputs:
     required: false
     default: 'true'
   ftp_use_feat:
-    description: 'FTP - FEAT: Determining what extended features the FTP server supports.'
+    description: 'FTP - FEAT: Determining what extended features the FTP server supports. With "true", lftp tries explicit TLS on `ftp://` only if the FEAT reply lists AUTH TLS; otherwise it logs in in cleartext without trying.'
     required: false
     default: 'false'
   ftp_nop_interval:
