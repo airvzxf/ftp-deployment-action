@@ -32,16 +32,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y shellcheck
           shellcheck --version
+      # The Makefile `shellcheck` target is the single source of the
+      # file list, the -x flags and the per-file `-e SC2016`
+      # exclusion, so CI and `make lint` check the same scripts.
       - name: Run shellcheck
-        run: |
-          set -e
-          # -x: follow `shellcheck source=` directives (entrypoint.sh sources lib.sh,
-          # tests/integration/scenarios/*.sh source tests/integration/lib/common.sh).
-          shellcheck -x entrypoint.sh lib.sh
-          shellcheck tests/contract.sh
-          shellcheck tests/smoke.sh
-          shellcheck -x tests/integration/lib/common.sh tests/integration/run-integration-tests.sh
-          shellcheck -x tests/integration/scenarios/*.sh
+        run: make shellcheck
 
   actionlint:
     name: actionlint
@@ -76,9 +71,9 @@ jobs:
       # Pin to a specific tag because the upstream has no floating "v3" ref
       # (only v3.0.0, v3.1.0, ...). Using `@v3` makes the resolver fail.
       # hadolint/hadolint-action takes a single `dockerfile:` input
-      # (no array support), so each Dockerfile gets its own step. Both
-      # steps fail with `error`-threshold rules; the integration job
-      # only kicks off once both succeed.
+      # (no array support), so each of the three Dockerfiles gets its
+      # own step. All three steps fail with `error`-threshold rules;
+      # the integration job only kicks off once all three succeed.
       - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
           dockerfile: Dockerfile
@@ -86,6 +81,12 @@ jobs:
       - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
           dockerfile: tests/integration/Dockerfile.test-server
+          # DL3018 (pin apk versions) warns about the unpinned
+          # ca-certificates; the error threshold keeps it a warning.
+          failure-threshold: error
+      - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: tests/Dockerfile.smoke
           # DL3018 (pin apk versions) warns about the unpinned
           # ca-certificates; the error threshold keeps it a warning.
           failure-threshold: error
