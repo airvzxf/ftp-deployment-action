@@ -418,7 +418,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | dry_run                | If "true", compute the mirror plan but do not transfer or delete any file. It still connects and logs in, so an unreachable server or a wrong password fails. | No       | false   | N/A                                                                                               |
 | concurrency_lock       | If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory. See "Concurrency / deployment lock" below. | No       | false   | N/A                                                                                               |
 | concurrency_lock_path  | Path of the sentinel directory used by `concurrency_lock`. Must be a valid FTP path (no `..`, no shell metacharacters, no leading dash, no `!`, no `"`). | No       | .lftp-deployment.lock | N/A                                                                                |
-| concurrency_lock_timeout | Maximum seconds to wait for the lock when `concurrency_lock` is "true" and another run is currently holding it. `0` means fail immediately when held. | No | 300  | N/A                                                                                               |
+| concurrency_lock_timeout | Maximum seconds to wait for the lock when `concurrency_lock` is "true" and another run is currently holding it. `0` means fail immediately when held or when the sentinel upload fails. | No | 300  | N/A                                                                                               |
 | concurrency_lock_poll_interval | Seconds between lock acquisition attempts.                                                  | No       | 5       | N/A                                                                                               |
 
 > **How `ftp_ssl_allow` interacts with the `server` URL scheme.**
@@ -591,13 +591,26 @@ A runner that finds the lock held reads that stamp:
   sentinel.
 - **Sentinel older than 6 hours**: 6 hours is GitHub's maximum
   job time, so that run is gone (runner OOM, `kill -9`). The
-  runner `DELE`s the sentinel, `RMD`s the lock dir and takes the
-  lock.
+  runner `DELE`s the sentinel, `RMD`s the lock dir, waits
+  `concurrency_lock_poll_interval` seconds and takes the lock.
 - **Lock dir without a sentinel**: the holder may be between its
   `mkdir` and the sentinel upload (at most 30 seconds), or it
   died there. The runner treats the lock as held and takes it
   over only after it has seen the dir without a sentinel for 120
-  seconds in a row.
+  seconds in a row, then waits `concurrency_lock_poll_interval`
+  seconds before it retries `mkdir`.
+
+**Sentinel upload failure.** If `mkdir` succeeds but the sentinel
+upload into the lock dir fails (quota, write permission, a file
+name the server refuses), the runner deletes the partial sentinel
+and the dir, waits `concurrency_lock_poll_interval` seconds and
+tries again until `concurrency_lock_timeout`; with
+`concurrency_lock_timeout: "0"` it fails at once. If the last
+attempt failed this way, the action exits 1 with
+`ERROR: lock dir <path> was created but the sentinel upload to
+<path>/<sentinel> failed; check write permission and quota under
+concurrency_lock_path` instead of saying that another deployment is
+in progress.
 
 If a holder died less than 6 hours ago, the next deploys fail
 with that error until you clear the lock. Delete the two entries

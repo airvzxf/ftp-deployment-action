@@ -1107,12 +1107,15 @@ LOCK_EMPTY_GRACE=120
 #   function assumes the previous holder died (OOM, SIGKILL, 6h job
 #   limit) and takes over: it runs ONE lftp invocation that lists
 #   the directory AND DELEs every parsed sentinel AND RMDs the
-#   lock dir, then immediately retries MKD (no sleep). If the
+#   lock dir, then sleeps POLL_SECS and retries MKD (FND-0043: a
+#   persistently failing RMD must not hammer the server). If the
 #   sentinel is recent, the function sleeps POLL_SECS and tries
 #   again. A missing sentinel is treated the same way until the
 #   lock dir has been sentinel-less for LOCK_EMPTY_GRACE seconds
 #   (measured on this runner's clock, reset whenever a sentinel is
-#   seen); only then is it taken over.
+#   seen); only then is it taken over. This run restarts that
+#   clock after its own takeover attempt (FND-0083), so a lock dir
+#   re-created after it is timed from scratch.
 #
 #   F2 audit hardening (closes #173, #176, #178, #184, #251, #268):
 #     * #173 — every parsed sentinel is DELE'd in one lftp
@@ -1127,6 +1130,8 @@ LOCK_EMPTY_GRACE=120
 #     * #251 — when TIMEOUT_SECS=0 (fail-fast mode) the function
 #       returns 1 immediately after a MKD fail; no LIST, no DELE,
 #       no RMD, so a healthy holder's lock dir is never vandalised.
+#       It also returns right after the cleanup of a failed
+#       sentinel PUT (FND-0043), instead of retrying forever.
 #     * #268 — a transient LIST failure (TCP reset, FTP 421, 10s
 #       timeout) is detected via the captured exit code and
 #       treated as "lock held, back off"; we never DELE/RMD on
@@ -1135,6 +1140,10 @@ LOCK_EMPTY_GRACE=120
 #   Returns 0 on a successful acquire, 1 if the timeout is
 #   exhausted or the lock is held and timeout=0. On timeout it
 #   prints which sentinel holds the lock and how to clear it.
+#   Returns 2 (FND-0043) when it gives up and the LAST failure was
+#   the sentinel PUT after a successful MKD; it then prints that the
+#   lock dir was created but the sentinel upload failed, not that
+#   the lock is held.
 #   The caller MUST
 #   have a writable ${NETRC} at $HOME and MUST have `set -e`
 #   disabled around the call to this function (or check the
@@ -1160,6 +1169,9 @@ acquire_lock_with_recovery() {
   _alwr_holder=""
   _alwr_holder_age=""
   _alwr_empty_since=""
+  # FND-0043: why the last attempt failed. "put" = MKD ok but the
+  # sentinel PUT failed; "held" = MKD failed. Picks the final error.
+  _alwr_last_fail=""
 
   # v2.11.x (#132): rewrite the URL when it has a scheme but no
   # embedded user. Without this, lftp 4.9.3 falls back to USER
@@ -1180,8 +1192,9 @@ acquire_lock_with_recovery() {
   # 2x the documented value. Wall-clock tracking makes the
   # timeout honor the action.yml description ("Maximum seconds
   # to wait for the lock") within at most one iteration's worth
-  # of MKD+LIST+RECOVERY/sleep work (worst case ~55s on a stuck
-  # server: 30s MKD timeout + 10s LIST + 10s RMD + sleep(poll)).
+  # of work (worst case ~55s on a stuck server: 30s MKD timeout +
+  # 10s LIST + 10s RMD + sleep(poll); on the sentinel-PUT-failure
+  # path ~70s: 30s MKD + 30s PUT + 10s cleanup + sleep(poll)).
   #
   # Edge case: busybox ash's `$((..))` is signed 32-bit, so a
   # timeout of `999999999` (~31 years) overflows to a negative
@@ -1219,8 +1232,9 @@ acquire_lock_with_recovery() {
     # v2.11.10 (#294): wall-clock check at the top of every
     # iteration. timeout=0 keeps deadline=0 and we skip this
     # check entirely (the fail-fast semantic is enforced by the
-    # `if [ "${_alwr_timeout}" = "0" ]; then return 1` branch
-    # further down). For positive timeouts, the MKD+LIST+recovery
+    # `if [ "${_alwr_timeout}" = "0" ]` branches further down,
+    # after a failed MKD and after a failed sentinel PUT). For
+    # positive timeouts, the MKD+LIST+recovery
     # sequence on the previous iteration may have eaten into the
     # budget, so we check before doing any more work. POSIX
     # `date +%s` is portable to busybox ash (the action runtime)
@@ -1295,11 +1309,19 @@ acquire_lock_with_recovery() {
       # Mirrors the recovery branch's set +e / set -e / >/dev/null
       # swallow semantics (transient RMD failures are not actionable).
       if [ "${_alwr_put_rc}" -ne 0 ]; then
+        _alwr_last_fail="put"
         set +e
         timeout 10s lftp "${_alwr_server_eff}" \
           -e "${_alwr_preamble} quote DELE ${_alwr_path}/${_alwr_sentinel}; quote RMD ${_alwr_path}; quit;" \
           >/dev/null 2>&1
         set -e
+        # FND-0043: a persistent PUT failure (quota, permissions, a
+        # refused name) must neither loop forever with timeout=0 nor
+        # spin MKD/PUT/RMD without a pause until the deadline.
+        if [ "${_alwr_timeout}" = "0" ]; then
+          break
+        fi
+        sleep "${_alwr_poll}"
         continue
       fi
 
@@ -1309,6 +1331,7 @@ acquire_lock_with_recovery() {
     fi
 
     # Step 2: MKD failed (550 = held, or connection refused).
+    _alwr_last_fail="held"
     # F2 audit (#251): when timeout=0 the caller has explicitly
     # opted out of lock-orchestration ("fail immediately when
     # held"). Skip the stale-recovery path entirely: any
@@ -1418,6 +1441,13 @@ EOF
         -e "${_alwr_recover_script}" \
         >/dev/null 2>&1
       set -e
+      # FND-0083: whatever dir we see next is a new incarnation (or
+      # ours failed to go); time its sentinel-less period from scratch.
+      _alwr_empty_since=""
+      # FND-0043: back off, so a persistently failing RMD cannot
+      # hammer the server. The deadline check at the loop top still
+      # bounds the total wait.
+      sleep "${_alwr_poll}"
       continue
     fi
 
@@ -1425,6 +1455,11 @@ EOF
     sleep "${_alwr_poll}"
   done
 
+  if [ "${_alwr_last_fail}" = "put" ]; then
+    printf 'ERROR: lock dir %s was created but the sentinel upload to %s/%s failed; check write permission and quota under concurrency_lock_path\n' \
+      "${_alwr_path}" "${_alwr_path}" "${_alwr_sentinel}" >&2
+    return 2
+  fi
   if [ -n "${_alwr_holder}" ]; then
     printf 'ERROR: lock %s is held by %s (age %s s); if that run is gone, delete %s/%s and then %s on the server\n' \
       "${_alwr_path}" "${_alwr_holder}" "${_alwr_holder_age}" "${_alwr_path}" "${_alwr_holder}" "${_alwr_path}" >&2

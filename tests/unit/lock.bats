@@ -1077,3 +1077,277 @@ LIST
   # Clean up the body file we protected from the rm call.
   command rm -f "${CAPTURED_BODY_FILE}" 2>/dev/null || true
 }
+# ----------------------------------------------------------------------------
+# FND-0043 / FND-0083: sentinel-PUT failure must neither loop without a pause
+# nor be reported as a held lock; the takeover path also backs off.
+#
+# _install_put_fakes builds on _install_lock_fakes (virtual clock, `date`,
+# `sleep`) and replaces `lftp` and `sleep` so every call is recorded in one
+# ordered event log, FAKE_EVENTS, one line per event:
+#   "<clock> mkdir|put|cleanup|recover|list"   (an lftp call)
+#   "<clock> sleep <n>"                         (a sleep, before advancing)
+# `cleanup` = the DELE+RMD script after a failed PUT; `recover` = the stale
+# takeover script (it starts with `cls -la .`). Each lftp call advances the
+# clock by 1, so a loop without sleeps still ends at its deadline.
+# Behaviour knobs (env):
+#   FAKE_PUT_FAIL=1       every sentinel PUT fails
+#   FAKE_MKD_OK_UNTIL=N   mkdir calls 1..N succeed, later ones fail
+#                         (default: all succeed)
+#   FAKE_MKD_AFTER_RMD=1  mkdir fails until an RMD was seen, then succeeds
+# After FAKE_MAX_CALLS lftp calls the fake kills FAKE_KILL_PID, so a loop that
+# never ends (the FND-0043 bug with timeout "0") fails the test instead of
+# hanging it. _run_lock runs the function in a subshell for that reason.
+# ----------------------------------------------------------------------------
+
+_install_put_fakes() {
+  _install_lock_fakes
+  export FAKE_EVENTS="${BATS_TEST_TMPDIR}/events"
+  export FAKE_CALL_N="${BATS_TEST_TMPDIR}/call-n"
+  export FAKE_MKD_N="${BATS_TEST_TMPDIR}/mkd-n"
+  export FAKE_MAX_CALLS=40
+  : > "${FAKE_EVENTS}"
+  rm -f "${FAKE_CALL_N}" "${FAKE_MKD_N}"
+  cat > "${BATS_TEST_TMPDIR}/bin/sleep" <<'FAKE'
+#!/bin/sh
+echo "$(cat "${FAKE_CLOCK}") sleep $1" >> "${FAKE_EVENTS}"
+echo $(( $(cat "${FAKE_CLOCK}") + $1 )) > "${FAKE_CLOCK}"
+FAKE
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"
+n=$(( $(cat "${FAKE_CALL_N}" 2>/dev/null || echo 0) + 1 ))
+echo "${n}" > "${FAKE_CALL_N}"
+if [ "${n}" -gt "${FAKE_MAX_CALLS}" ]; then
+  echo "runaway loop: more than ${FAKE_MAX_CALLS} lftp calls" >&2
+  kill -KILL "${FAKE_KILL_PID}"
+  exit 99
+fi
+now=$(cat "${FAKE_CLOCK}")
+echo $(( now + 1 )) > "${FAKE_CLOCK}"
+case "$*" in
+  *"put "*)
+    echo "${now} put" >> "${FAKE_EVENTS}"
+    [ "${FAKE_PUT_FAIL:-0}" = 1 ] && exit 1
+    exit 0 ;;
+  *"quote RMD"*)
+    : > "${FAKE_RMD_DONE}"
+    case "$*" in
+      *"cls -la ."*) echo "${now} recover" >> "${FAKE_EVENTS}" ;;
+      *) echo "${now} cleanup" >> "${FAKE_EVENTS}" ;;
+    esac
+    exit 0 ;;
+  *"mkdir "*)
+    echo "${now} mkdir" >> "${FAKE_EVENTS}"
+    k=$(( $(cat "${FAKE_MKD_N}" 2>/dev/null || echo 0) + 1 ))
+    echo "${k}" > "${FAKE_MKD_N}"
+    if [ "${FAKE_MKD_AFTER_RMD:-0}" = 1 ]; then
+      [ -e "${FAKE_RMD_DONE}" ] && exit 0
+      exit 1
+    fi
+    [ "${k}" -le "${FAKE_MKD_OK_UNTIL:-1000000}" ] && exit 0
+    exit 1 ;;
+  *"cls -la "*)
+    echo "${now} list" >> "${FAKE_EVENTS}"
+    n=$(( $(cat "${FAKE_LIST_N}" 2>/dev/null || echo 0) + 1 ))
+    echo "${n}" > "${FAKE_LIST_N}"
+    t=$(printf '%s' "$*" | sed -n 's/.*cls -la \([^;]*\);.*/\1/p')
+    . "${FAKE_LIST_SH}"
+    exit 0 ;;
+esac
+exit 0
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/sleep" "${BATS_TEST_TMPDIR}/bin/lftp"
+}
+
+# _run_lock TIMEOUT POLL: call the function in a subshell (so the runaway
+# guard can kill it); sets LOCK_RC, stderr goes to ${LOCK_ERR}.
+_run_lock() {
+  LOCK_ERR="${BATS_TEST_TMPDIR}/stderr"
+  LOCK_RC=0
+  (
+    FAKE_KILL_PID=${BASHPID}
+    export FAKE_KILL_PID
+    acquire_lock_with_recovery \
+      "ftp://example.test" ".lftp-deployment.lock" "$1" "$2" "ftptest"
+  ) 2> "${LOCK_ERR}" || LOCK_RC=$?
+}
+
+# _count_events PATTERN: number of FAKE_EVENTS lines matching the ERE.
+_count_events() {
+  grep -cE "$1" "${FAKE_EVENTS}" || true
+}
+
+_dump_lock_debug() {
+  echo "rc=${LOCK_RC}"; echo "--- events"; cat "${FAKE_EVENTS}"
+  echo "--- stderr"; cat "${LOCK_ERR}"
+}
+
+@test "acquire_lock_with_recovery: FND-0043: PUT always fails with timeout 0 -> rc 2 after exactly one MKD/PUT/cleanup cycle, no sleep" {
+  _install_put_fakes
+  export FAKE_PUT_FAIL=1
+  _run_lock 0 5
+  _dump_lock_debug
+  [ "${LOCK_RC}" -eq 2 ]
+  # Exactly 3 lftp calls: mkdir, put, DELE+RMD.
+  [ "$(wc -l < "${FAKE_LFTP_LOG}")" -eq 3 ]
+  [ "$(_count_events ' mkdir$')" -eq 1 ]
+  [ "$(_count_events ' put$')" -eq 1 ]
+  [ "$(_count_events ' cleanup$')" -eq 1 ]
+  grep -q "quote DELE .lftp-deployment.lock/.lftp-deployment.lock.*quote RMD .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
+  # No pause, no listing, no takeover.
+  [ "$(_count_events ' sleep ')" -eq 0 ]
+  [ "$(_count_events ' (list|recover)$')" -eq 0 ]
+  grep -qF "ERROR: lock dir .lftp-deployment.lock was created but the sentinel upload to .lftp-deployment.lock/.lftp-deployment.lock." "${LOCK_ERR}"
+  grep -qF "failed; check write permission and quota under concurrency_lock_path" "${LOCK_ERR}"
+  if grep -qE "is held by|another deployment" "${LOCK_ERR}"; then
+    echo "a PUT failure must not be reported as a held lock"; exit 1
+  fi
+}
+
+@test "acquire_lock_with_recovery: FND-0043: PUT always fails with a positive timeout -> sleeps after every cleanup, ends rc 2 with the upload error" {
+  _install_put_fakes
+  export FAKE_PUT_FAIL=1
+  # Per round: mkdir +1, put +1, cleanup +1, sleep 3 = 6 virtual seconds.
+  # Rounds start at t=0 and t=6 (< 10); the check at t=12 ends the loop.
+  _run_lock 10 3
+  _dump_lock_debug
+  [ "${LOCK_RC}" -eq 2 ]
+  [ "$(_count_events ' mkdir$')" -eq 2 ]
+  [ "$(_count_events ' cleanup$')" -eq 2 ]
+  [ "$(_count_events ' sleep 3$')" -eq 2 ]
+  # Every cleanup is followed by a sleep before anything else (the next mkdir).
+  awk '
+    prev == "cleanup" && $2 != "sleep" { bad = 1 }
+    { prev = $2 }
+    END { exit bad }
+  ' "${FAKE_EVENTS}"
+  [ "$(awk '$2 == "cleanup" { getline nxt; split(nxt, a, " "); print a[2] }' "${FAKE_EVENTS}" | sort -u)" = "sleep" ]
+  # Never a LIST or a takeover: the lock is not held by anyone.
+  [ "$(_count_events ' (list|recover)$')" -eq 0 ]
+  grep -qF "was created but the sentinel upload to" "${LOCK_ERR}"
+  if grep -qE "is held by|another deployment" "${LOCK_ERR}"; then
+    echo "a PUT failure must not be reported as a held lock"; exit 1
+  fi
+}
+
+@test "acquire_lock_with_recovery: FND-0043: a PUT failure followed by a held MKD reports the held lock (rc 1), not the upload error" {
+  fresh_stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  _install_put_fakes
+  export FAKE_PUT_FAIL=1
+  # Round 1: mkdir ok, put fails. From round 2 on mkdir fails (held) and the
+  # listing shows a live holder's fresh sentinel.
+  export FAKE_MKD_OK_UNTIL=1
+  cat > "${FAKE_LIST_SH}" <<LIST
+echo ".lftp-deployment.lock.${fresh_stamp}.7.info"
+LIST
+  _run_lock 10 3
+  _dump_lock_debug
+  [ "${LOCK_RC}" -eq 1 ]
+  [ "$(_count_events ' put$')" -eq 1 ]
+  [ "$(_count_events ' list$')" -ge 1 ]
+  grep -qF "ERROR: lock .lftp-deployment.lock is held by .lftp-deployment.lock.${fresh_stamp}.7.info" "${LOCK_ERR}"
+  if grep -qF "sentinel upload" "${LOCK_ERR}"; then
+    echo "the last failure was a held lock, not the PUT"; exit 1
+  fi
+}
+
+@test "acquire_lock_with_recovery: FND-0043: the takeover path sleeps one poll between the recovery DELE+RMD and the next MKD" {
+  old_stamp=$(_stamp_seconds_ago 604800)
+  _install_put_fakes
+  export FAKE_MKD_AFTER_RMD=1
+  cat > "${FAKE_LIST_SH}" <<LIST
+echo ".lftp-deployment.lock.${old_stamp}.9.info"
+LIST
+  _run_lock 60 3
+  _dump_lock_debug
+  [ "${LOCK_RC}" -eq 0 ]
+  [ "$(_count_events ' recover$')" -eq 1 ]
+  # recover is directly followed by "sleep 3", then by the next mkdir.
+  after=$(awk '$2 == "recover" { for (i = 0; i < 2; i++) { getline l; printf "%s;", l } }' "${FAKE_EVENTS}" \
+    | sed -E 's/[0-9]{7} //g')
+  [ "${after}" = "sleep 3;mkdir;" ]
+}
+
+# FND-0083 (cheap part). Timeline with LOCK_EMPTY_GRACE=20, poll 5: every
+# loop is mkdir +1, cls +1, sleep 5 (7 s). The listing is always empty and
+# the RMD never removes the dir (mkdir keeps failing). The clock starts at
+# the first empty LIST (L1); the 4th LIST is the first one 21 s later, so the
+# first takeover is on L4. After it the waiter must time the dir from
+# scratch: L5 starts the new clock and the next takeover is on L8, i.e. 4
+# LISTs after the first recover. Without the reset the L5 listing already
+# exceeds the grace and the second takeover comes right after L5.
+@test "acquire_lock_with_recovery: FND-0083: the empty-dir grace clock restarts after our own takeover" {
+  _install_put_fakes
+  LOCK_EMPTY_GRACE=20
+  export FAKE_MKD_OK_UNTIL=0
+  : > "${FAKE_LIST_SH}"
+  _run_lock 60 5
+  _dump_lock_debug
+  [ "${LOCK_RC}" -eq 1 ]
+  [ "$(_count_events ' recover$')" -ge 2 ]
+  # Waiter LISTs between the first and the second recover.
+  between=$(awk '$2 == "recover" { n++; next } n == 1 && $2 == "list" { c++ } n == 2 { exit } END { print c + 0 }' "${FAKE_EVENTS}")
+  [ "${between}" -eq 4 ]
+  # In time: the second recover is >= LOCK_EMPTY_GRACE after the first
+  # list that followed the first recover.
+  t_list=$(awk '$2 == "recover" { n++; next } n == 1 && $2 == "list" { print $1; exit }' "${FAKE_EVENTS}")
+  t_second=$(awk '$2 == "recover" { n++; if (n == 2) { print $1; exit } }' "${FAKE_EVENTS}")
+  [ $(( t_second - t_list )) -ge 20 ]
+}
+
+# ----------------------------------------------------------------------------
+# FND-0043 at the entrypoint level. entrypoint.sh only runs inside the image
+# (it sources /app/lib.sh and writes /home/lftp/.netrc), so the test runs a
+# scratch copy of it with those two paths rewritten into BATS_TEST_TMPDIR and
+# a lib.sh copy whose acquire_lock_with_recovery is replaced by a stub that
+# returns $FAKE_ACQ_RC. The real entrypoint code path (validation, netrc, EXIT
+# trap, the lock block) executes; no network is involved (the EXIT trap's
+# release_lock_safely returns early because no sentinel was acquired).
+# ----------------------------------------------------------------------------
+
+_run_entrypoint_with_lock_rc() {
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local app="${BATS_TEST_TMPDIR}/app"
+  mkdir -p "${app}" "${BATS_TEST_TMPDIR}/home/lftp"
+  cp "${root}/lib.sh" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  cat >> "${app}/lib.sh" <<'STUB'
+
+acquire_lock_with_recovery() { return "${FAKE_ACQ_RC}"; }
+STUB
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${BATS_TEST_TMPDIR}/home/lftp#g" \
+    "${root}/entrypoint.sh" > "${app}/entrypoint.sh"
+  FAKE_ACQ_RC="$1" \
+  INPUT_SERVER="ftp://example.test" INPUT_USER="ftptest" INPUT_PASSWORD="pw" \
+  INPUT_LOCAL_DIR="${BATS_TEST_TMPDIR}/" INPUT_REMOTE_DIR="./" \
+  INPUT_CONCURRENCY_LOCK="true" INPUT_CONCURRENCY_LOCK_TIMEOUT="7" \
+    run sh -eu "${app}/entrypoint.sh"
+}
+
+@test "entrypoint: FND-0043: lock status 2 (sentinel upload failed) exits 1 without the 'another deployment' line" {
+  _run_entrypoint_with_lock_rc 2
+  echo "status=${status}"; echo "${output}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"ERROR: could not acquire concurrency lock at .lftp-deployment.lock within 7 seconds"* ]]
+  [[ "${output}" != *"another deployment is currently in progress"* ]]
+  [[ "${output}" == *'see README "Concurrency / deployment lock"'* ]]
+}
+
+@test "entrypoint: FND-0043: lock status 1 (held / timed out) still exits 1 with the 'another deployment' line" {
+  _run_entrypoint_with_lock_rc 1
+  echo "status=${status}"; echo "${output}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"ERROR: could not acquire concurrency lock at .lftp-deployment.lock within 7 seconds"* ]]
+  [[ "${output}" == *"another deployment is currently in progress"* ]]
+  [[ "${output}" == *'see README "Concurrency / deployment lock"'* ]]
+}
+
+# The status must be captured as `fn ... || LOCK_RC=$?`; `if ! fn` would turn
+# status 2 into 1 (the negation) and lose it.
+@test "entrypoint: FND-0043: acquire_lock_with_recovery status is captured with '|| LOCK_RC=\$?', not 'if !'" {
+  entry="${BATS_TEST_DIRNAME}/../../entrypoint.sh"
+  grep -qF '"${INPUT_USER}" || LOCK_RC=$?' "${entry}"
+  if grep -Eq '(if|while|until)[[:space:]]+!?[[:space:]]*acquire_lock_with_recovery|!+[[:space:]]*acquire_lock_with_recovery' "${entry}"; then
+    echo "acquire_lock_with_recovery is negated or used as a condition"; exit 1
+  fi
+}
