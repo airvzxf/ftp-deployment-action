@@ -412,7 +412,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | net_timeout            | NET - Sets the network protocol timeout.                                              | No       | 15s     | N/A                                                                                               |
 | dns_max_retries        | DNS - 0 no limit trying to lookup an address otherwise try only this number of times. | No       | 8       | N/A                                                                                               |
 | dns_fatal_timeout      | DNS - Time for DNS queries.<br> Set to "never" to disable.                            | No       | 10s     | N/A                                                                                               |
-| lftp_settings          | Any other settings that you find in the MAN pages for the LFTP package.               | No       | ""      | "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';" |
+| lftp_settings          | Any other settings that you find in the MAN pages for the LFTP package. **Trusted input**: it can run shell commands and read the FTP credentials, so never pass it untrusted values (see [Security](#security)). | No       | ""      | "set cache:cache-empty-listings true; set cmd:status-interval 1s; set http:user-agent 'firefox';" |
 | exclude                | Comma-separated shell globs. Matching files are **not uploaded** and **not deleted**. | No       | ""      | "*.map, *.bak, node_modules/" |
 | debug                  | If "true", print resolved input values to the log.                                    | No       | false   | N/A                                                                                               |
 | dry_run                | If "true", compute the mirror plan but do not transfer or delete any file. It still connects and logs in, so an unreachable server or a wrong password fails. | No       | false   | N/A                                                                                               |
@@ -826,10 +826,19 @@ instead of silently breaking the lftp `-e` tokeniser. The
 `server` input additionally rejects URL userinfo that embeds a
 password (the `ftp://user:pass@host` form — lftp would otherwise
 authenticate with the embedded credentials and silently bypass
-the action's documented credential source). `lftp_settings` is lightly sanitised:
-control characters, newlines, backtick, dollar, and `!` are
-rejected, and no more than three semicolon-chained directives
-are allowed.
+the action's documented credential source).
+
+`lftp_settings` is **trusted input**. Its value runs as lftp
+commands inside the container, and lftp commands can run shell
+commands and read the FTP credentials, so setting it is equivalent
+to running commands in the container with access to the password.
+Never pass it values from untrusted sources (reusable-workflow
+inputs, matrix values or PR data you do not control). The action
+rejects control characters, newlines, backtick, dollar, `!` and
+more than three semicolon-chained directives, but these checks
+only catch mistakes; they are not a security boundary (pipes,
+`source -e` and even a plain `set cmd:at-exit ...` still run shell
+commands).
 
 The `exclude` input uses a separate `validate_glob_pattern`
 validator because its globs are passed to the lftp `mirror` command.
