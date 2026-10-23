@@ -308,6 +308,132 @@ else
   fail "S15 release.yml tag-input handling:${_s15}"
 fi
 
+# S16 — release.yml binds the signed tag to the built commit (FND-0027).
+#       verify-tag-reachability and verify-tag-signature fetch the mutable
+#       tag separately, so the commit build checks out (tag_commit) could
+#       differ from the commit of the tag object whose signature was
+#       verified. The first step of `build` ("bind-commit") must fail
+#       unless both values are 40 lowercase hex characters and equal.
+#       (a) the bind-commit run block is extracted and run under bash
+#           with equal SHAs (exit 0) and with every bad pair (non-zero);
+#       (b) the wiring: bind-commit is steps[0] of build, takes its two
+#           values from the two verify jobs' outputs, build needs both
+#           jobs, verify-tag-signature exports verified_commit from the
+#           step that runs `git verify-tag` and `git rev-parse` on the
+#           same ref, and the run block holds no `${{ }}` expression.
+#       RELEASE_YML overrides the file under test (used to prove the
+#       check fails on the pre-fix workflow).
+_s16=""
+_tmp16=$(mktemp -d) || _tmp16=""
+if [ -z "${_tmp16}" ] || [ ! -r "${_rel}" ] || ! command -v bash >/dev/null 2>&1; then
+  _s16="${_s16} setup(need mktemp, bash and a readable ${_rel})"
+else
+  s16_run() { # $1=VERIFIED_COMMIT $2=TAG_COMMIT
+    VERIFIED_COMMIT="$1" TAG_COMMIT="$2" bash "${_tmp16}/bind.sh" >/dev/null 2>&1
+  }
+  s16_bad() { # $1=label $2=VERIFIED_COMMIT $3=TAG_COMMIT
+    if s16_run "$2" "$3"; then
+      _s16="${_s16} (a)($1 was accepted)"
+    fi
+  }
+  awk '
+    /^      - name: Fail if the verified tag commit differs from tag_commit/ { step = 1; next }
+    step && /^        run: \|/            { cap = 1; next }
+    cap && /^          /                 { sub(/^          /, ""); print; next }
+    cap && /^[[:space:]]*$/              { print ""; next }
+    cap                                  { exit }
+  ' "${_rel}" > "${_tmp16}/bind.sh"
+  if [ ! -s "${_tmp16}/bind.sh" ]; then
+    _s16="${_s16} (a)(bind-commit run block not found)"
+  else
+    # shellcheck disable=SC2016
+    if grep -qF '${{' "${_tmp16}/bind.sh"; then
+      _s16="${_s16} (b)(bind-commit run block contains a template expression)"
+    fi
+    _a=$(printf 'a%.0s' $(seq 1 40))
+    _b=$(printf 'b%.0s' $(seq 1 40))
+    _up=$(printf 'A%.0s' $(seq 1 40))
+    _39=$(printf 'a%.0s' $(seq 1 39))
+    _41=$(printf 'a%.0s' $(seq 1 41))
+    _nl=$(printf '%s\n%s' "${_a}" "${_b}")
+    if ! s16_run "${_a}" "${_a}"; then
+      _s16="${_s16} (a)(equal valid SHAs were rejected)"
+    fi
+    s16_bad "different valid SHAs" "${_a}" "${_b}"
+    s16_bad "both empty" "" ""
+    s16_bad "empty verified_commit" "" "${_a}"
+    s16_bad "empty tag_commit" "${_a}" ""
+    s16_bad "uppercase hex" "${_up}" "${_up}"
+    s16_bad "39 characters" "${_39}" "${_39}"
+    s16_bad "41 characters" "${_41}" "${_41}"
+    s16_bad "41 characters (tag_commit only)" "${_a}" "${_41}"
+    s16_bad "SHA plus newline plus second SHA" "${_nl}" "${_nl}"
+    s16_bad "multi-line verified_commit, single tag_commit" "${_nl}" "${_a}"
+  fi
+  rm -rf "${_tmp16}"
+  # (b) wiring, parsed as YAML.
+  if "${PY}" -c 'import yaml' >/dev/null 2>&1; then
+    _w16=$("${PY}" -I - "${_rel}" <<'PYEOF'
+import re, sys, yaml
+
+doc = yaml.safe_load(open(sys.argv[1]))
+jobs = doc.get("jobs") or {}
+bad = []
+build = jobs.get("build") or {}
+sig = jobs.get("verify-tag-signature") or {}
+
+steps = build.get("steps") or []
+first = steps[0] if steps else {}
+if first.get("id") != "bind-commit":
+    bad.append("build steps[0] is not bind-commit (id=%r)" % first.get("id"))
+if first.get("name") != "Fail if the verified tag commit differs from tag_commit":
+    bad.append("bind-commit step name differs (%r)" % first.get("name"))
+env = first.get("env") or {}
+if env.get("VERIFIED_COMMIT") != "${{ needs.verify-tag-signature.outputs.verified_commit }}":
+    bad.append("bind-commit VERIFIED_COMMIT env is %r" % env.get("VERIFIED_COMMIT"))
+if env.get("TAG_COMMIT") != "${{ needs.verify-tag-reachability.outputs.tag_commit }}":
+    bad.append("bind-commit TAG_COMMIT env is %r" % env.get("TAG_COMMIT"))
+if "${{" in (first.get("run") or ""):
+    bad.append("bind-commit run block contains a template expression")
+
+needs = build.get("needs") or []
+if isinstance(needs, str):
+    needs = [needs]
+for j in ("verify-tag-signature", "verify-tag-reachability"):
+    if j not in needs:
+        bad.append("build.needs lacks %s" % j)
+
+out = (sig.get("outputs") or {}).get("verified_commit")
+if out != "${{ steps.verify.outputs.VERIFIED_COMMIT }}":
+    bad.append("verify-tag-signature outputs.verified_commit is %r" % out)
+
+vsteps = [s for s in (sig.get("steps") or []) if s.get("id") == "verify"]
+if len(vsteps) != 1:
+    bad.append("verify-tag-signature has %d steps with id verify" % len(vsteps))
+else:
+    run = vsteps[0].get("run") or ""
+    if "git verify-tag" not in run:
+        bad.append("verify step lacks git verify-tag")
+    if 'git rev-parse "refs/tags/${TAG}^{commit}"' not in run:
+        bad.append("verify step lacks git rev-parse of refs/tags/${TAG}^{commit}")
+    if not re.search(r'VERIFIED_COMMIT=.*>>\s*"?\$GITHUB_OUTPUT"?', run):
+        bad.append("verify step does not write VERIFIED_COMMIT to GITHUB_OUTPUT")
+print("; ".join(bad))
+PYEOF
+    ) || _w16="could not parse ${_rel} as YAML"
+    if [ -n "${_w16}" ]; then
+      _s16="${_s16} (b)(${_w16})"
+    fi
+  else
+    _s16="${_s16} (b)(no YAML parser: install PyYAML or set PYTHON)"
+  fi
+fi
+if [ -z "${_s16}" ]; then
+  pass "S16 release.yml build refuses a tag commit that differs from the verified one"
+else
+  fail "S16 release.yml tag-commit binding:${_s16}"
+fi
+
 if [ "${_failed}" -ne 0 ]; then
   printf '\nRESULT: FAIL\n'
   exit 1
