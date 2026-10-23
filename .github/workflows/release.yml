@@ -302,6 +302,18 @@ jobs:
           set -euo pipefail
           if git verify-tag "refs/tags/${TAG}"; then
             echo "✓ ${TAG} is signed by a key in .github/trusted-signers"
+            # git verify-tag does not check that the signed object's
+            # own `tag` header names this ref; without this, an old
+            # signed tag object re-pushed as refs/tags/${TAG} passes.
+            TAG_NAME="$(git cat-file tag "refs/tags/${TAG}" | sed -n '1,/^$/s/^tag //p')"
+            if [ -z "${TAG_NAME}" ]; then
+              echo "::error::refs/tags/${TAG} has no tag header (not a tag object)"
+              exit 1
+            fi
+            if [ "${TAG_NAME}" != "${TAG}" ]; then
+              echo "::error::tag object is named '${TAG_NAME}' but was pushed as refs/tags/${TAG}"
+              exit 1
+            fi
             VERIFIED_COMMIT="$(git rev-parse "refs/tags/${TAG}^{commit}")"
             echo "VERIFIED_COMMIT=${VERIFIED_COMMIT}" >> "$GITHUB_OUTPUT"
             exit 0
