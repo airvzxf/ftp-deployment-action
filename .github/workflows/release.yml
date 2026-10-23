@@ -25,7 +25,10 @@ name: Release
 #   structural check.
 # * `build` checks out the **immutable commit SHA** resolved by
 #   `verify-tag-reachability` (not the mutable ref), so a tag
-#   force-push mid-run cannot redirect the build.
+#   force-push mid-run cannot redirect the build. Its first step
+#   fails unless that SHA equals the commit of the tag object
+#   `verify-tag-signature` verified, so if the two verify jobs'
+#   separate fetches disagree, `build` stops before checkout.
 # * `publish` only creates the GitHub Release page. The
 #   `contents: write` permission is scoped to this job, not the
 #   workflow as a whole.
@@ -221,6 +224,8 @@ jobs:
     permissions:
       contents: read
     needs: validate-tag-input
+    outputs:
+      verified_commit: ${{ steps.verify.outputs.VERIFIED_COMMIT }}
     steps:
       - name: Checkout at ref
         # Need a checkout so `git show` and `git fetch` have a
@@ -290,12 +295,15 @@ jobs:
           fi
 
       - name: Verify tag signature
+        id: verify
         env:
           TAG: ${{ needs.validate-tag-input.outputs.tag }}
         run: |
           set -euo pipefail
-          if git verify-tag "${TAG}"; then
+          if git verify-tag "refs/tags/${TAG}"; then
             echo "✓ ${TAG} is signed by a key in .github/trusted-signers"
+            VERIFIED_COMMIT="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+            echo "VERIFIED_COMMIT=${VERIFIED_COMMIT}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           {
@@ -340,6 +348,28 @@ jobs:
       attestations: write
     needs: [validate-tag-input, verify-tag-reachability, verify-tag-signature]
     steps:
+      # The verify jobs fetch the mutable tag separately. Refuse to
+      # build unless the commit of the tag object whose signature was
+      # verified is the commit reachability approved (FND-0027).
+      - name: Fail if the verified tag commit differs from tag_commit
+        id: bind-commit
+        env:
+          VERIFIED_COMMIT: ${{ needs.verify-tag-signature.outputs.verified_commit }}
+          TAG_COMMIT: ${{ needs.verify-tag-reachability.outputs.tag_commit }}
+        run: |
+          set -euo pipefail
+          for pair in "verified_commit=${VERIFIED_COMMIT}" "tag_commit=${TAG_COMMIT}"; do
+            if ! [[ "${pair#*=}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::${pair%%=*} '${pair#*=}' is not a 40-char lowercase hex SHA"
+              exit 1
+            fi
+          done
+          if [ "${VERIFIED_COMMIT}" != "${TAG_COMMIT}" ]; then
+            echo "::error::Signed tag points at ${VERIFIED_COMMIT}, but reachability approved ${TAG_COMMIT}; the tag moved between the verify jobs"
+            exit 1
+          fi
+          echo "✓ verified tag commit equals tag_commit (${TAG_COMMIT})"
+
       # v2.10.0+: this step resolves the tag/version AND
       # decides which secondary registries are enabled, based
       # on the presence of DOCKERHUB_USERNAME+DOCKERHUB_TOKEN
@@ -508,7 +538,8 @@ jobs:
       # SHA-pinned checkout: closes the TOCTOU gap. A tag
       # force-push that arrives mid-run cannot redirect
       # checkout away from the commit the two verify jobs just
-      # approved.
+      # approved (the first step of this job checks that both
+      # jobs saw the same commit).
       - name: Checkout source at the pinned tag SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
