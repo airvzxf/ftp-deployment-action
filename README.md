@@ -8,7 +8,7 @@ This GitHub action copies the files via FTP from your Git project to your server
 
 ## Security and SSL
 
-By default, `ftp_ssl_allow` is set to `true` to ensure your connection is encrypted, and `ssl_verify_certificate` is also set to `true`, so the action refuses to connect to a server with an invalid, expired, or hostname-mismatched certificate. **This is a breaking change from v1.x**: if you connect to a server with a self-signed certificate or a direct IP, the action will now fail with a TLS error. To opt back into the v1.x behaviour, set `ssl_verify_certificate: false` explicitly in your workflow.
+By default, `ftp_ssl_allow` is set to `true` so lftp tries to encrypt the connection (it falls back to cleartext if the server refuses; use `ftps://` or `lftp_settings: "set ftp:ssl-force true;"` to require TLS), and `ssl_verify_certificate` is also set to `true`, so the action refuses to connect to a server with an invalid, expired, or hostname-mismatched certificate. **This is a breaking change from v1.x**: if you connect to a server with a self-signed certificate or a direct IP, the action will now fail with a TLS error. To opt back into the v1.x behaviour, set `ssl_verify_certificate: false` explicitly in your workflow.
 
 > **Note on direct-IP connections**: lftp cannot validate a hostname against an IP-address certificate, so `ssl_verify_certificate: true` requires both a valid certificate and a hostname (not a bare IP) in the `server` input.
 
@@ -22,7 +22,7 @@ yesterday on a different FTP" reports.
 
 | `server` scheme | `ftp_ssl_allow` | What you get | Default port |
 |---|---|---|---|
-| `ftp://host` | `true` (default) | **Explicit FTPS** ([RFC 4217](https://datatracker.ietf.org/doc/html/rfc4217)). Plain TCP connect, the server advertises `AUTH`, lftp upgrades the control channel with `AUTH TLS`, then `PROT P` for data. Password is sent inside TLS. This is the default and the most common deployment. | 21 |
+| `ftp://host` | `true` (default) | **Explicit FTPS** ([RFC 4217](https://datatracker.ietf.org/doc/html/rfc4217)). Plain TCP connect, then lftp sends `AUTH TLS` to upgrade the control channel (without waiting for the server's `FEAT` list, because the `ftp_use_feat` input defaults to `false`), then `PROT P` for data. The upgrade is opportunistic: if the server, or a network attacker, refuses `AUTH TLS`, lftp continues in cleartext and sends the password unprotected. To require TLS, use `ftps://` or add `lftp_settings: "set ftp:ssl-force true;"`. This is the default and the most common deployment. | 21 |
 | `ftp://host` | `false` | **Plain FTP.** Password and file contents are sent in clear. Only use this on a trusted LAN. | 21 |
 | `ftps://host` | `true` (default) | **Implicit FTPS** ([RFC 1738](https://datatracker.ietf.org/doc/html/rfc1738)). TLS from the very first byte — the server's welcome banner is already inside TLS. Most legacy "FTPS" hosting providers (and many Windows-IIS setups) speak this. | 990 |
 | `ftps://host` | `false` | **Inconsistent** — lftp will still try to negotiate TLS because the URL scheme is `ftps://`. The action exits with a protocol error. The `ftp_ssl_allow` input is effectively ignored when the scheme is `ftps://`. | 990 |
@@ -37,8 +37,10 @@ the action does not set it.
 #### Picking the right `server` value
 
 - **Modern shared hoster with TLS** (most "free" or cheap web
-  hosts): `ftp://ftp.example.com` — the action's default gives
-  you explicit FTPS on port 21.
+  hosts): `ftp://ftp.example.com` — the action's default tries
+  explicit FTPS on port 21. Add `lftp_settings: "set
+  ftp:ssl-force true;"` so a refused `AUTH TLS` fails the run
+  instead of falling back to cleartext.
 - **Legacy FTPS host on port 990** (some cPanel / Plesk setups,
   many IIS deployments, some European hosters): use
   `ftps://ftp.example.com` or `ftps://ftp.example.com:990`.
@@ -398,12 +400,12 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | delete                 | Delete remote files that do not exist locally (files matching `exclude` are kept).   | No       | false   | N/A                                                                                               |
 | no_symlinks            | Do not create symbolic links.                                                         | No       | true    | N/A                                                                                               |
 | mirror_verbose         | Mirror verbosity: 0 (quiet) to 3 (most verbose); higher values behave like 3. | No       | 1       | N/A                                                                                               |
-| ftp_ssl_allow          | FTP - Allow SSL encryption.                                                           | No       | true    | N/A                                                                                               |
+| ftp_ssl_allow          | FTP - Try explicit TLS on `ftp://`; falls back to cleartext if refused. See [Security and SSL](#security-and-ssl). | No       | true    | N/A                                                                                               |
 | ssl_verify_certificate | FTP - Verify SSL certificate.                                                         | No       | true    | N/A                                                                                               |
 | ssl_check_hostname     | FTP - Check certificate hostname.                                                     | No       | true    | N/A                                                                                               |
 | tls_max_version        | Highest TLS version for FTPS: `1.2` or `1.3`. See [TLS version](#tls-version).        | No       | 1.2     | N/A                                                                                               |
 | ftp_passive_mode       | FTP - This can be useful if you are behind a firewall or a dumb masquerading router.  | No       | true    | N/A                                                                                               |
-| ftp_use_feat           | FTP - FEAT: Determining what extended features the FTP server supports.               | No       | false   | N/A                                                                                               |
+| ftp_use_feat           | FTP - FEAT: Determining what extended features the FTP server supports. With `true` and `ftp_ssl_allow` `true`, lftp tries TLS only if the `FEAT` reply lists `AUTH TLS`. | No       | false   | N/A                                                                                               |
 | ftp_nop_interval       | FTP - Delay in seconds between NOOP commands when downloading tail of a file.         | No       | 2       | N/A                                                                                               |
 | net_max_retries        | NET - Maximum number of operation without success.<br> 0 unlimited.<br> 1 no retries. | No       | 1       | N/A                                                                                               |
 | net_persist_retries    | NET - Retries of hard (5xx) errors; 0 reports them at once.                           | No       | 0       | N/A                                                                                               |
