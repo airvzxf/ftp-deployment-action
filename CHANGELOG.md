@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`lftp_settings` is trusted input; its character checks are not a security boundary.** The `lftp_settings` description, the README, `SECURITY.md` and the code comments said or implied that rejecting control characters, backtick, `$`, `!` and more than 3 `;` stops a hostile value from running commands or reading `/home/lftp/.netrc`. It does not: with lftp 4.9.3, a pipe (`echo x | cat FILE`), `source -e CMD` and even a pure `set cmd:at-exit "source -e ..."` run shell commands without a rejected character, and `set > FILE` or `debug -o FILE` write local files. Setting `lftp_settings` is equivalent to running commands in the container with access to the FTP credentials, so never pass it values from untrusted sources (reusable-workflow inputs, matrix values or PR data you do not control). `SECURITY.md` now lists it under "Out of scope", and AGENTS.md decision #2 records why neither the deny-list nor a `set`-only allow-list can close the gap. The checks stay as a guard against mistakes. No behaviour change. (FND-0044)
+
 ### Documentation
 
 - **`ftp://` with `ftp_ssl_allow: "true"` is opportunistic TLS, not guaranteed TLS.** The `server` and `ftp_ssl_allow` descriptions, the README and a scenario 03 comment said or implied that the connection, password included, is always sent inside TLS, and that lftp needs `ftp:ssl-force` to send `AUTH TLS` at all. Checked with lftp 4.9.3 against a server that answers 534 to `AUTH TLS`: lftp sends `AUTH TLS`, and when it is refused it continues and sends `USER`/`PASS` in cleartext; with `ftp_use_feat: "true"` and no `AUTH TLS` in the `FEAT` reply it never tries TLS; with `set ftp:ssl-force true;` it aborts before `USER`. To require TLS, use `ftps://` or `lftp_settings: "set ftp:ssl-force true;"`. No behaviour change.

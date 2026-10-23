@@ -86,7 +86,7 @@ inputs:
     required: false
     default: '10s'
   lftp_settings:
-    description: 'Additional raw lftp settings, e.g. "set cache:cache-empty-listings true; set cmd:status-interval 1s;". Appended to the lftp `-e` command; rejected if it contains control characters, backtick, `$`, `!`, more than 3 `;`-chained directives, or a newline.'
+    description: 'Additional raw lftp settings, e.g. "set cache:cache-empty-listings true; set cmd:status-interval 1s;". Appended to the lftp `-e` command; rejected if it contains control characters, backtick, `$`, `!`, more than 3 `;`-chained directives, or a newline. Trusted input: lftp commands can run shell commands in the container and read the FTP credentials, so never pass it values from untrusted sources (reusable-workflow inputs, matrix values or PR data you do not control). The character checks catch mistakes; they are not a security boundary.'
     required: false
     default: ''
   exclude:

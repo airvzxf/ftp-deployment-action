@@ -425,12 +425,16 @@ validate_path() {
 
 # ------------------------------------------------------------------------------
 # validate_lftp_settings VALUE
-#   Light sanitization of the free-form lftp_settings input (B-16). The
+#   Mistake guard for the free-form lftp_settings input (B-16). The
 #   documented use case is 1-3 'set' directives chained with ';', so
 #   we allow up to 3 ';' characters but reject control characters,
-#   backtick, dollar, and the '!' character (lftp's own shell escape,
-#   which would otherwise let an attacker run arbitrary commands
-#   inside the container even within the 3-';' limit).
+#   backtick, dollar, and the '!' character (lftp's own shell escape).
+#   This is NOT a security boundary: lftp_settings is trusted input
+#   (README "Security", SECURITY.md "Out of scope"). With lftp 4.9.3,
+#   pipes (`echo x | cat FILE`), `source -e CMD` and even a pure
+#   `set cmd:at-exit "source -e ..."` run shell commands without any
+#   rejected character, so no deny-list or set-only allow-list can
+#   stop a hostile value (FND-0044, AGENTS.md decision #2).
 # ------------------------------------------------------------------------------
 validate_lftp_settings() {
   _vls_value=$1

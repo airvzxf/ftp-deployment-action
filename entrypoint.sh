@@ -159,7 +159,12 @@ validate_duration "dns_fatal_timeout"      "${INPUT_DNS_FATAL_TIMEOUT}"
 # here, before the first lftp call (lock, dry-run probe, mirror).
 validate_tls_max_version "${INPUT_TLS_MAX_VERSION}"
 apply_tls_max_version    "${INPUT_TLS_MAX_VERSION}"
-# B-16: light sanitization of the free-form lftp_settings input.
+# B-16: mistake guard for the free-form lftp_settings input. Unlike
+# the strict bool/duration checks above, this deny-list does NOT stop
+# a hostile value from reading /home/lftp/.netrc: lftp pipes,
+# `source -e` and `set cmd:at-exit` run shell commands without any
+# rejected character. lftp_settings is trusted input (FND-0044; see
+# the validate_lftp_settings header in lib.sh).
 validate_lftp_settings "${INPUT_LFTP_SETTINGS}"
 # v2.11.8 (#190): INPUT_SERVER flows verbatim into the lftp URL
 # argument (entrypoint.sh:223, 276, 334) and into extract_netrc_host

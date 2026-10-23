@@ -195,3 +195,13 @@ authoritative even if the tab is currently disabled.
   Alpine security team.
 - Misconfiguration of the action (e.g. using `delete: true` with the
   wrong `remote_dir`) that does not require a code change.
+- Commands run through `lftp_settings`. It is **trusted input**: its
+  value runs as lftp commands inside the container, and lftp commands
+  can run shell commands and read the FTP credentials, so setting it is
+  equivalent to running commands in the container with access to the
+  password. Never pass it values from untrusted sources
+  (reusable-workflow inputs, matrix values or PR data you do not
+  control). The character checks in `validate_lftp_settings` catch
+  mistakes; they are not a security boundary, so a value that passes
+  them and still runs a shell command is not a vulnerability in the
+  action.
