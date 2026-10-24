@@ -70,21 +70,25 @@ setup() {
 
 # F2 audit (#314): ::add-mask:: is a SINGLE-LINE workflow command.
 # If INPUT_PASSWORD (or INPUT_USER / INPUT_SERVER) contains CR/LF,
-# pre-fix the runner only masks the FIRST line and the remainder
-# surfaces UNMASKED in the log. Post-fix add_masks strips CR/LF and
-# the rest of the C0 control range from each value before emitting
-# the directive so a multi-line secret collapses into a single
-# masked line.
-@test "add_masks: multi-line INPUT_PASSWORD collapses to a single masked line (issue #314)" {
+# the raw value would put its post-newline part on a bare line of
+# the add_masks output. #314 avoided that by registering the value
+# with CR/LF removed, but that collapsed form never appears in the
+# log, so it masked nothing (FND-0046). add_masks now registers each
+# non-empty CR/LF-separated piece on its own `::add-mask::` line:
+# those pieces are what a multi-line value prints as. The assertions
+# changed accordingly: `::add-mask::first-line-password` is now
+# required (it was forbidden), the collapsed form is now forbidden,
+# and the count is 5. The no-bare-line check is unchanged.
+@test "add_masks: multi-line INPUT_PASSWORD masks each line on its own (issue #314, FND-0046)" {
   INPUT_PASSWORD="first-line-password
 second-line-password"
   INPUT_USER="me"
   INPUT_SERVER="ftp://example.com"
   run add_masks
   [ "$status" -eq 0 ]
-  # Exactly 4 lines (one per non-empty input plus the server host).
+  # Exactly 5 lines (two password pieces, user, server, server host).
   n=$(printf '%s\n' "$output" | grep -c '^::add-mask::')
-  [ "$n" -eq 4 ]
+  [ "$n" -eq 5 ]
   # The post-newline portion must NOT appear on its own line —
   # a bare `second-line-password` line would be the partial-leak
   # signature the runner's single-line parser would expose.
@@ -93,38 +97,129 @@ second-line-password"
     printf '%s\n' "$output"
     false
   fi
-  # The first add-mask line must contain the COLLAPSED value
-  # (CR/LF stripped), NOT just the pre-newline portion. Pre-fix
-  # the line would have been `::add-mask::first-line-password`
-  # with `second-line-password` on a separate unmasked line.
-  printf '%s\n' "$output" | grep -qx "::add-mask::first-line-passwordsecond-line-password"
-  if printf '%s\n' "$output" | grep -qx "::add-mask::first-line-password"; then
-    echo "pre-fix shape detected: add-mask line stops at the first newline (issue #314 regression)"
+  # Each printed line of the value is registered as its own mask.
+  printf '%s\n' "$output" | grep -qx "::add-mask::first-line-password"
+  printf '%s\n' "$output" | grep -qx "::add-mask::second-line-password"
+  # The collapsed form never appears in the log; registering it is
+  # the FND-0046 shape.
+  if printf '%s\n' "$output" | grep -qx "::add-mask::first-line-passwordsecond-line-password"; then
+    echo "collapsed form registered instead of the printed lines (FND-0046 regression)"
     printf '%s\n' "$output"
     false
   fi
 }
 
-@test "add_masks: CR and other control chars in INPUT_USER are stripped (issue #314)" {
+@test "add_masks: CR in INPUT_USER splits the value and never reaches the output (issue #314)" {
   INPUT_PASSWORD="secret"
-  # Mix CR + NUL + BEL — NUL and BEL are in the C0 control range
-  # but the runner's parser does not treat them as line breaks; the
-  # defense-in-depth strip removes all C0 anyway.
+  # Mix CR + BEL + ESC. FND-0046: CR is a line break, so the value
+  # is split there; BEL and ESC are not line breaks and are kept,
+  # because the mask must equal the printed text.
   INPUT_USER=$'alice\rNUL\x07\x1b'
   INPUT_SERVER="ftp://example.com"
   run add_masks
   [ "$status" -eq 0 ]
-  # Exactly 4 masked lines (the server host is the 4th); the bare
-  # "alice" must appear, with no CR / NUL / BEL residue and no
-  # post-newline leakage.
+  # Exactly 5 masked lines (FND-0046: the user value is two pieces,
+  # `alice` and `NUL<BEL><ESC>`; the server host is the 5th). The
+  # bare "alice" must appear, with no CR residue.
   n=$(printf '%s\n' "$output" | grep -c '^::add-mask::')
-  [ "$n" -eq 4 ]
+  [ "$n" -eq 5 ]
   printf '%s\n' "$output" | grep -q "::add-mask::alice"
   if printf '%s' "$output" | grep -q $'\r'; then
     echo "CR survived add_masks stripping (issue #314 regression)"
     printf '%s\n' "$output" | cat -A
     false
   fi
+}
+
+# FND-0046: a multi-line password is printed as separate lines, so
+# each line gets exactly one directive. Counts use grep -cxF (whole
+# line, fixed string); `|| true` keeps a zero count from aborting
+# the test before the assertion.
+@test "add_masks: FND-0046 multi-line password gets exactly one mask per line" {
+  INPUT_PASSWORD=$'first-line-password\nsecond-line-password'
+  unset INPUT_USER INPUT_SERVER
+  run add_masks
+  [ "$status" -eq 0 ]
+  n=$(printf '%s\n' "$output" | grep -cxF '::add-mask::first-line-password' || true)
+  [ "$n" -eq 1 ]
+  n=$(printf '%s\n' "$output" | grep -cxF '::add-mask::second-line-password' || true)
+  [ "$n" -eq 1 ]
+  # Issue #314: no bare post-newline line the runner would not parse.
+  n=$(printf '%s\n' "$output" | grep -cxF 'second-line-password' || true)
+  [ "$n" -eq 0 ]
+  # The collapsed form is never printed, so it must not be registered.
+  n=$(printf '%s\n' "$output" | grep -cF 'first-line-passwordsecond-line-password' || true)
+  [ "$n" -eq 0 ]
+  n=$(printf '%s\n' "$output" | grep -c '' || true)
+  [ "$n" -eq 2 ]
+}
+
+@test "add_masks: FND-0046 CRLF password has no CR and no empty mask line" {
+  INPUT_PASSWORD=$'first-line-password\r\nsecond-line-password\r\n'
+  unset INPUT_USER INPUT_SERVER
+  run add_masks
+  [ "$status" -eq 0 ]
+  n=$(printf '%s' "$output" | grep -c $'\r' || true)
+  [ "$n" -eq 0 ]
+  n=$(printf '%s\n' "$output" | grep -cxF '::add-mask::' || true)
+  [ "$n" -eq 0 ]
+  n=$(printf '%s\n' "$output" | grep -cxF '::add-mask::first-line-password' || true)
+  [ "$n" -eq 1 ]
+  n=$(printf '%s\n' "$output" | grep -cxF '::add-mask::second-line-password' || true)
+  [ "$n" -eq 1 ]
+  n=$(printf '%s\n' "$output" | grep -c '' || true)
+  [ "$n" -eq 2 ]
+}
+
+@test "add_masks: FND-0046 a bare CR separates pieces like a newline" {
+  INPUT_PASSWORD=$'one\rtwo'
+  unset INPUT_USER INPUT_SERVER
+  run add_masks
+  [ "$status" -eq 0 ]
+  n=$(printf '%s\n' "$output" | grep -cxF '::add-mask::one' || true)
+  [ "$n" -eq 1 ]
+  n=$(printf '%s\n' "$output" | grep -cxF '::add-mask::two' || true)
+  [ "$n" -eq 1 ]
+}
+
+# The runner unescapes %25, %0D and %0A in command data, so a literal
+# `%` must be registered as `%25` and nothing else may change.
+@test "add_masks: FND-0046 literal %25 and %0A in a password are escaped" {
+  INPUT_PASSWORD='p%25w%0Ad'
+  unset INPUT_USER INPUT_SERVER
+  run add_masks
+  [ "$status" -eq 0 ]
+  n=$(printf '%s\n' "$output" | grep -cxF '::add-mask::p%2525w%250Ad' || true)
+  [ "$n" -eq 1 ]
+  n=$(printf '%s\n' "$output" | grep -c '' || true)
+  [ "$n" -eq 1 ]
+}
+
+@test "add_masks: FND-0046 leading and trailing spaces of a piece are kept" {
+  INPUT_PASSWORD=$'  lead\ntrail  \n  both  '
+  unset INPUT_USER INPUT_SERVER
+  run add_masks
+  [ "$status" -eq 0 ]
+  n=$(printf '%s\n' "$output" | grep -cxF '::add-mask::  lead' || true)
+  [ "$n" -eq 1 ]
+  n=$(printf '%s\n' "$output" | grep -cxF '::add-mask::trail  ' || true)
+  [ "$n" -eq 1 ]
+  n=$(printf '%s\n' "$output" | grep -cxF '::add-mask::  both  ' || true)
+  [ "$n" -eq 1 ]
+}
+
+@test "add_masks: FND-0046 the extracted server host is escaped too" {
+  INPUT_SERVER='ftp://h%25st.example:21'
+  unset INPUT_PASSWORD INPUT_USER
+  run add_masks
+  [ "$status" -eq 0 ]
+  n=$(printf '%s\n' "$output" | grep -cxF '::add-mask::h%2525st.example' || true)
+  [ "$n" -eq 1 ]
+  n=$(printf '%s\n' "$output" | grep -cxF '::add-mask::ftp://h%2525st.example:21' || true)
+  [ "$n" -eq 1 ]
+  # No unescaped form may be registered.
+  n=$(printf '%s\n' "$output" | grep -cF 'h%25st' || true)
+  [ "$n" -eq 0 ]
 }
 
 # ----------------------------------------------------------------------------
@@ -147,9 +242,45 @@ second-line-password"
   # assert by stripping both leading whitespace and the known
   # "label: value" pattern instead of exact bytes.
   [[ "$output" == *"server:"*"ftp://example.com"* ]]
-  [[ "$output" == *"password:"*"secret"* ]]
+  # FND-0046: the password value is never printed, even with debug.
+  [[ "$output" == *"password:"*"(set, hidden)"* ]]
+  [[ "$output" != *"secret"* ]]
   [[ "$output" == *"max_retries:"*"5"* ]]
   [[ "$output" == *"local_dir:"*"./public_html"* ]]
+}
+
+@test "print_inputs_dump: FND-0046 debug=true never prints the password value" {
+  INPUT_PASSWORD='Hunter2-Not-In-Output'
+  INPUT_SERVER="ftp://example.com"
+  INPUT_USER="me"
+  run print_inputs_dump "true"
+  [ "$status" -eq 0 ]
+  n=$(printf '%s\n' "$output" | grep -cF 'Hunter2-Not-In-Output' || true)
+  [ "$n" -eq 0 ]
+  n=$(printf '%s\n' "$output" | grep -cE '^  password:[ ]+\(set, hidden\)$' || true)
+  [ "$n" -eq 1 ]
+}
+
+@test "print_inputs_dump: FND-0046 debug=true shows (empty) for an empty password" {
+  INPUT_PASSWORD=""
+  INPUT_SERVER="ftp://example.com"
+  INPUT_USER="me"
+  run print_inputs_dump "true"
+  [ "$status" -eq 0 ]
+  n=$(printf '%s\n' "$output" | grep -cE '^  password:[ ]+\(empty\)$' || true)
+  [ "$n" -eq 1 ]
+  n=$(printf '%s\n' "$output" | grep -cF '(set, hidden)' || true)
+  [ "$n" -eq 0 ]
+}
+
+@test "print_inputs_dump: FND-0046 a multi-line password leaks no fragment in debug" {
+  INPUT_PASSWORD=$'first-line-password\nsecond-line-password'
+  run print_inputs_dump "true"
+  [ "$status" -eq 0 ]
+  n=$(printf '%s\n' "$output" | grep -cF 'line-password' || true)
+  [ "$n" -eq 0 ]
+  n=$(printf '%s\n' "$output" | grep -cE '^  password:[ ]+\(set, hidden\)$' || true)
+  [ "$n" -eq 1 ]
 }
 
 @test "print_inputs_dump: debug=false emits (set)/(using default) per input" {

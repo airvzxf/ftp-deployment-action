@@ -499,6 +499,12 @@ validate_credential() {
   esac
 }
 
+# One directive per non-empty CR/LF-separated piece of $1, `%` -> `%25`.
+_add_mask_lines() {
+  printf '%s' "$1" | tr '\r' '\n' \
+    | awk '{ gsub(/%/, "%25"); if ($0 != "") print "::add-mask::" $0 }'
+}
+
 # ------------------------------------------------------------------------------
 # add_masks
 #   Defence-in-depth: ask the runner to mask sensitive values in the
@@ -508,13 +514,14 @@ validate_credential() {
 #   emits `::add-mask::` for the three values; the function reads
 #   them via _indirection so we don't repeat the eval pattern.
 #
-#   The ::add-mask:: directive is a SINGLE-LINE workflow command: if
-#   the value contains a CR/LF (intentionally or via a copy-paste of
-#   a multi-line secret), the runner only masks the FIRST line and
-#   the remainder surfaces UNMASKED in the log. F2 audit (#314)
-#   strips CR/LF and other control characters from the value before
-#   emitting the directive so a multi-line secret collapses into a
-#   single masked line.
+#   The ::add-mask:: directive is a SINGLE-LINE workflow command, and
+#   a multi-line value is printed as separate lines, so a mask must
+#   match each line on its own (FND-0046). Each value is split on CR
+#   and LF and every non-empty piece gets its own directive; a form
+#   with CR/LF removed (#314) never appears in output and masks
+#   nothing. The runner unescapes %25, %0D and %0A in command data,
+#   so `%` is written as `%25`; no other character is changed, as
+#   the mask must equal the printed text.
 #
 #   The server host is masked on its own as well: lftp prints URLs
 #   as `ftp://user@host:port/...`, which never contains the full
@@ -526,27 +533,23 @@ add_masks() {
   for _am_name in INPUT_PASSWORD INPUT_USER INPUT_SERVER; do
     _am_value=$(_indirection "${_am_name}")
     if [ -n "${_am_value}" ]; then
-      # Collapse CR/LF/CRLF and strip the rest of the C0 control
-      # range so the post-newline portion of a multi-line secret
-      # never leaks through the runner's partial-mask parser.
-      _am_value=$(printf '%s' "${_am_value}" | tr -d '\r\n' | tr -d '[:cntrl:]')
-      if [ -n "${_am_value}" ]; then
-        printf '::add-mask::%s\n' "${_am_value}"
-      fi
+      _add_mask_lines "${_am_value}"
     fi
   done
   _am_server=$(_indirection INPUT_SERVER)
-  _am_host=$(extract_netrc_host "${_am_server}" | tr -d '[:cntrl:]')
+  _am_host=$(extract_netrc_host "${_am_server}")
   if [ -n "${_am_host}" ] && [ "${_am_host}" != "${_am_server}" ]; then
-    printf '::add-mask::%s\n' "${_am_host}"
+    _add_mask_lines "${_am_host}"
   fi
 }
 
 # ------------------------------------------------------------------------------
 # print_inputs_dump DEBUG
 #   Print the "Inputs received" group. When DEBUG=true, prints the
-#   resolved value of every INPUT_* in order. When DEBUG=false (or
-#   empty), prints only "(set)" / "(using default)" per input.
+#   resolved value of every INPUT_* in order, except the password,
+#   which is shown only as "(set, hidden)" / "(empty)". When
+#   DEBUG=false (or empty), prints only "(set)" / "(using default)"
+#   per input.
 #
 #   The list of input names is explicit and matches action.yml; the
 #   contract test (tests/contract.sh) verifies that this list matches
@@ -564,7 +567,12 @@ print_inputs_dump() {
     # of the dump against the schema is clean.
     printf '  %-26s %s\n' "server:"                  "$(_indirection INPUT_SERVER)"
     printf '  %-26s %s\n' "user:"                    "$(_indirection INPUT_USER)"
-    printf '  %-26s %s\n' "password:"                "$(_indirection INPUT_PASSWORD)"
+    # The password value is never printed, not even in debug (FND-0046).
+    if [ -n "$(_indirection INPUT_PASSWORD)" ]; then
+      printf '  %-26s %s\n' "password:"              "(set, hidden)"
+    else
+      printf '  %-26s %s\n' "password:"              "(empty)"
+    fi
     printf '  %-26s %s\n' "local_dir:"               "$(_indirection INPUT_LOCAL_DIR)"
     printf '  %-26s %s\n' "remote_dir:"              "$(_indirection INPUT_REMOTE_DIR)"
     printf '  %-26s %s\n' "delete:"                  "$(_indirection INPUT_DELETE)"
