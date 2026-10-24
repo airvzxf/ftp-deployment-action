@@ -172,6 +172,36 @@ jobs:
             echo "MAIN_COMMIT=${MAIN_COMMIT}"
           } >> "$GITHUB_OUTPUT"
 
+      # The image prints /app/VERSION as its banner, but the registry
+      # tags and the OCI version label come from the tag name, so a
+      # forgotten bump would ship :3.2.0 announcing v3.1.0 (FND-0031).
+      # VERSION must equal the tag's core version (`v` and any
+      # `-suffix` removed): v3.2.0 and v3.2.0-rc.1 both need 3.2.0.
+      # A pre-release is a dry run of the same release, so it carries
+      # the same VERSION and the same CHANGELOG [X.Y.Z] section as the
+      # final tag; tests/release-smoke.sh Check 2 (vX.Y.Z banner) and
+      # tests/contract.sh (CHANGELOG/SECURITY stamps match VERSION)
+      # then hold for both unchanged.
+      - name: Fail if VERSION at the tag commit differs from the tag
+        env:
+          TAG: ${{ steps.resolve.outputs.TAG }}
+          TAG_COMMIT: ${{ steps.resolve.outputs.TAG_COMMIT }}
+        run: |
+          set -euo pipefail
+          core="${TAG#v}"
+          core="${core%%-*}"
+          if ! raw="$(git show "${TAG_COMMIT}:VERSION")"; then
+            echo "::error::VERSION is missing at ${TAG} (${TAG_COMMIT}); expected ${core}. Bump VERSION in the release PR (AGENTS.md 'Red / failed workflows' step 7) and re-tag."
+            exit 1
+          fi
+          # First line, surrounding whitespace (CR included) trimmed.
+          version="$(printf '%s\n' "${raw}" | sed -e '1!d' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [ "${version}" != "${core}" ]; then
+            echo "::error::VERSION at ${TAG} (${TAG_COMMIT}) is '${version}', expected '${core}'. Bump VERSION in the release PR (AGENTS.md 'Red / failed workflows' step 7) and re-tag."
+            exit 1
+          fi
+          echo "✓ VERSION ${version} matches ${TAG}"
+
       - name: Fail if tag^{commit} is not an ancestor of main
         env:
           TAG: ${{ steps.resolve.outputs.TAG }}
@@ -518,12 +548,16 @@ jobs:
           echo "image_names=${image_names}" >> "$GITHUB_OUTPUT"
 
           # Heredoc-style multi-line output for `all_tags`.
-          # Each tag on its own line so the EOF delimiter lands
+          # Each tag on its own line so the delimiter lands
           # on its own line — `printf '%s'` would glue the last
-          # tag to the EOF marker and trip GitHub's output
-          # parser with "Matching delimiter not found 'EOF'".
+          # tag to the delimiter and trip GitHub's output
+          # parser with "Matching delimiter not found".
+          # The delimiter is random, per GitHub's documented
+          # guidance for multi-line values: a fixed `EOF` ends the
+          # value early at any value line that is exactly `EOF`.
+          delim="EOF_$(openssl rand -hex 16)"
           {
-            echo "all_tags<<EOF"
+            echo "all_tags<<${delim}"
             echo "${image}:${version}"
             echo "${image}:${tag}"
             if [ "${pre_release}" = false ]; then
@@ -543,7 +577,7 @@ jobs:
                 echo "${ecr_image}:latest"
               fi
             fi
-            echo "EOF"
+            echo "${delim}"
           } >> "$GITHUB_OUTPUT"
 
           # F2 audit (#275) hardened in v2.11.10 (#288): refuse to publish
@@ -779,6 +813,9 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ steps.meta.outputs.version }}"
+          # A pre-release (X.Y.Z-rc.N) uses the final release's
+          # CHANGELOG [X.Y.Z] section, as it uses its VERSION.
+          version="${version%%-*}"
           notes=$(awk -v v="${version}" '
               BEGIN {
                   in_section = 0
@@ -925,13 +962,17 @@ jobs:
             body="$(cat release/CHANGELOG.body.md)"
             body_empty=false
           fi
+          # Random delimiter (GitHub's documented guidance for
+          # multi-line values): a CHANGELOG line that is exactly
+          # `EOF` would end a fixed `EOF` value early.
+          delim="EOF_$(openssl rand -hex 16)"
           {
             echo "tag=${TAG}"
             echo "version=${TAG#v}"
             echo "body-empty=${body_empty}"
-            echo "body<<EOF"
+            echo "body<<${delim}"
             printf '%s\n' "${body}"
-            echo "EOF"
+            echo "${delim}"
           } >> "$GITHUB_OUTPUT"
 
       # Create the GitHub Release. Pre-release tags must not become the
