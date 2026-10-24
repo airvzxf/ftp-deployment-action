@@ -120,12 +120,14 @@ echo "${out}" | grep -q "^EXIT=1" \
 pass "unreachable server exits 1 with lftp error message"
 
 # ----------------------------------------------------------------------------
-# Test 3: debug=true echoes the password
+# Test 3: debug=true does NOT echo the password (FND-0046)
 # ----------------------------------------------------------------------------
+# Until FND-0046 this test required the password value in the debug
+# dump; the dump now shows only "(set, hidden)" for it.
 out=$(run_init "INPUT_DEBUG=true" 30)
-echo "${out}" | grep -q "password:[[:space:]]*p" \
-  || fail "debug=true did not echo the password value; output was:\n${out}"
-pass "debug=true echoes the password value"
+echo "${out}" | grep -q "password:[[:space:]]*(set, hidden)$" \
+  || fail "debug=true did not print 'password: (set, hidden)'; output was:\n${out}"
+pass "debug=true prints 'password: (set, hidden)', not the value"
 
 # ----------------------------------------------------------------------------
 # Test 4: default dump does NOT echo the password value
@@ -297,10 +299,9 @@ pass "documented lftp_settings (3 ';' chained) passes validation"
 # the secret password does not appear inside the ::group::Upload block
 # (which is where lftp is actually invoked). The entrypoint.sh now writes the
 # password to a .netrc and omits the `-u` arg, so even with debug=true
-# the only places the password appears are:
-#   1. the ::add-mask:: line (defence-in-depth),
-#   2. the "password: <value>" line of the env dump (debug only).
-# Both are fine. What we MUST NOT see is the password inside the
+# the only place the password appears is the ::add-mask:: line
+# (defence-in-depth); since FND-0046 the debug dump shows only
+# "password: (set, hidden)". What we MUST NOT see is the password inside the
 # Upload group, where the lftp process and its stderr are captured.
 _env_str=$(printf 'INPUT_PASSWORD=SuperSecretDoNotLeakZZZ\nINPUT_DEBUG=true')
 out=$(run_init "${_env_str}" 30)

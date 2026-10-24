@@ -94,7 +94,7 @@ inputs:
     required: false
     default: ''
   debug:
-    description: 'If "true", print resolved input values to the log. Default is "false" (only show which inputs were received, not their values).'
+    description: 'If "true", print resolved input values to the log. Default is "false" (only show which inputs were received, not their values). The password is never printed, even with debug.'
     required: false
     default: 'false'
   dry_run:
