@@ -913,15 +913,35 @@ write_netrc() {
 }
 
 # ------------------------------------------------------------------------------
-# classify_permanent_error LOG_FILE
+# classify_permanent_error LOG_FILE [OFFSET]
 #   Exit 0 if the captured lftp output at LOG_FILE contains a
-#   permanent error (530 login, 550 permission, 550 no-such-file),
-#   exit 1 otherwise. The function is read-only; it does not modify
-#   the log file.
+#   permanent error, exit 1 otherwise. Only the bytes after OFFSET
+#   are read (default 0, the whole file): the log is shared by all
+#   attempts, so the caller passes its size before the current one.
+#   The function is read-only; it does not modify the log file.
+#
+#   FND-0045: a line is permanent only in lftp's own error-line
+#   format, case-sensitive:
+#     "<cmd>: Login failed: ..."       (any code; lftp prints it only
+#                                      when it has given up on login)
+#     "<cmd>: Access failed: 550 ..."
+#   Checked with lftp 4.9.3: "530 Login incorrect." gives
+#   "mirror: Login failed: 530 Login incorrect."; a 530 per-host
+#   connection limit is retried by lftp and ends as
+#   "mirror: Fatal error: max-retries exceeded (530 ...)", which is
+#   transient; a CWD 550 gives "mirror: Access failed: 550 ...".
+#   Bare "530 " and free-floating phrases are not matched: they also
+#   occur in file names and in that max-retries line.
+#   grep runs without -q: busybox grep (the one in the image) then
+#   reads all of its input, so tail never gets SIGPIPE under pipefail.
+#   GNU grep may still stop early when stdout is /dev/null; that only
+#   turns a permanent error into a retry.
 # ------------------------------------------------------------------------------
 classify_permanent_error() {
   _cpe_log=$1
-  grep -qiE '(^|[^0-9])(530 |login authentication failed|login incorrect|login failed|not logged in|550 permission denied|550 .*no such file|550 .*not found)' "${_cpe_log}"
+  _cpe_offset=${2:-0}
+  tail -c +"$((_cpe_offset + 1))" "${_cpe_log}" \
+    | grep -E '^[[:alnum:]_-]+: (Login failed: |Access failed: 550 )' > /dev/null
 }
 
 # ------------------------------------------------------------------------------
