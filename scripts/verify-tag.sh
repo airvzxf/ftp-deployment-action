@@ -25,7 +25,8 @@
 # It deliberately writes **nothing** to the developer's environment:
 #
 #   * `GNUPGHOME` is a `mktemp -d` (cleaned by trap on exit) so the
-#     PGP keyring import never lands in permanent `~/.gnupg`.
+#     PGP keyring import never lands in permanent `~/.gnupg`, and
+#     `git verify-tag` never consults it, whatever the tag's format.
 #   * Git config is passed via per-invocation `git -c` overrides (or
 #     `--local` config in a temp repo, see below) — never written to
 #     the developer's `.git/config`.
@@ -44,19 +45,24 @@
 # Exit codes
 # ----------
 #   0  tag is signed by a key in .github/trusted-signers (SSH) or
-#      .github/trusted-signers.asc (PGP), or is documented as
-#      lightweight / unsigned in SECURITY.md (informational).
-#   1  tag is missing on the remote, or its signature could not be
-#      verified against either allow-list, or its tag header does not
-#      name <tag>, or origin/main (and so its
-#      allow-list) could not be fetched or has no trusted-signers.
+#      .github/trusted-signers.asc (PGP), or is one of the legacy
+#      lightweight tags listed in SECURITY.md (v1.0-alpha.1 … v1.3.3;
+#      informational).
+#   1  tag is not found locally, or it is lightweight / unsigned and
+#      not a listed legacy tag (release.yml would reject it), or its
+#      signature could not be verified against the origin/main
+#      allow-lists, or its tag header does not name <tag>, or
+#      origin/main (and so its allow-list) could not be fetched or has
+#      no trusted-signers.
 #   2  usage error.
 #
 # Dependencies
 # ------------
 #   * git (always present in the maintainer's environment).
-#   * gpg (only consulted when verifying a PGP-signed tag; absent
-#     installations are skipped without error).
+#   * gpg (used for any signed tag when origin/main has a
+#     trusted-signers.asc, to import it into the temp keyring; a
+#     PGP-signed tag fails without it, an SSH-signed one does not
+#     need it).
 
 set -eu
 
@@ -68,8 +74,11 @@ REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
 # The allow-lists are read from origin/main (see fetch_allowlists),
 # as release.yml does, into this temp dir.
 ALLOWLIST_DIR=$(mktemp -d)
-# shellcheck disable=SC2064  # expand the path now, not on exit.
-trap "rm -rf '${ALLOWLIST_DIR}'" EXIT INT TERM
+# Isolated keyring for every `git verify-tag` run: it holds only
+# origin/main's trusted-signers.asc (or nothing), never ~/.gnupg.
+VERIFY_GNUPGHOME=$(mktemp -d) || { rm -rf "${ALLOWLIST_DIR}"; exit 1; }
+# shellcheck disable=SC2064  # expand the paths now, not on exit.
+trap "rm -rf '${ALLOWLIST_DIR}' '${VERIFY_GNUPGHOME}'" EXIT INT TERM
 TRUSTED_SSH="${ALLOWLIST_DIR}/trusted-signers"
 TRUSTED_PGP="${ALLOWLIST_DIR}/trusted-signers.asc"
 
@@ -100,59 +109,80 @@ fetch_allowlists() {
   fi
 }
 
-# Detect the tag's signature format. Output: 'ssh', 'pgp', or
-# 'lightweight'.
+# Detect the tag's signature format, for the messages only: the
+# verification itself does not depend on it (see verify_signature).
+# Output: 'ssh', 'pgp', 'unsigned' (an annotated tag without a
+# signature block) or 'lightweight' (not a tag object). Like git, it
+# takes the signature to start at the LAST line that is exactly a
+# BEGIN PGP/SSH SIGNATURE marker, so text in the message body cannot
+# change the result. The object is captured first (POSIX sh has no
+# pipefail).
 detect_signature() {
   _tag=$1
-  if ! git cat-file -t "${_tag}" 2>/dev/null \
+  if ! git cat-file -t "refs/tags/${_tag}" 2>/dev/null \
       | grep -qx 'tag'; then
     printf 'lightweight\n'
     return 0
   fi
-  if git cat-file tag "${_tag}" 2>/dev/null \
-      | grep -q 'BEGIN SSH SIGNATURE'; then
-    printf 'ssh\n'
-  elif git cat-file tag "${_tag}" 2>/dev/null \
-      | grep -q 'BEGIN PGP SIGNATURE'; then
-    printf 'pgp\n'
-  else
-    printf 'lightweight\n'
+  if ! _obj=$(git cat-file tag "refs/tags/${_tag}"); then
+    printf 'ERROR: could not read tag object refs/tags/%s\n' "${_tag}" >&2
+    exit 1
   fi
+  printf '%s\n' "${_obj}" | awk '
+    $0 == "-----BEGIN PGP SIGNATURE-----" { fmt = "pgp" }
+    $0 == "-----BEGIN SSH SIGNATURE-----" { fmt = "ssh" }
+    END { if (fmt == "") fmt = "unsigned"; print fmt }'
 }
 
-# Verify with the SSH backend. Requires `.github/trusted-signers`.
-verify_ssh() {
+# Verify the signature with a single `git verify-tag`, whatever the
+# detected format. git picks the backend from the signature block
+# itself, so both backends are confined to origin/main's allow-lists:
+# the SSH list via gpg.ssh.allowedSignersFile, and the PGP list via a
+# temp GNUPGHOME that holds only trusted-signers.asc (imported when it
+# exists and gpg is installed; otherwise the keyring stays empty and a
+# PGP signature fails). The developer's `~/.gnupg` is never consulted.
+# The format-specific checks below only give a clearer error first.
+verify_signature() {
   _tag=$1
-  if [ ! -s "${TRUSTED_SSH}" ]; then
-    printf 'ERROR: origin/main:.github/trusted-signers missing or empty\n' >&2
-    return 1
+  _sig=$2
+  case ${_sig} in
+    ssh)
+      if [ ! -s "${TRUSTED_SSH}" ]; then
+        printf 'ERROR: origin/main:.github/trusted-signers missing or empty\n' >&2
+        return 1
+      fi
+      ;;
+    pgp)
+      if [ ! -s "${TRUSTED_PGP}" ]; then
+        printf 'ERROR: origin/main:.github/trusted-signers.asc missing or empty\n' >&2
+        return 1
+      fi
+      if ! command -v gpg >/dev/null 2>&1; then
+        printf 'ERROR: tag is PGP-signed but gpg is not installed\n' >&2
+        return 1
+      fi
+      ;;
+  esac
+
+  # Use GNUPGHOME rather than --homedir so the same call works with
+  # gpg 1.x and 2.x.
+  if [ -s "${TRUSTED_PGP}" ] && command -v gpg >/dev/null 2>&1; then
+    GNUPGHOME="${VERIFY_GNUPGHOME}" gpg --batch --import "${TRUSTED_PGP}" \
+      >/dev/null 2>&1
   fi
-  ${GIT_PREFIX} verify-tag "${_tag}"
+  GNUPGHOME="${VERIFY_GNUPGHOME}" ${GIT_PREFIX} verify-tag "refs/tags/${_tag}"
 }
 
-# Verify with the PGP backend. Imports the allow-list into a temp
-# keyring so the developer's permanent `~/.gnupg` is untouched.
-verify_pgp() {
-  _tag=$1
-  if [ ! -s "${TRUSTED_PGP}" ]; then
-    printf 'ERROR: origin/main:.github/trusted-signers.asc missing or empty\n' >&2
-    return 1
-  fi
-  if ! command -v gpg >/dev/null 2>&1; then
-    printf 'ERROR: tag is PGP-signed but gpg is not installed\n' >&2
-    return 1
-  fi
-
-  # Set up an isolated keyring. Use GNUPGHOME rather than --homedir
-  # so the same call works with gpg 1.x and 2.x.
-  _gnupghome=$(mktemp -d) || return 1
-  # shellcheck disable=SC2064  # we want $? captured now, not on exit.
-  # This replaces the top-level trap, so it also removes ALLOWLIST_DIR.
-  trap "rm -rf '${_gnupghome}' '${ALLOWLIST_DIR}'" EXIT INT TERM
-
-  GNUPGHOME="${_gnupghome}" gpg --batch --import "${TRUSTED_PGP}" \
-    >/dev/null 2>&1
-  GNUPGHOME="${_gnupghome}" ${GIT_PREFIX} verify-tag "${_tag}"
+# The legacy tags that SECURITY.md ("Legacy lightweight tags") lists
+# as intentionally unsigned. Listed one by one, not as a range, so a
+# new unsigned tag can never match.
+is_legacy_unsigned() {
+  case $1 in
+    v1.0-alpha.1|v1.0-alpha.2|v1.1|v1.2.0|v1.3.0|v1.3.1|v1.3.2|v1.3.3)
+      return 0
+      ;;
+  esac
+  return 1
 }
 
 # Require the tag object's own `tag <name>` header to equal the ref
@@ -218,24 +248,37 @@ main() {
   case ${sig} in
     ssh)
       fetch_allowlists
-      verify_ssh "${tag}"
+      verify_signature "${tag}" "${sig}"
       check_tag_name "${tag}"
       printf 'OK: %s is signed by a key in .github/trusted-signers\n' "${tag}"
       ;;
     pgp)
       fetch_allowlists
-      verify_pgp "${tag}"
+      verify_signature "${tag}" "${sig}"
       check_tag_name "${tag}"
       printf 'OK: %s is signed by a key in .github/trusted-signers.asc\n' "${tag}"
       ;;
-    lightweight)
-      printf 'INFO: %s is a lightweight tag (no signature).\n' "${tag}"
-      printf '  See SECURITY.md "Tag signing policy" for whether this is expected.\n'
-      # Not a hard failure: legacy v1.0-alpha.* … v1.3.3 tags are
-      # intentionally lightweight (see SECURITY.md). The script
-      # exits 0 so a routine `git verify-tag v1.3.3` does not
-      # alarm a CI that has opted into this script.
-      exit 0
+    lightweight|unsigned)
+      if [ "${sig}" = lightweight ]; then
+        _kind='a lightweight tag'
+      else
+        _kind='an unsigned annotated tag'
+      fi
+      # Only the legacy v1.0-alpha.1 … v1.3.3 tags listed in
+      # SECURITY.md are intentionally unsigned; they exit 0 so a
+      # routine check of v1.3.3 does not alarm a CI that has opted
+      # into this script. Any other unsigned tag is an error, as in
+      # release.yml.
+      if is_legacy_unsigned "${tag}"; then
+        printf 'INFO: %s is %s (no signature), a documented legacy tag.\n' \
+          "${tag}" "${_kind}"
+        printf '  See SECURITY.md, "Legacy lightweight tags".\n'
+        exit 0
+      fi
+      printf 'ERROR: %s is %s (no signature); release.yml would reject it.\n' \
+        "${tag}" "${_kind}" >&2
+      printf '  Only the legacy tags listed in SECURITY.md "Tag signing policy" may be unsigned.\n' >&2
+      exit 1
       ;;
     *)
       printf 'ERROR: unknown signature format for %s\n' "${tag}" >&2

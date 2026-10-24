@@ -287,10 +287,13 @@ stray_allowlist_commit() {
   command -v git >/dev/null 2>&1 || skip "git not available"
   make_fixture
   make_work
-  git -C "${FIX}/work" tag v99.0.9
+  # FND-0017: only the legacy tags listed in SECURITY.md may be
+  # unsigned, so this uses the legacy name v1.3.3 (was v99.0.9, which
+  # now exits 1).
+  git -C "${FIX}/work" tag v1.3.3
   git -C "${FIX}/work" remote set-url origin "${FIX}/does-not-exist.git"
 
-  verify v99.0.9
+  verify v1.3.3
   [ "$status" -eq 0 ]
   [[ "$output" == *"lightweight tag"* ]]
   [[ "$output" != *"could not fetch"* ]]
@@ -426,5 +429,273 @@ rename_tag() {
   verify v99.1.3
   [ "$status" -eq 1 ]
   [[ "$output" == *"ERROR: tag object is named 'v99.1.2' but is stored as refs/tags/v99.1.3"* ]]
+  [[ "$output" != *"OK"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# FND-0017 / FND-0019: unsigned tags, signature-format detection, refs/tags
+# ---------------------------------------------------------------------------
+
+# msg_file TEXT...: write the arguments, one per line, to ${FIX}/msg
+msg_file() {
+  printf '%s\n' "$@" > "${FIX}/msg"
+}
+
+# ssh_tag_msg TAG KEYNAME: SSH-signed tag whose message is ${FIX}/msg
+ssh_tag_msg() {
+  if ! git -C "${FIX}/work" -c gpg.format=ssh \
+        -c user.signingkey="${FIX}/$2" tag -s -F "${FIX}/msg" "$1" 2>"${FIX}/tag.err"; then
+    skip "cannot create SSH-signed tags here: $(cat "${FIX}/tag.err")"
+  fi
+}
+
+# pgp_tag_msg TAG FPR: PGP-signed tag by key FPR whose message is ${FIX}/msg
+pgp_tag_msg() {
+  if ! git -C "${FIX}/work" -c gpg.format=openpgp \
+        -c user.signingkey="$2" tag -s -F "${FIX}/msg" "$1" 2>"${FIX}/tag.err"; then
+    skip "cannot create PGP-signed tags here: $(cat "${FIX}/tag.err")"
+  fi
+}
+
+# publish_asc FILE: origin/main gets FILE as .github/trusted-signers.asc
+publish_asc() {
+  cp "$1" "${FIX}/seed/.github/trusted-signers.asc"
+  git -C "${FIX}/seed" add .github
+  git -C "${FIX}/seed" commit -q -m "add asc"
+  git -C "${FIX}/seed" push -q origin main
+}
+
+@test "FND-0017: a lightweight non-legacy tag v3.2.0 exits 1 and mentions release.yml" {
+  command -v git >/dev/null 2>&1 || skip "git not available"
+  make_fixture
+  make_work
+  git -C "${FIX}/work" tag v3.2.0
+
+  verify v3.2.0
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"signature format: lightweight"* ]]
+  [[ "$output" == *"ERROR"* ]]
+  [[ "$output" == *"release.yml"* ]]
+  [[ "$output" != *"INFO"* ]]
+}
+
+@test "FND-0017: an unsigned annotated non-legacy tag v3.2.0 exits 1 and says unsigned" {
+  command -v git >/dev/null 2>&1 || skip "git not available"
+  make_fixture
+  make_work
+  git -C "${FIX}/work" tag -a -m "v3.2.0" v3.2.0
+
+  verify v3.2.0
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"signature format: unsigned"* ]]
+  [[ "$output" == *"unsigned annotated tag"* ]]
+  [[ "$output" == *"release.yml"* ]]
+  [[ "$output" != *"INFO"* ]]
+}
+
+@test "FND-0017: a name that only resembles a legacy tag (v1.3.4) is not exempt" {
+  command -v git >/dev/null 2>&1 || skip "git not available"
+  make_fixture
+  make_work
+  git -C "${FIX}/work" tag v1.3.4
+
+  verify v1.3.4
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"release.yml"* ]]
+}
+
+@test "FND-0017: every listed legacy name exits 0 as a lightweight tag without needing origin" {
+  command -v git >/dev/null 2>&1 || skip "git not available"
+  make_fixture
+  make_work
+  git -C "${FIX}/work" remote set-url origin "${FIX}/does-not-exist.git"
+  for t in v1.0-alpha.1 v1.0-alpha.2 v1.1 v1.2.0 v1.3.0 v1.3.1 v1.3.2 v1.3.3; do
+    git -C "${FIX}/work" tag "$t"
+    verify "$t"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"INFO: $t is a lightweight tag"* ]]
+  done
+}
+
+@test "FND-0017: an unsigned annotated legacy tag (v1.1) exits 0 with INFO" {
+  command -v git >/dev/null 2>&1 || skip "git not available"
+  make_fixture
+  make_work
+  git -C "${FIX}/work" tag -a -m "v1.1" v1.1
+
+  verify v1.1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"INFO: v1.1 is an unsigned annotated tag"* ]]
+}
+
+@test "FND-0019: SSH-signed tag whose message has a BEGIN PGP SIGNATURE line verifies as ssh" {
+  need_ssh
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  msg_file "release v3.1.0" "-----BEGIN PGP SIGNATURE-----" "not a real block"
+  ssh_tag_msg v3.1.0 keyA
+  # The marker really is in the signed object, before the SSH block.
+  git -C "${FIX}/work" cat-file tag refs/tags/v3.1.0 | grep -qx -e '-----BEGIN PGP SIGNATURE-----'
+
+  verify v3.1.0
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"signature format: ssh"* ]]
+  [[ "$output" == *"OK: v3.1.0 is signed by a key in .github/trusted-signers"* ]]
+}
+
+@test "FND-0019: PGP-signed tag whose message has a BEGIN SSH SIGNATURE line verifies as pgp with the origin .asc" {
+  need_ssh
+  pgp_setup
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  publish_asc "${FIX}/pgp.asc"
+  make_work
+  msg_file "release v3.1.1" "-----BEGIN SSH SIGNATURE-----" "not a real block"
+  pgp_tag_msg v3.1.1 "${FPR}"
+  git -C "${FIX}/work" cat-file tag refs/tags/v3.1.1 | grep -qx -e '-----BEGIN SSH SIGNATURE-----'
+
+  verify v3.1.1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"signature format: pgp"* ]]
+  [[ "$output" == *"OK: v3.1.1 is signed by a key in .github/trusted-signers.asc"* ]]
+}
+
+# Control for the maintainer's real setup: origin/main has both lists,
+# so the .asc import also runs on the SSH path and must not break it.
+@test "FND-0019: SSH-signed tag verifies while origin/main also has a .asc" {
+  need_ssh
+  pgp_setup
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  publish_asc "${FIX}/pgp.asc"
+  make_work
+  ssh_tag v3.1.2 keyA
+
+  verify v3.1.2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"signature format: ssh"* ]]
+  [[ "$output" == *"OK: v3.1.2 is signed by a key in .github/trusted-signers"* ]]
+}
+
+@test "FND-0019: PGP tag naming BEGIN SSH SIGNATURE, signed by a developer-keyring key that origin/main does not list, is rejected" {
+  need_ssh
+  pgp_setup                      # key "pgp": FPR, in the developer keyring
+  new_key keyA
+  # A second key, also generated in the developer keyring. Only ITS public
+  # half goes to origin/main; the signer (FPR) is not listed there.
+  gpg --batch --quiet --passphrase '' \
+    --quick-gen-key 'other <o@example.invalid>' ed25519 sign never
+  OTHER=$(gpg --batch --with-colons --list-secret-keys o@example.invalid | awk -F: '/^fpr/{print $10; exit}')
+  [ -n "${OTHER}" ]
+  [ "${OTHER}" != "${FPR}" ]
+  gpg --batch --armor --export "${OTHER}" > "${FIX}/other.asc"
+  make_fixture
+  publish_allowlist keyA
+  publish_asc "${FIX}/other.asc"
+  make_work
+  msg_file "release v3.1.2" "-----BEGIN SSH SIGNATURE-----" "mentions the other format"
+  pgp_tag_msg v3.1.2 "${FPR}"
+
+  # The developer keyring holds the signer's secret AND public parts ...
+  gpg --batch --list-secret-keys "${FPR}"
+  gpg --batch --list-keys "${FPR}"
+  # ... so a plain verify-tag in the fixture, using that keyring, passes.
+  # This is what the pre-fix code effectively did.
+  run git -C "${FIX}/work" -c gpg.format=openpgp verify-tag refs/tags/v3.1.2
+  [ "$status" -eq 0 ]
+  # origin/main's .asc does not hold the signer: import it into a clean
+  # keyring and look the signer up there.
+  mkdir -m700 "${FIX}/chk"
+  GNUPGHOME="${FIX}/chk" gpg --batch --import "${FIX}/other.asc" 2>/dev/null
+  GNUPGHOME="${FIX}/chk" run gpg --batch --list-keys "${FPR}"
+  [ "$status" -ne 0 ]
+  GNUPGHOME="${FIX}/chk" gpgconf --kill all >/dev/null 2>&1 || true
+
+  verify v3.1.2
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"signature format: pgp"* ]]
+  [[ "$output" != *"OK"* ]]
+}
+
+@test "FND-0019: same attack with no .asc on origin/main is rejected too" {
+  need_ssh
+  pgp_setup
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  msg_file "release v3.1.3" "-----BEGIN SSH SIGNATURE-----" "mentions the other format"
+  pgp_tag_msg v3.1.3 "${FPR}"
+
+  verify v3.1.3
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"OK"* ]]
+}
+
+@test "FND-0017: a branch named like a signed tag does not change the result" {
+  need_ssh
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  ssh_tag v3.3.0 keyA
+  git -C "${FIX}/work" branch v3.3.0 main
+
+  verify v3.3.0
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"signature format: ssh"* ]]
+  [[ "$output" == *"OK: v3.3.0 is signed by a key in .github/trusted-signers"* ]]
+  [[ "$output" != *"ambiguous"* ]]
+}
+
+@test "FND-0017: a branch named like a missing tag is not taken for the tag (exit 1, not found)" {
+  command -v git >/dev/null 2>&1 || skip "git not available"
+  make_fixture
+  make_work
+  git -C "${FIX}/work" branch v3.3.1 main
+
+  verify v3.3.1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not found locally"* ]]
+}
+
+# A ref directly under refs/ (refs/<name>) outranks refs/tags/<name> in
+# git's DWIM lookup, which is where the pre-fix short names went wrong.
+
+@test "FND-0017: a stray refs/<tag> pointing at a commit cannot turn a signed tag into a legacy-style INFO" {
+  need_ssh
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  ssh_tag v3.3.2 keyA
+  git -C "${FIX}/work" update-ref refs/v3.3.2 "$(git -C "${FIX}/work" rev-parse main)"
+
+  verify v3.3.2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"signature format: ssh"* ]]
+  [[ "$output" == *"OK: v3.3.2 is signed by a key in .github/trusted-signers"* ]]
+}
+
+@test "FND-0017: a stray refs/<tag> pointing at a signed tag object cannot make a lightweight non-legacy tag pass" {
+  need_ssh
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  ssh_tag v3.3.3 keyA
+  # The real refs/tags/v3.3.3 is lightweight; the signed object sits at refs/v3.3.3.
+  git -C "${FIX}/work" update-ref refs/v3.3.3 "$(git -C "${FIX}/work" rev-parse refs/tags/v3.3.3)"
+  git -C "${FIX}/work" tag -d v3.3.3 >/dev/null
+  git -C "${FIX}/work" tag v3.3.3 main
+
+  verify v3.3.3
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"signature format: lightweight"* ]]
+  [[ "$output" == *"release.yml"* ]]
   [[ "$output" != *"OK"* ]]
 }
