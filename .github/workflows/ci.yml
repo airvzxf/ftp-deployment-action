@@ -23,6 +23,9 @@ jobs:
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest
+    # Every job sets timeout-minutes: GitHub's default is 360, and an
+    # lftp hang in smoke (#334) would hold the runner that long.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -41,6 +44,7 @@ jobs:
   actionlint:
     name: actionlint
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,6 +68,7 @@ jobs:
   hadolint:
     name: hadolint
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -94,6 +99,7 @@ jobs:
   contract:
     name: Contract test
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -114,6 +120,7 @@ jobs:
   unit:
     name: Unit tests (bats)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -129,6 +136,7 @@ jobs:
   smoke:
     name: Smoke tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -186,16 +194,20 @@ jobs:
   acceptance:
     name: Acceptance (static + bats)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install bats and python3-yaml
+        id: install
         run: |
           sudo apt-get update
           sudo apt-get install -y bats python3-yaml
       - name: Static acceptance checks
         run: sh tests/acceptance/static.sh
+      # Run bats even if static.sh failed, but not after a cancellation
+      # or a failed install (bats would be missing).
       - name: Behaviour acceptance tests
-        if: always()
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bats tests/acceptance
