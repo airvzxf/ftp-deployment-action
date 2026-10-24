@@ -83,8 +83,9 @@ that:
 2. Builds the pre-baked FTPS test server image (`make build-test-server-image TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration`).
 3. Runs `make integration IMAGE=ftp-deployment-action:ci-integration TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration`.
 
-The job's `timeout-minutes` is **5** (the same as the test budget
-defined in #117's acceptance criteria). The CI runner is
+The job's `timeout-minutes` is **15**; like every CI job, it sets
+one so a hang cannot hold the runner for GitHub's 360-minute default.
+The CI runner is
 `ubuntu-latest`, which has docker pre-installed.
 
 ## Pre-baked FTPS test server image (closes #135)
