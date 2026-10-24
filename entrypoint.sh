@@ -352,6 +352,13 @@ while true; do
   echo "Try #${COUNTER}"
   echo "-------"
 
+  # FND-0045: the log is shared by all attempts (tee -a); remember its
+  # size so classify_permanent_error reads only this attempt's output.
+  LOG_OFFSET=0
+  if [ -f "${LOG_FILE}" ]; then
+    LOG_OFFSET=$(wc -c < "${LOG_FILE}" | tr -d '[:space:]')
+  fi
+
   set +e
   run_lftp_once \
     "${INPUT_SERVER}" \
@@ -374,10 +381,13 @@ while true; do
   echo "  lftp exited with code ${LFTP_RC}"
 
   # A6: classify the failure. Some errors are permanent (no point in
-  # retrying with the same credentials and same path): bad login,
-  # permission denied, missing file. Detect them in the captured
-  # log and abort the retry loop early.
-  if classify_permanent_error "${LOG_FILE}"; then
+  # retrying with the same credentials and same path): lftp gave up
+  # on login ("<cmd>: Login failed: ...") or a 550 access error
+  # ("<cmd>: Access failed: 550 ..."). Only this attempt's output is
+  # checked. A 530 inside "Fatal error: max-retries exceeded (530 ...)"
+  # is transient (e.g. a per-host connection limit, which lftp itself
+  # retries), so it does not stop the retry loop (FND-0045).
+  if classify_permanent_error "${LOG_FILE}" "${LOG_OFFSET}"; then
     PERMANENT_ERROR="true"
     echo "  Detected permanent error in lftp output; aborting retries."
     break

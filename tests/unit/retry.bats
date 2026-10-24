@@ -22,7 +22,7 @@ setup() {
 
 @test "classify_permanent_error: '530 Login authentication failed' is permanent" {
   f=$(mktemp)
-  printf 'Trying to login...\n< 530 Login authentication failed\n' > "$f"
+  printf 'Trying to login...\n< 530 Login authentication failed\nmirror: Login failed: 530 Login authentication failed\n' > "$f"
   run classify_permanent_error "$f"
   [ "$status" -eq 0 ]
   rm -f "$f"
@@ -30,7 +30,7 @@ setup() {
 
 @test "classify_permanent_error: '530 Login incorrect' is permanent" {
   f=$(mktemp)
-  printf '< 530 Login incorrect.\n' > "$f"
+  printf '< 530 Login incorrect.\nmirror: Login failed: 530 Login incorrect.\n' > "$f"
   run classify_permanent_error "$f"
   [ "$status" -eq 0 ]
   rm -f "$f"
@@ -79,6 +79,112 @@ setup() {
   f=$(mktemp)
   printf 'Trying ftp://user@host:21\n---> PASS wrong\n<--- 530 Login incorrect.\nmirror: Login failed: 530 Login incorrect.\n' > "$f"
   run classify_permanent_error "$f"
+  [ "$status" -eq 0 ]
+  rm -f "$f"
+}
+
+# ----------------------------------------------------------------------------
+# FND-0045: classify_permanent_error matches only lftp's own error lines
+# ("<cmd>: Login failed: ..." / "<cmd>: Access failed: 550 ..."), only in
+# the bytes after OFFSET (the current attempt). Lines below are lftp 4.9.3
+# output (maintainer evidence). Every assertion is a `run` + `[ ]` in the
+# test body, so a wrong status fails the test.
+# ----------------------------------------------------------------------------
+
+@test "FND-0045: 'mirror: Login failed: 530 Login incorrect.' is permanent" {
+  f=$(mktemp)
+  printf 'mirror: Login failed: 530 Login incorrect.\n' > "$f"
+  run classify_permanent_error "$f"
+  [ "$status" -eq 0 ]
+  rm -f "$f"
+}
+
+@test "FND-0045: 'mirror: Access failed: 550 Failed to change directory.' is permanent" {
+  f=$(mktemp)
+  printf 'mirror: Access failed: 550 Failed to change directory. (/nope)\n' > "$f"
+  run classify_permanent_error "$f"
+  [ "$status" -eq 0 ]
+  rm -f "$f"
+}
+
+@test "FND-0045: a Login failed line after OFFSET is permanent (earlier bytes are unrelated)" {
+  f=$(mktemp)
+  printf 'Try #1\n-------\nconnect: Connection refused\n' > "$f"
+  offset=$(wc -c < "$f" | tr -d '[:space:]')
+  printf 'Try #2\n-------\nmirror: Login failed: 530 Login incorrect.\n' >> "$f"
+  run classify_permanent_error "$f" "$offset"
+  [ "$status" -eq 0 ]
+  rm -f "$f"
+}
+
+@test "FND-0045: 'Fatal error: max-retries exceeded (530 ...)' (connection limit) is transient" {
+  f=$(mktemp)
+  printf 'mirror: Fatal error: max-retries exceeded (530 Sorry, the maximum number of clients (5) from your host are already connected.)\n' > "$f"
+  run classify_permanent_error "$f"
+  [ "$status" -eq 1 ]
+  rm -f "$f"
+}
+
+@test "FND-0045: a 'Transferring file' line whose path says '530 login failed' is transient" {
+  f=$(mktemp)
+  printf "Transferring file \`530 login failed.txt'\n" > "$f"
+  run classify_permanent_error "$f"
+  [ "$status" -eq 1 ]
+  rm -f "$f"
+}
+
+@test "FND-0045: mirror statistics with 530 files or bytes are transient" {
+  f=$(mktemp)
+  printf 'Total: 3 directories, 530 files, 0 symlinks\nNew: 530 files, 0 symlinks\n530 bytes transferred\n' > "$f"
+  run classify_permanent_error "$f"
+  [ "$status" -eq 1 ]
+  rm -f "$f"
+}
+
+@test "FND-0045: a Login failed line BEFORE OFFSET (earlier attempt) does not count" {
+  f=$(mktemp)
+  printf 'Try #1\n-------\nmirror: Login failed: 530 Login incorrect.\n' > "$f"
+  offset=$(wc -c < "$f" | tr -d '[:space:]')
+  printf 'Try #2\n-------\nmirror: Fatal error: max-retries exceeded (530 Sorry, the maximum number of clients (5) from your host are already connected.)\n' >> "$f"
+  run classify_permanent_error "$f" "$offset"
+  [ "$status" -eq 1 ]
+  # Control: the same file without OFFSET still sees attempt 1.
+  run classify_permanent_error "$f"
+  [ "$status" -eq 0 ]
+  rm -f "$f"
+}
+
+@test "FND-0045: lowercase 'mirror: login failed: 530 ...' is not permanent (case-sensitive)" {
+  f=$(mktemp)
+  printf 'mirror: login failed: 530 Login incorrect.\n' > "$f"
+  run classify_permanent_error "$f"
+  [ "$status" -eq 1 ]
+  rm -f "$f"
+}
+
+@test "FND-0045: OFFSET equal to the file size leaves an empty tail (transient)" {
+  f=$(mktemp)
+  printf 'mirror: Login failed: 530 Login incorrect.\n' > "$f"
+  offset=$(wc -c < "$f" | tr -d '[:space:]')
+  run classify_permanent_error "$f" "$offset"
+  [ "$status" -eq 1 ]
+  rm -f "$f"
+}
+
+@test "FND-0045: OFFSET past the end of the file leaves an empty tail (transient)" {
+  f=$(mktemp)
+  printf 'mirror: Login failed: 530 Login incorrect.\n' > "$f"
+  run classify_permanent_error "$f" 100000
+  [ "$status" -eq 1 ]
+  rm -f "$f"
+}
+
+@test "FND-0045: without OFFSET the whole file is read" {
+  f=$(mktemp)
+  printf 'Try #1\nmirror: Access failed: 550 Failed to change directory. (/nope)\nTry #2\nconnect: Connection refused\n' > "$f"
+  run classify_permanent_error "$f"
+  [ "$status" -eq 0 ]
+  run classify_permanent_error "$f" 0
   [ "$status" -eq 0 ]
   rm -f "$f"
 }
