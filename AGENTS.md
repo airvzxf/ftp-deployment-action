@@ -124,8 +124,10 @@ the release branch BEFORE the tag.
     then `git tag -s vX.Y.Z <merge-commit-sha>` and
     `git push origin vX.Y.Z`. Verify with
     `git rev-parse vX.Y.Z^{commit}` — it MUST match
-    `git rev-parse main`. The `verify-tag-reachability` job in
-    `release.yml` runs this check mechanically.
+    `git rev-parse main` (step ④ below). That equality is a
+    local check at tag time; the `verify-tag-reachability` job
+    in `release.yml` checks only that the tag commit is
+    reachable from `origin/main`.
 
 ## Tag the trunk merge commit, NOT the branch tip
 
@@ -169,7 +171,12 @@ hold.
    and **never** tag a branch tip that will be squashed.
 
 ④ **Verify the tag's commit equals `origin/main`'s HEAD.** This
-   is the invariant the workflow guard checks.
+   is stricter than the workflow guard, which checks only that
+   the tag commit is reachable from `origin/main`
+   (`git merge-base --is-ancestor`), so a merge to `main`
+   mid-run or a re-run of an older release does not fail the
+   guard. Run ④ right after tagging (③), before anything else
+   merges to `main`.
 
    ```bash
    [ "$(git rev-parse vX.Y.Z^{commit})" \
@@ -187,8 +194,9 @@ hold.
    ```
 
 ⑥ **Watch the `release.yml` run.** The
-   `Verify · tag is reachable from main` job passes if ④
-   holds; `Verify · tag is signed by a trusted signer` passes
+   `Verify · tag is reachable from main` job passes if the
+   tag commit is on `origin/main` (implied by ④);
+   `Verify · tag is signed by a trusted signer` passes
    if `git verify-tag vX.Y.Z` succeeds against the allow-list
    fetched from `origin/main` (SSH backend via
    `.github/trusted-signers`, PGP backend via
