@@ -1,9 +1,10 @@
-FROM alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
-# B-13: pin the base image by digest (resolved against the alpine:3.24
-# tag at the time of v2.3.1). Bump on a controlled cadence via the
-# release pipeline; the digest is recorded in the corresponding tag
-# message.
+# B-13: pin the base image by tag and digest (alpine:<X.Y.Z>@sha256:...).
+# The tag shows the Alpine version; the digest fixes the content.
+# Dependabot (.github/dependabot.yml, group dockerfile-base) bumps both,
+# together with the two test Dockerfiles (tests/acceptance/static.sh
+# S13).
 #
 # Pin apk packages by version (pkg~X.Y.Z), never by Alpine revision (-rN):
 # GitHub builds this file on every run and Alpine deletes old revisions.

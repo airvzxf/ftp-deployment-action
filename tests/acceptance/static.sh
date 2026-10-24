@@ -188,11 +188,22 @@ fi
 
 # S12 — AGENTS.md states what the Dockerfile installs: the same lftp
 #       pin, no curl in the "Stack" row or section (S5b), and any
-#       quoted base digest is a prefix of the one on Dockerfile line 1.
+#       quoted base digest is a prefix of the one on Dockerfile line 1,
+#       and the "Alpine X.Y" in the Stack and Image base rows is the
+#       major.minor of the Dockerfile:1 tag (FROM alpine:<tag>@sha256:<d>).
 _lftp_pin=$(grep -oE 'lftp~[0-9.]+' Dockerfile | head -n 1)
-_digest=$(sed -n '1s/^FROM alpine@sha256:\([0-9a-f]*\).*/\1/p' Dockerfile)
+_tag=$(sed -n '1s/^FROM alpine:\([^@[:space:]]*\).*/\1/p' Dockerfile)
+_digest=$(sed -n '1s/^FROM alpine[^@[:space:]]*@sha256:\([0-9a-f]*\).*/\1/p' Dockerfile)
+_tag_mm=$(printf '%s\n' "${_tag}" | sed -n 's/^\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
 _stack=$(awk '/^\| Stack \|/ { print } /^## / { s = ($0 == "## Stack") } s' AGENTS.md)
 _s12=""
+for _row in 'Stack' 'Image base'; do
+  _mm=$(grep -E "^\| ${_row} \|" AGENTS.md | head -n 1 \
+        | grep -oE 'Alpine [0-9]+\.[0-9]+' | head -n 1 | sed 's/^Alpine //')
+  if [ -z "${_tag_mm}" ] || [ "${_mm}" != "${_tag_mm}" ]; then
+    _s12="${_s12} alpine(AGENTS.md '${_row}' says ${_mm:-?}, Dockerfile tag '${_tag:-?}')"
+  fi
+done
 if [ -z "${_lftp_pin}" ] || ! grep -qF "${_lftp_pin}" AGENTS.md; then
   _s12="${_s12} lftp(Dockerfile pins '${_lftp_pin:-?}', AGENTS.md does not say it)"
 fi
@@ -205,7 +216,7 @@ while read -r _d; do
     *) _s12="${_s12} digest(AGENTS.md ${_d} is not Dockerfile ${_digest:-?})" ;;
   esac
 done <<EOF
-$(grep -oE 'alpine@sha256:[0-9a-f]+' AGENTS.md | sed 's/.*://')
+$(grep -oE 'alpine(:[^@ ]*)?@sha256:[0-9a-f]+' AGENTS.md | sed 's/.*://')
 EOF
 if [ -z "${_s12}" ]; then
   pass "S12 AGENTS.md stack matches the Dockerfile"
@@ -213,20 +224,26 @@ else
   fail "S12 AGENTS.md stack differs from the Dockerfile:${_s12}"
 fi
 
-# S13 — the test images are built on the same Alpine digest as the
-#       action image, so the tests run the OpenSSL / busybox users get.
-#       Dependabot bumps all three in one grouped PR
+# S13 — the test images are built on the same Alpine tag and digest as
+#       the action image, so the tests run the OpenSSL / busybox users
+#       get. Each FROM is alpine:<tag>@sha256:<digest>; a missing tag or
+#       digest fails. Dependabot bumps all three in one grouped PR
 #       (.github/dependabot.yml, group dockerfile-base).
 _s13=""
+[ -n "${_tag}" ] && [ -n "${_digest}" ] \
+  || _s13="${_s13} Dockerfile(${_tag:-?}@${_digest:-?})"
 for _f in tests/integration/Dockerfile.test-server tests/Dockerfile.smoke; do
-  _d13=$(sed -n 's/^FROM alpine@sha256:\([0-9a-f]*\).*/\1/p' "${_f}")
-  [ -n "${_digest}" ] && [ "${_d13}" = "${_digest}" ] \
-    || _s13="${_s13} ${_f}(${_d13:-?})"
+  _from=$(grep -E '^FROM alpine' "${_f}" | head -n 1)
+  _t13=$(printf '%s\n' "${_from}" | sed -n 's/^FROM alpine:\([^@[:space:]]*\).*/\1/p')
+  _d13=$(printf '%s\n' "${_from}" | sed -n 's/^FROM alpine[^@[:space:]]*@sha256:\([0-9a-f]*\).*/\1/p')
+  [ -n "${_t13}" ] && [ -n "${_d13}" ] \
+    && [ "${_t13}" = "${_tag}" ] && [ "${_d13}" = "${_digest}" ] \
+    || _s13="${_s13} ${_f}(${_t13:-?}@${_d13:-?})"
 done
 if [ -z "${_s13}" ]; then
-  pass "S13 test Dockerfiles use the Dockerfile:1 Alpine digest"
+  pass "S13 test Dockerfiles use the Dockerfile:1 Alpine tag and digest"
 else
-  fail "S13 not on the Dockerfile:1 digest ${_digest:-?}:${_s13}"
+  fail "S13 not on the Dockerfile:1 alpine:${_tag:-?}@${_digest:-?}:${_s13}"
 fi
 
 # S14 — no workflow uses the GitHub Actions cache. A cache entry is
