@@ -152,6 +152,12 @@ hold.
    cat VERSION            # expect: X.Y.Z
    ```
 
+   `release.yml` enforces this: the `verify-tag-reachability`
+   job fails unless the first line of `VERSION` at the tag
+   commit equals the tag without `v` and without any `-suffix`.
+   A pre-release uses the same `VERSION` as its final tag, so
+   `vX.Y.Z` and `vX.Y.Z-rc.1` both need `VERSION` = `X.Y.Z`.
+
 ③ **Tag with `-s` (GPG-signed) or `-s` with the SSH key
    (`-u` for GPG, no flag for SSH), pointing at the merge
    SHA.** The signing format determines which entry in the

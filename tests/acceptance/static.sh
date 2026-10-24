@@ -886,7 +886,10 @@ JEOF
         || _s18="${_s18} (e)($1: pre_release is not $3)"
       grep -qx "image_names=ghcr.io/acme/ftp-deployment-action,docker.io/acme/ftp-deployment-action" "${_tmp18}/mout" \
         || _s18="${_s18} (e)($1: image_names wrong)"
-      _tags=$(sed -n '/^all_tags<<EOF$/,/^EOF$/p' "${_tmp18}/mout" | sed '1d;$d')
+      # all_tags<<DELIM ... DELIM, as the runner parses it (the
+      # delimiter is random, FND-0032).
+      _tags=$(awk 'd != "" && $0 == d { exit } d != "" { print }
+          d == "" && /^all_tags<</ { d = substr($0, 11) }' "${_tmp18}/mout")
       _nl=$(printf '%s\n' "${_tags}" | grep -c '.')
       _lt=$(printf '%s\n' "${_tags}" | grep -c ':latest$')
       if [ "$4" = yes ]; then
