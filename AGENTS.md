@@ -23,7 +23,7 @@ page from the `CHANGELOG.md` section for the new version.
 | Type | Docker action (`runs.using: docker`) |
 | Stack | POSIX sh (busybox ash) + Alpine 3.24 + lftp 4.9.3 |
 | License | AGPL-3.0 (re-licensed from GPL-3.0 in v2.2.0) |
-| Image base | Alpine 3.24, pinned by digest on line 1 of `Dockerfile` |
+| Image base | Alpine 3.24, pinned by tag and digest (`alpine:X.Y.Z@sha256:...`) on line 1 of `Dockerfile` |
 | Default branch | `main` |
 | Registries | ghcr.io (primary), docker.io (optional), public.ecr.aws (optional) |
 | Image signing | cosign keyless via OIDC (Sigstore Fulcio) |

@@ -37,7 +37,7 @@
 #     3.24-vs-3.23 libssl/glibc-compat diff impossible to debug
 #     (which side diverged?). Pin both to 3.24 and the question
 #     goes away.
-# Bump this digest in lockstep with Dockerfile:1.
+# Bump this tag and digest in lockstep with Dockerfile:1.
 #
 # Packages installed at build time (pinned by version, not by
 # Alpine revision, same rule as the action Dockerfile):
@@ -96,7 +96,7 @@
 # BuildKit Dockerfile frontend used by the Makefile. Pinning the frontend
 # keeps parsing unambiguous on every supported Docker version.
 
-FROM alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 RUN set -eu; apk add --no-cache \
       vsftpd~3.0.5 \

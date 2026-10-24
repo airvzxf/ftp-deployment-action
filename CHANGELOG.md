@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The Alpine base image is pinned as tag@digest, so Dependabot PRs show the Alpine version.** `Dockerfile`, `tests/Dockerfile.smoke` and `tests/integration/Dockerfile.test-server` pinned `alpine@sha256:...` with no tag. Dependabot had no version to compare, and a minor jump (3.23 -> 3.24 in #55, which broke the v2.3.0 build) looked like a routine digest refresh. All three now use `FROM alpine:3.24.2@sha256:294b683c...`, the same digest as before with its tag added, so the image content does not change. Dependabot updates the tag and the digest together, and the `dockerfile-base` group still bumps the three files in one PR. `tests/acceptance/static.sh` S13 now requires the same tag and digest in all three files, and S12 checks that the "Alpine X.Y" in AGENTS.md matches the tag. (FND-0077)
+
 ### Security
 
 - **`lftp_settings` is trusted input; its character checks are not a security boundary.** The `lftp_settings` description, the README, `SECURITY.md` and the code comments said or implied that rejecting control characters, backtick, `$`, `!` and more than 3 `;` stops a hostile value from running commands or reading `/home/lftp/.netrc`. It does not: with lftp 4.9.3, a pipe (`echo x | cat FILE`), `source -e CMD` and even a pure `set cmd:at-exit "source -e ..."` run shell commands without a rejected character, and `set > FILE` or `debug -o FILE` write local files. Setting `lftp_settings` is equivalent to running commands in the container with access to the FTP credentials, so never pass it values from untrusted sources (reusable-workflow inputs, matrix values or PR data you do not control). `SECURITY.md` now lists it under "Out of scope", and AGENTS.md decision #2 records why neither the deny-list nor a `set`-only allow-list can close the gap. The checks stay as a guard against mistakes. No behaviour change. (FND-0044)

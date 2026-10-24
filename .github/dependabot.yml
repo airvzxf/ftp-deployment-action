@@ -21,12 +21,16 @@
 #     tests/Dockerfile.smoke and tests/integration/Dockerfile.test-server
 #     (the docker ecosystem documents `FROM` lines only; whether it
 #     also bumps `# syntax=` is unverified, so treat them as manual).
-# * `alpine` is pinned by digest in Dockerfile and in the two test
-#   images (tests/integration/Dockerfile.test-server,
-#   tests/Dockerfile.smoke). All three directories are listed so the
-#   dockerfile-base group bumps them in ONE PR: #332 bumped only
-#   Dockerfile, and the test images drifted to an older OpenSSL.
-#   tests/acceptance/static.sh S13 fails if the digests differ.
+# * `alpine` is pinned as tag@digest (`alpine:X.Y.Z@sha256:...`) in
+#   Dockerfile and in the two test images
+#   (tests/integration/Dockerfile.test-server, tests/Dockerfile.smoke).
+#   Dependabot updates both the tag and the digest, so a PR shows the
+#   Alpine version it moves to. A bare digest had no version to
+#   compare, and a 3.23 -> 3.24 jump arrived as a digest refresh (#55).
+#   All three directories are listed so the dockerfile-base group
+#   still bumps them in ONE PR: #332 bumped only Dockerfile, and the
+#   test images drifted to an older OpenSSL.
+#   tests/acceptance/static.sh S13 fails if the tags or digests differ.
 # * For github-actions we take minor and patch; major bumps of
 #   `actions/checkout`, `actions/attest`, etc. are reviewed
 #   because they often require runner version bumps.
@@ -52,7 +56,7 @@ updates:
       - dependency-name: "ca-certificates"
         update-types: ["version-update:semver-major"]
     groups:
-      # One PR per Alpine digest bump, covering the three Dockerfiles.
+      # One PR per Alpine tag@digest bump, covering the three Dockerfiles.
       dockerfile-base:
         patterns: ["*"]
         exclude-patterns: ["lftp", "ca-certificates"]
