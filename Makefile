@@ -38,7 +38,11 @@ SMOKE_IMAGE ?= ftp-deployment-action-smoke:local
 # Container runtime detection (matches the runtime-detection logic in
 # tests/integration/lib/common.sh: docker first, podman fallback).
 # Used by `clean` so a rootless-podman-only developer gets their
-# images removed instead of `docker rmi` failing silently. `make
+# images removed instead of `docker rmi` failing silently, and by
+# `build-smoke-image`, which is on the `make test` / `make smoke`
+# path: it builds with podman when docker is absent and skips when
+# neither is installed, so tests/smoke.sh can run or skip as
+# documented instead of make aborting on `docker: not found`. `make
 # build` and `make build-test-server-image` keep their explicit
 # `docker` invocations — docker is the CI runtime, and the local
 # dev / CI parity check wants the build to error loudly if docker
@@ -134,22 +138,25 @@ hadolint:
 # (tests/smoke.sh fails fast when the image is missing). Previously
 # `make test` -> `make smoke` hard-failed locally for any developer
 # who had not remembered to run `make build-smoke-image` first.
-# Chain build-smoke-image as a prerequisite so `make test` (and
-# `make smoke` on its own) auto-build the image when absent. CI
-# already builds the image explicitly before invoking `make smoke`
-# (.github/workflows/ci.yml lines 144-153) so this is a no-op for
-# CI; the prerequisite is local-dev ergonomics. The `integration:`
-# target is untouched — it depends on a different image
-# (`make build IMAGE=...` + `make build-test-server-image`) which
-# the integration job builds explicitly.
-test: contract unit build-smoke-image smoke
+# build-smoke-image is a prerequisite of `smoke` (not a sibling in
+# `test:`), so `make smoke` on its own and `make -j test` both build
+# the image before tests/smoke.sh runs. build-smoke-image is .PHONY,
+# so the image is rebuilt on every run (the build is cached, so an
+# unchanged Dockerfile.smoke costs little), not only when absent. CI
+# builds the image explicitly before invoking `make smoke`
+# (.github/workflows/ci.yml, "Build the smoke-test image"); the
+# rebuild through this prerequisite then reuses that cache. The
+# `integration:` target is untouched — it depends on a different
+# image (`make build IMAGE=...` + `make build-test-server-image`)
+# which the integration job builds explicitly.
+test: contract unit smoke
 
 .PHONY: contract
 contract:
 	$(SH) tests/contract.sh
 
 .PHONY: smoke
-smoke:
+smoke: build-smoke-image
 	$(SH) tests/smoke.sh
 
 .PHONY: acceptance
@@ -223,7 +230,7 @@ build:
 # ----------------------------------------------------------------------------
 .PHONY: build-test-server-image
 build-test-server-image:
-	docker buildx build -f "$(ROOT)/tests/integration/Dockerfile.test-server" \
+	docker buildx build --load -f "$(ROOT)/tests/integration/Dockerfile.test-server" \
 	    -t "$(TEST_SERVER_IMAGE)" "$(ROOT)/tests/integration"
 
 # ----------------------------------------------------------------------------
@@ -238,14 +245,20 @@ build-test-server-image:
 # `tests` is the build context (not the repo root) so only the
 # Dockerfile.smoke is sent to the docker daemon — the rest of the
 # repo (action source, fixtures, scenarios, etc.) is never visible
-# to the build. Same `docker buildx build` switch as
+# to the build. Same `buildx build --load` as
 # `build-test-server-image` (closes #156): the syntax directive and
 # any future heredoc syntax would otherwise fail under legacy
-# `docker build` on Docker < 23.0.
+# `docker build` on Docker < 23.0. Unlike that target it runs
+# $(RUNTIME), so podman builds it when docker is absent.
 # ----------------------------------------------------------------------------
 .PHONY: build-smoke-image
 build-smoke-image:
-	docker buildx build -f "$(ROOT)/tests/Dockerfile.smoke" \
+	@if [ -z "$(RUNTIME)" ]; then \
+		echo "no docker/podman found; skipping the smoke image build (tests/smoke.sh skips too)"; \
+		exit 0; \
+	fi; \
+	set -x; \
+	"$(RUNTIME)" buildx build --load -f "$(ROOT)/tests/Dockerfile.smoke" \
 	    -t "$(SMOKE_IMAGE)" "$(ROOT)/tests"
 
 # ----------------------------------------------------------------------------
