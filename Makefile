@@ -161,7 +161,7 @@ smoke: build-smoke-image
 
 .PHONY: acceptance
 acceptance:
-	PYTHON=$(PYTHON) $(SH) tests/acceptance/static.sh
+	PYTHON="$(PYTHON)" $(SH) tests/acceptance/static.sh
 	bats tests/acceptance
 
 # ----------------------------------------------------------------------------
@@ -298,7 +298,7 @@ run: build
 	docker run --rm -it \
 	    --env-file "$${tmp}" \
 	    -v "$(ROOT)":/data:ro \
-	    $(IMAGE)
+	    "$(IMAGE)"
 
 # ----------------------------------------------------------------------------
 # Release smoke tests: run the same checks the release pipeline
@@ -321,20 +321,23 @@ release-smoke:
 # ----------------------------------------------------------------------------
 .PHONY: release
 release:
-	@echo "Releases are automated by .github/workflows/release.yml."
-	@echo "To cut a new release locally:"
-	@echo "  1. Stamp CHANGELOG.md (\$$VERSION to the new version)."
-	@echo "  2. Commit the CHANGELOG bump with a signed commit."
-	@echo "  3. Tag with: git tag -s \$$VERSION -m \"<message>\""
-	@echo "  4. Push:     git push origin main \$$VERSION"
-	@echo "The release workflow will then build, sign and publish."
+	@echo 'Releases are cut by .github/workflows/release.yml on a signed tag push.'
+	@echo 'Follow AGENTS.md: "Red / failed workflows: do NOT merge, repair until green"'
+	@echo '(steps 7-10), "Tag the trunk merge commit, NOT the branch tip" and'
+	@echo '"Tag signature guard". In short:'
+	@echo '  1. Open a release branch + PR that bumps VERSION and stamps CHANGELOG.md.'
+	@echo '  2. Wait for green CI, then squash-merge the PR.'
+	@echo '  3. Tag the merge commit on main: git tag -s vX.Y.Z -m "..." <merge-sha>'
+	@echo '  4. Push only the tag: git push origin vX.Y.Z'
+	@echo '  5. release.yml checks the tag signature, that the tag commit is on main,'
+	@echo '     and that VERSION matches the tag (vX.Y.Z-rc.N needs VERSION X.Y.Z).'
 
 .PHONY: clean
 clean:
 	@if [ -z "$(RUNTIME)" ]; then \
 		echo "make clean: no docker/podman on PATH; nothing to remove"; \
 	else \
-		$(RUNTIME) rmi -f $(IMAGE) 2>/dev/null || true; \
-		$(RUNTIME) rmi -f $(TEST_SERVER_IMAGE) 2>/dev/null || true; \
-		$(RUNTIME) rmi -f $(SMOKE_IMAGE) 2>/dev/null || true; \
+		"$(RUNTIME)" rmi -f "$(IMAGE)" 2>/dev/null || true; \
+		"$(RUNTIME)" rmi -f "$(TEST_SERVER_IMAGE)" 2>/dev/null || true; \
+		"$(RUNTIME)" rmi -f "$(SMOKE_IMAGE)" 2>/dev/null || true; \
 	fi
