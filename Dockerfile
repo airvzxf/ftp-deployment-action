@@ -31,6 +31,8 @@ ENV HOME=/home/lftp
 # B-14: drop root. From here on, every process in the container runs as
 # 'lftp'. /app remains root-owned but is world-readable, which is enough
 # for entrypoint.sh to be executed.
+# The content of local_dir must be world-readable too (files o+r, dirs
+# o+rx): see "Self-hosted runners" in README.md.
 USER lftp
 
 ENTRYPOINT ["/app/entrypoint.sh"]
