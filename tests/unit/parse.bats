@@ -390,7 +390,8 @@ setup() {
 # "final-mode=<mode>" and then the file contents, all from inside the
 # child shell (the EXIT trap removes the file when it exits).
 _wn_run() {
-  run sh -eu -c '
+  # bash, not sh: on Ubuntu (CI) sh is dash, whose `trap` has no -p.
+  run bash -eu -c '
     . "$1"
     umask 022
     chmod() {
