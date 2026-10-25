@@ -768,6 +768,7 @@ log for debugging).
 | `Connection refused` / hangs on connect | Wrong host/port, firewall blocking outbound 21/990, or the FTP server is down. | Verify `server` (`ftp://host:21` or `ftps://host:990`). From the runner, `nc -vz host 21` should succeed. Some shared hosters block the runner's IP range — ask them to allow-list it. |
 | `Fatal error: max-retries exceeded` with no reason in parentheses, and the banner says `lftp got no reply from the server` | The connection never got an FTP greeting: a firewall drops the packets, the host or port is wrong, or the server closes the connection before replying. Each try waits for `net_timeout`, so the step looks like a slow loop of the same message. | Same checks as `Connection refused`. GitHub-hosted runners connect from Azure IP ranges: hosters and VPS firewalls often block them, so allow-list the range or use a self-hosted runner. To see each connect attempt and its timeout, add `lftp_settings: "debug 3;"` for one run. |
 | `mirror: Access failed: 550 ... No such file or directory` | The remote path does not exist or the FTP user has no permission to create it. | Create the `remote_dir` manually (or set `delete: false` and accept a partial mirror) and confirm the FTP user owns it. |
+| `mirror: <path>: Permission denied` or `mirror: Access failed: <path>: Permission denied`, with no `550` | The `<path>` is a **local** path under `local_dir`, unlike the remote `550` rows above. The action runs as the unprivileged `lftp` user and cannot read a file or directory that is not world-readable (for example after `umask 077`, files written `0600` by a root step, or a `mktemp -d` directory). lftp uploads the other files, then exits 1. The action does not treat this as permanent, so it retries until `max_retries` runs out. | Add a step before the action: `chmod -R a+rX <local_dir>` (files `o+r`, directories `o+rx`). See [Self-hosted runners](#self-hosted-runners). |
 | `getpeername: Connection refused` on `ftps://host:990` | The server is **not** speaking implicit FTPS — it is almost certainly explicit FTPS on port 21. The `ftps://` URL forces TLS from byte 0, which the server rejects. | Switch `server` to `ftp://host:21` and keep `ftp_ssl_allow: "true"`. See the "Plain FTP vs FTPS" table in [Security and SSL](#security-and-ssl). |
 | `426 Failure reading network stream.` after `STOR`, `file size increased during transfer`, or an FTPS deploy that is slow and reconnects every few files | The server negotiated TLS 1.3, which lftp 4.9.3 mishandles at the end of each upload (#361). | Keep `tls_max_version` at its default `"1.2"`. If you set `"1.3"`, remove it. |
 | lftp logs `PROT command not understood` then drops the data connection | Some legacy FTPS servers do not support `PROT P` even though they accept `AUTH TLS`. lftp falls back to `PROT C` (clear data channel) by default; if the server closes the data connection instead, the action exits 1. | Add `lftp_settings: "set ftps:initial-prot C;"` to the step, or ask the hoster to enable `PROT P` server-side. |
@@ -798,6 +799,38 @@ unconditionally — `entrypoint.sh` writes the credentials to
 `/home/lftp/.netrc` (the path the `Dockerfile` guarantees to be
 writable for the `lftp` user), so the deployment succeeds even
 when the host `HOME` is read-only or owned by a different uid.
+
+The action runs as the unprivileged `lftp` user (a system user created
+with `adduser -S`; the Dockerfile sets no fixed uid, so do not rely on a
+particular number). Every file and directory under `local_dir` must
+therefore be readable by "other": files `o+r`, directories `o+rx`. The
+exception is an entry owned by the `lftp` uid itself, which is not the
+case for anything a normal workflow step writes. If an entry is not
+readable, lftp prints `mirror: <path>: Permission denied` or
+`mirror: Access failed: <path>: Permission denied`, uploads the rest
+and exits 1; the action treats this as a transient error and retries
+the whole run until `max_retries` is used up (with `max_retries: "0"`,
+until the job is stopped). Typical causes are a build
+step that runs with `umask 077`, files written `0600` by a step that
+runs as root in a container, and a `mktemp -d` directory (`0700`).
+GitHub-hosted checkouts are normally world-readable already; this
+mostly bites self-hosted runners and generated build output. The
+directories above `local_dir` need `o+x` as well, which the `chmod`
+below does not change; the workspace root normally has it. Fix it
+with a step before the action:
+
+```yaml
+      - name: Make the build output readable by the action
+        run: chmod -R a+rX ./public_html
+
+      - name: Deploy
+        uses: airvzxf/ftp-deployment-action@v3.1.0
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          user: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local_dir: "./public_html"
+```
 
 See also `SECURITY.md` → "Self-hosted runners" for the security
 implications of environment forwarding and how the action's
