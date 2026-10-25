@@ -699,3 +699,48 @@ publish_asc() {
   [[ "$output" == *"release.yml"* ]]
   [[ "$output" != *"OK"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# FND-0022: SCRIPT_DIR/REPO_ROOT resolution ignores CDPATH
+#
+# verify() runs `scripts/verify-tag.sh` from work/, so dirname "$0" is
+# the relative `scripts`, which cd looks up in CDPATH. The decoy dir
+# also has a `scripts/` subdir: an unprotected cd goes there and prints
+# its path, so SCRIPT_DIR gets two lines and the REPO_ROOT cd fails.
+# ---------------------------------------------------------------------------
+
+make_cdpath_decoy() {
+  mkdir -p "${FIX}/decoy/scripts"
+  export CDPATH="${FIX}/decoy"
+}
+
+@test "FND-0022: with CDPATH pointing at a decoy scripts/ dir, a legacy lightweight tag still exits 0" {
+  command -v git >/dev/null 2>&1 || skip "git not available"
+  make_fixture
+  make_work
+  git -C "${FIX}/work" tag v1.3.3
+  git -C "${FIX}/work" remote set-url origin "${FIX}/does-not-exist.git"
+  make_cdpath_decoy
+
+  verify v1.3.3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"INFO: v1.3.3 is a lightweight tag"* ]]
+  [[ "$output" != *"decoy"* ]]
+}
+
+@test "FND-0022: with CDPATH pointing at a decoy scripts/ dir, REPO_ROOT is still the work repo (signed tag verifies against its origin)" {
+  need_ssh
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  ssh_tag v99.0.1 keyA
+  make_cdpath_decoy
+
+  # REPO_ROOT is only used to fetch origin/main's allow-list; the decoy
+  # is not a git repo, so resolving to it would fail the fetch.
+  verify v99.0.1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK: v99.0.1 is signed by a key in .github/trusted-signers"* ]]
+  [[ "$output" != *"decoy"* ]]
+}

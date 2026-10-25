@@ -10,13 +10,12 @@ Automated Testing System).
 | File | Functions |
 |---|---|
 | `validate.bats` | `validate_int`, `validate_path`, `validate_lftp_settings` |
-| `parse.bats` | `_indirection`, `extract_netrc_host`, `build_ftp_settings`, `build_mirror_command`, `normalize_dir` |
+| `parse.bats` | `_indirection`, `extract_netrc_host`, `build_ftp_settings`, `build_mirror_command`, `normalize_dir`, `write_netrc` |
 | `retry.bats` | `classify_permanent_error`, `compute_backoff_seconds` |
 | `report.bats` | `add_masks`, `print_inputs_dump`, `print_success_banner`, `print_failure_banner` |
 
-The `run_lftp_once` and `write_netrc` helpers are not unit-tested
-here because they require either network I/O or filesystem
-side-effects. They are exercised by the integration
+The `run_lftp_once` helper is not unit-tested here because it
+requires network I/O. It is exercised by the integration
 [`tests/smoke.sh`](../smoke.sh), which runs the whole
 `entrypoint.sh` against an unreachable server in a real alpine
 container.

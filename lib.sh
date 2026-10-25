@@ -898,8 +898,8 @@ extract_netrc_host() {
 
 # ------------------------------------------------------------------------------
 # write_netrc NETRC_PATH HOST USER PASSWORD
-#   Write a .netrc file at NETRC_PATH with mode 0600, then install an
-#   EXIT trap that removes it on any exit path. This is the B-03
+#   Install an EXIT trap that removes NETRC_PATH, then write a .netrc
+#   file there that is created with mode 0600. This is the B-03
 #   fix: the password never appears on the lftp command line (and
 #   therefore not in /proc/<pid>/cmdline or in the GH Actions runner
 #   log).
@@ -912,12 +912,24 @@ write_netrc() {
   _wn_host=$2
   _wn_user=$3
   _wn_password=$4
-  {
-    printf 'machine %s login %s password %s\n' \
-      "${_wn_host}" "${_wn_user}" "${_wn_password}"
-  } > "${_wn_path}"
-  chmod 600 "${_wn_path}"
+  # FND-0048: install the cleanup trap before the password reaches the
+  # disk. entrypoint.sh replaces this trap right after write_netrc
+  # returns with its own EXIT trap, which also removes "${NETRC}" and
+  # owns the cleanup from then on; this one covers the write itself
+  # and any other caller.
   trap 'rm -f "${_wn_path}"' EXIT
+  # A redirection keeps an existing file's mode, so remove any old
+  # file first and create the new one under umask 077: it is 0600
+  # from the moment it exists. If rm fails, the `&&` skips the write
+  # and write_netrc returns non-zero, also inside `if` or `||`.
+  (
+    umask 077
+    rm -f "${_wn_path}" &&
+      printf 'machine %s login %s password %s\n' \
+        "${_wn_host}" "${_wn_user}" "${_wn_password}" > "${_wn_path}"
+  ) || return 1
+  # Belt and braces: the file is already 0600.
+  chmod 600 "${_wn_path}"
 }
 
 # ------------------------------------------------------------------------------

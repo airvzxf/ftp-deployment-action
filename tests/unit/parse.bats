@@ -1,7 +1,8 @@
 #!/usr/bin/env bats
 # tests/unit/parse.bats — unit tests for the parser/builder functions
 # in lib.sh: extract_netrc_host, build_ftp_settings,
-# build_mirror_command, normalize_dir, _indirection.
+# build_mirror_command, normalize_dir, _indirection, and the .netrc
+# writer write_netrc.
 
 setup() {
   set +u
@@ -367,4 +368,113 @@ setup() {
   out=$(build_ftp_settings)
   echo "$out" | grep -q "set net:max-retries 1;" \
     || { echo "FAIL: net:max-retries default is not 1; got: $out"; return 1; }
+}
+
+# ----------------------------------------------------------------------------
+# write_netrc (FND-0048)
+#
+# write_netrc installs an EXIT trap, so every test calls it in a child
+# `sh -eu -c` (the entrypoint's own errexit/nounset) and never in the
+# bats shell, whose EXIT trap it would replace.
+#
+# A `chmod` shell function stands in for the real one and prints the
+# file's mode and the EXIT trap before it runs `command chmod`. The
+# chmod 600 is the last step of write_netrc, so the stub sees the file
+# exactly as the write left it: the mode it was created (or reopened)
+# with, i.e. the mode it had while the password was in it. Checking
+# only the final mode could not fail, because the chmod 600 fixes it
+# up either way.
+# ----------------------------------------------------------------------------
+
+# Prints "write-mode=<mode>", "trap=<trap -p EXIT output>",
+# "final-mode=<mode>" and then the file contents, all from inside the
+# child shell (the EXIT trap removes the file when it exits).
+_wn_run() {
+  run sh -eu -c '
+    . "$1"
+    umask 022
+    chmod() {
+      printf "write-mode=%s\n" "$(stat -c %a "$2")"
+      printf "trap=%s\n" "$(trap -p EXIT)"
+      command chmod "$@"
+    }
+    write_netrc "$2" example.com deploy "p@ss w0rd"
+    printf "final-mode=%s\n" "$(stat -c %a "$2")"
+    cat "$2"
+  ' _ "${LIB}" "$1"
+}
+
+@test "write_netrc: under umask 022 the file is already 0600 when the password is written" {
+  netrc="${BATS_TEST_TMPDIR}/netrc"
+  _wn_run "${netrc}"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "write-mode=600" ]
+  [ "${lines[2]}" = "final-mode=600" ]
+}
+
+@test "write_netrc: a pre-existing 0644 file is replaced, never written while 0644" {
+  netrc="${BATS_TEST_TMPDIR}/netrc"
+  printf 'OLD-CONTENT-THAT-IS-LONGER-THAN-THE-NEW-LINE-%s\nsecond old line\n' \
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" > "${netrc}"
+  chmod 644 "${netrc}"
+  [ "$(stat -c %a "${netrc}")" = "644" ]
+  _wn_run "${netrc}"
+  [ "$status" -eq 0 ]
+  # A `>` redirection keeps an existing file's mode, so without the
+  # rm -f the password would be written into the 0644 file.
+  [ "${lines[0]}" = "write-mode=600" ]
+  [ "${lines[2]}" = "final-mode=600" ]
+  [ "${#lines[@]}" -eq 4 ]
+  [ "${lines[3]}" = "machine example.com login deploy password p@ss w0rd" ]
+  [[ "$output" != *OLD-CONTENT* ]]
+}
+
+@test "write_netrc: writes the single machine/login/password line unchanged" {
+  netrc="${BATS_TEST_TMPDIR}/netrc"
+  _wn_run "${netrc}"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 4 ]
+  [ "${lines[3]}" = "machine example.com login deploy password p@ss w0rd" ]
+}
+
+@test "write_netrc: the cleanup trap is installed before the write and removes the file on exit" {
+  netrc="${BATS_TEST_TMPDIR}/netrc"
+  _wn_run "${netrc}"
+  [ "$status" -eq 0 ]
+  # The stub runs after the write: the trap must already be there.
+  [[ "${lines[1]}" == "trap="*"rm -f"*"EXIT" ]]
+  [ ! -e "${netrc}" ]
+}
+
+@test "write_netrc: the trap removes the file when errexit aborts the caller" {
+  netrc="${BATS_TEST_TMPDIR}/netrc"
+  run sh -eu -c '
+    . "$1"
+    write_netrc "$2" example.com deploy pw
+    [ -f "$2" ] || exit 3
+    false
+  ' _ "${LIB}" "${netrc}"
+  [ "$status" -eq 1 ]
+  [ ! -e "${netrc}" ]
+}
+
+@test "write_netrc: if the old file cannot be removed it fails and does not write into it" {
+  if [ "$(id -u)" -eq 0 ]; then
+    skip "root ignores the read-only directory"
+  fi
+  dir="${BATS_TEST_TMPDIR}/ro"
+  mkdir "${dir}"
+  netrc="${dir}/netrc"
+  printf 'old\n' > "${netrc}"
+  chmod 666 "${netrc}"
+  chmod 555 "${dir}"
+  run sh -eu -c '
+    . "$1"
+    write_netrc "$2" example.com deploy pw
+    echo reached-after-write_netrc
+  ' _ "${LIB}" "${netrc}"
+  chmod 755 "${dir}"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *reached-after-write_netrc* ]]
+  [ "$(cat "${netrc}")" = "old" ]
 }

@@ -264,8 +264,9 @@ export HOME="/home/lftp"
 NETRC_HOST=$(extract_netrc_host "${INPUT_SERVER}")
 write_netrc "${NETRC}" "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
 
-# v2.8.0: extend the EXIT trap installed by write_netrc above to
-# also release the server-side concurrency lock (best-effort).
+# v2.8.0: replace the EXIT trap installed by write_netrc above with
+# one that also releases the server-side concurrency lock
+# (best-effort).
 # Order matters: the lock release must run BEFORE the .netrc is
 # removed, because the release invokes lftp which needs the .netrc
 # to authenticate.
@@ -281,13 +282,17 @@ write_netrc "${NETRC}" "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
 # against the FTP server on EVERY action run, even when no lock was
 # acquired in this run. Pre-fix this caused: (1) a spurious ~30s
 # lftp round-trip on every default-mode action run (the trap fires
-# before write_netrc removes .netrc, so the lftp call authenticates
+# before the trap removes .netrc, so the lftp call authenticates
 # then waits for network timeouts on servers where the lock dir
 # never existed), and (2) a real race where a parallel
 # `concurrency_lock=true` runner sees its in-use lock RMDed by the
 # EXIT trap of a default-mode runner sharing the same FTP server
 # and lock path. See tests/integration/scenarios/09-concurrency-
 # lock-e2e.sh which now also covers the default-mode trap shape.
+#
+# FND-0048: `trap ... EXIT` replaces write_netrc's trap rather than
+# adding to it, so both branches below end with `rm -f "${NETRC}"`:
+# from here on this trap owns the .netrc removal.
 if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
   trap 'release_lock_safely "${INPUT_SERVER}" "${INPUT_CONCURRENCY_LOCK_PATH}" "${ACQUIRED_LOCK_SENTINEL:-}" "${INPUT_USER}"; rm -f "${NETRC}"' EXIT
 else

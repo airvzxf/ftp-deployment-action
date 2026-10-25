@@ -67,9 +67,12 @@
 set -eu
 
 # Resolve repo root from the script's own location so the script
-# works regardless of the caller's cwd.
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
+# works regardless of the caller's cwd. `CDPATH=` and >/dev/null keep
+# an exported CDPATH from sending cd elsewhere and printing (FND-0022).
+# shellcheck disable=SC1007
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" >/dev/null && pwd)
+# shellcheck disable=SC1007
+REPO_ROOT=$(CDPATH= cd -- "${SCRIPT_DIR}/.." >/dev/null && pwd)
 
 # The allow-lists are read from origin/main (see fetch_allowlists),
 # as release.yml does, into this temp dir.
