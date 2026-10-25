@@ -391,7 +391,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 
 | Option                 | Description                                                                           | Required | Default | Example                                                                                           |
 |------------------------|---------------------------------------------------------------------------------------|----------|---------|---------------------------------------------------------------------------------------------------|
-| server                 | FTP server: `ftp://host[:port]` or `ftps://host[:port]` (implicit TLS); a bare `host[:port]` means `ftp://`. IPv6 in brackets (`ftp://[2001:db8::1]:21`). No `user:pass@` in the URL (exit 2): use `user` / `password`. The target directory is `remote_dir`, not the URL path. | Yes      | N/A     | rovisoft.net                                                                                      |
+| server                 | FTP server: `ftp://host[:port]` or `ftps://host[:port]` (implicit TLS); a bare `host[:port]` means `ftp://`. IPv6 in brackets (`ftp://[2001:db8::1]:21`). No `user:pass@`, with or without a scheme (exit 2): use `user` / `password`. The target directory is `remote_dir`, not the URL path. | Yes      | N/A     | rovisoft.net                                                                                      |
 | user                   | FTP Username.                                                                         | Yes      | N/A     | myself@rovisoft.net                                                                               |
 | password               | FTP Password.                                                                         | Yes      | N/A     | ExampleOnlyAlphabets                                                                              |
 | local_dir              | Local directory.                                                                      | No       | "./"    | "./public_html"                                                                                   |
@@ -555,8 +555,8 @@ to share a group name), opt in to the server-side lock:
 high-level `mkdir <path>` command to create a sentinel
 directory on the FTP server. If the server replies `257`
 (created), the deployment holds the lock and proceeds.
-If the server replies `550` (already exists), another run
-is in flight; the action polls up to
+If `mkdir` fails (normally a `550`, the directory already
+exists), another run is in flight; the action polls up to
 `concurrency_lock_timeout` seconds (retrying every
 `concurrency_lock_poll_interval` seconds) and then fails
 with a clear error. After the mirror completes (or on
@@ -564,6 +564,15 @@ any exit path — success, error, SIGINT, 5h timeout, or
 signal), the action issues `quote RMD <path>` to release
 the lock, both in the mirror invocation and via the EXIT
 trap as a fallback.
+
+**A wrong password or an unreachable server looks like a held
+lock.** The action only checks whether `mkdir` failed and discards
+lftp's output, so a login or connection error is treated like
+"directory exists": it waits the full `concurrency_lock_timeout`
+and then reports that another deployment is in progress. If that
+happens while no other job is running, check the credentials and
+the server first. A fresh run with `concurrency_lock: "false"`
+shows the real lftp error.
 
 **Why MKD/RMD and not a "lock" command.** lftp does not
 ship a server-side `lock` primitive — it only has
@@ -749,7 +758,7 @@ non-buildable image) **before** a tag is pushed.
 |------|---------|
 | `0`  | Upload finished successfully. |
 | `1`  | Upload failed after all retries; the last lftp error is printed above. |
-| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` — the userinfo password is rejected); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives; an `exclude` value rejected by `validate_glob_pattern` (control chars, `;`, `&`, `|`, `"`, or an item that starts with a dash or contains a space). |
+| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` or `user:pass@host` — the userinfo password is rejected); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives; an `exclude` value rejected by `validate_glob_pattern` (control chars, `;`, `&`, `|`, `"`, or an item that starts with a dash or contains a space). |
 
 lftp's own output (transferred files, the `dry_run` plan, server errors) is
 printed in the step log; there is nothing else to download.
@@ -767,6 +776,7 @@ log for debugging).
 | `Fatal error: certificate verify failed` (TLS) | The server uses a self-signed certificate, the cert is expired, or you are connecting to a bare IP. | `ssl_verify_certificate` is `true` by default since v2.0.0. If you trust the server, set `ssl_verify_certificate: "false"` explicitly. For a bare IP you cannot validate a hostname — use a hostname with a real cert or opt out. |
 | `Connection refused` / hangs on connect | Wrong host/port, firewall blocking outbound 21/990, or the FTP server is down. | Verify `server` (`ftp://host:21` or `ftps://host:990`). From the runner, `nc -vz host 21` should succeed. Some shared hosters block the runner's IP range — ask them to allow-list it. |
 | `Fatal error: max-retries exceeded` with no reason in parentheses, and the banner says `lftp got no reply from the server` | The connection never got an FTP greeting: a firewall drops the packets, the host or port is wrong, or the server closes the connection before replying. Each try waits for `net_timeout`, so the step looks like a slow loop of the same message. | Same checks as `Connection refused`. GitHub-hosted runners connect from Azure IP ranges: hosters and VPS firewalls often block them, so allow-list the range or use a self-hosted runner. To see each connect attempt and its timeout, add `lftp_settings: "debug 3;"` for one run. |
+| `another deployment is currently in progress` after waiting `concurrency_lock_timeout`, while no other job is running | With `concurrency_lock: "true"`, any failure of the lock `mkdir` is treated as the lock being held, including a login or connection error (lftp's output is discarded, so the real error is not shown). | Check `user`, `password` and `server` first. Run once with `concurrency_lock: "false"` to see the real lftp error. If the credentials are fine, see [Concurrency / deployment lock](#concurrency--deployment-lock) for clearing a stale lock. |
 | `mirror: Access failed: 550 ... No such file or directory` | The remote path does not exist or the FTP user has no permission to create it. | Create the `remote_dir` manually (or set `delete: false` and accept a partial mirror) and confirm the FTP user owns it. |
 | `mirror: <path>: Permission denied` or `mirror: Access failed: <path>: Permission denied`, with no `550` | The `<path>` is a **local** path under `local_dir`, unlike the remote `550` rows above. The action runs as the unprivileged `lftp` user and cannot read a file or directory that is not world-readable (for example after `umask 077`, files written `0600` by a root step, or a `mktemp -d` directory). lftp uploads the other files, then exits 1. The action does not treat this as permanent, so it retries until `max_retries` runs out. | Add a step before the action: `chmod -R a+rX <local_dir>` (files `o+r`, directories `o+rx`). See [Self-hosted runners](#self-hosted-runners). |
 | `getpeername: Connection refused` on `ftps://host:990` | The server is **not** speaking implicit FTPS — it is almost certainly explicit FTPS on port 21. The `ftps://` URL forces TLS from byte 0, which the server rejects. | Switch `server` to `ftp://host:21` and keep `ftp_ssl_allow: "true"`. See the "Plain FTP vs FTPS" table in [Security and SSL](#security-and-ssl). |

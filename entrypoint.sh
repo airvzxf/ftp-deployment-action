@@ -103,8 +103,24 @@ INPUT_DEBUG=$(normalize_bool                   "debug"                 "${INPUT_
 # live in the URL so lftp's netrc lookup fires (see rewrite_lftp_url
 # at lib.sh:~956). The detection pattern is the strict `:pw@` form:
 # a `:` between the `://` and the `@` in the userinfo segment.
+# FND-0006: a value without a scheme (a bare `host[:port]` means
+# ftp://) is checked too. A scheme counts only when letters come
+# before `://`, as lftp and extract_netrc_host read it; otherwise the
+# whole value is checked, so `user:pass@host/x://y` cannot pass.
+# `user@host:21` and `user@[2001:db8::1]:21` have the `:` after the
+# `@` and pass.
+_srv_rest=${INPUT_SERVER}
 case "${INPUT_SERVER}" in
-  *://*:*@*)
+  *://*)
+    _srv_scheme=${INPUT_SERVER%%://*}
+    case "${_srv_scheme}" in
+      ''|*[!A-Za-z]*) ;;
+      *) _srv_rest=${INPUT_SERVER#*://} ;;
+    esac
+    ;;
+esac
+case "${_srv_rest}" in
+  *:*@*)
     printf 'ERROR: server must not contain URL userinfo with embedded password (user:pass@host); use the user/password inputs instead.\n' >&2
     exit 2
     ;;

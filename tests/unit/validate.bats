@@ -666,3 +666,60 @@ default'
   [ -f "${_cnf}" ]
   grep -qx 'MaxProtocol = TLSv1.2' "${_cnf}"
 }
+
+# ----------------------------------------------------------------------------
+# #195 / FND-0006: the server userinfo guard in entrypoint.sh. The guard runs
+# before add_masks, so the test runs a scratch copy of entrypoint.sh (the
+# /app/ and /home/lftp paths rewritten into BATS_TEST_TMPDIR, the same way as
+# the FND-0043 harness in lock.bats) against a lib.sh copy whose add_masks
+# prints a marker and exits 0. The marker means "got past the guard".
+# ----------------------------------------------------------------------------
+
+_run_entrypoint_server_guard() {
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local app="${BATS_TEST_TMPDIR}/app"
+  mkdir -p "${app}" "${BATS_TEST_TMPDIR}/home/lftp"
+  cp "${root}/lib.sh" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  cat >> "${app}/lib.sh" <<'STUB'
+
+add_masks() { printf 'PAST_SERVER_GUARD\n'; exit 0; }
+STUB
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${BATS_TEST_TMPDIR}/home/lftp#g" \
+    "${root}/entrypoint.sh" > "${app}/entrypoint.sh"
+  # bash, not sh: entrypoint.sh needs `set -o pipefail` (dash lacks it).
+  HOME="${BATS_TEST_TMPDIR}/home" INPUT_SERVER="$1" INPUT_USER="ftptest" INPUT_PASSWORD="pw" \
+    run bash -eu "${app}/entrypoint.sh"
+}
+
+@test "entrypoint: #195/FND-0006: user:pass@ without a scheme is rejected with exit 2, secret not echoed" {
+  for v in 'deploy:s3cretPW@ftp.example.com' 'deploy:s3cretPW@ftp.example.com:21' 'deploy:s3c@retPW@ftp.example.com' 'deploy:@ftp.example.com' 'deploy:s3cretPW@ftp.example.com/x://y'; do
+    _run_entrypoint_server_guard "$v"
+    echo "server=${v} status=${status}"; echo "${output}"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"ERROR: server must not contain URL userinfo with embedded password (user:pass@host); use the user/password inputs instead."* ]]
+    [[ "${output}" != *"PAST_SERVER_GUARD"* ]]
+    [[ "${output}" != *"s3c"* ]]
+    [[ "${output}" != *"retPW"* ]]
+  done
+}
+
+@test "entrypoint: #195: ftp://user:pass@host is still rejected with exit 2" {
+  _run_entrypoint_server_guard 'ftp://deploy:s3cretPW@ftp.example.com:21'
+  echo "status=${status}"; echo "${output}"
+  [ "${status}" -eq 2 ]
+  [[ "${output}" == *"ERROR: server must not contain URL userinfo with embedded password"* ]]
+  [[ "${output}" != *"s3cretPW"* ]]
+}
+
+@test "entrypoint: #195/FND-0006: hosts, ports, IPv6 literals and a bare user@ get past the guard" {
+  for v in 'ftp://user@host:21' 'ftp://user@host' 'user@host:21' 'user@host' 'host:21' \
+           '[2001:db8::1]:21' 'ftp://[2001:db8::1]:21' 'ftps://[2001:db8::1]:990' \
+           'ftps://host' 'user@[2001:db8::1]:21'; do
+    _run_entrypoint_server_guard "$v"
+    echo "server=${v} status=${status}"; echo "${output}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PAST_SERVER_GUARD"* ]]
+    [[ "${output}" != *"embedded password"* ]]
+  done
+}
