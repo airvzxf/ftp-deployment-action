@@ -57,7 +57,36 @@ jobs:
         run: |
           set -eu
           docker exec "${FTP_CID}" ls -laR /home/vsftpd/e2euser
-          for f in index.html about.html assets; do
-            docker exec "${FTP_CID}" test -e "/home/vsftpd/e2euser/${f}" \
-              || { echo "::error::${f} missing on the FTP server"; exit 1; }
-          done
+          # Compare every fixture file (nested ones and dotfiles such as
+          # assets/.keep included) with the uploaded copy by SHA-256.
+          # remote_dir is /, the e2euser home in the vsftpd container.
+          fixture=tests/integration/fixtures/sample-public-html
+          list="${RUNNER_TEMP}/e2e-fixture-files"
+          find "${fixture}" -type f -print > "${list}"
+          checked=0
+          failed=0
+          while IFS= read -r f; do
+            rel=${f#"${fixture}/"}
+            want=$(sha256sum < "${f}")
+            want=${want%% *}
+            if got=$(docker exec "${FTP_CID}" sha256sum "/home/vsftpd/e2euser/${rel}" 2>/dev/null); then
+              got=${got%% *}
+              if [ "${got}" != "${want}" ]; then
+                echo "::error::${rel} differs on the FTP server (sha256 ${got}, expected ${want})"
+                failed=$((failed + 1))
+              fi
+            else
+              echo "::error::${rel} missing or unreadable on the FTP server"
+              failed=$((failed + 1))
+            fi
+            checked=$((checked + 1))
+          done < "${list}"
+          if [ "${checked}" -eq 0 ]; then
+            echo "::error::no fixture files found under ${fixture}"
+            exit 1
+          fi
+          if [ "${failed}" -ne 0 ]; then
+            echo "::error::${failed} of ${checked} files missing or different on the FTP server"
+            exit 1
+          fi
+          echo "All ${checked} fixture files match on the FTP server."
