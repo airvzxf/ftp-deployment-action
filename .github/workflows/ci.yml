@@ -55,10 +55,15 @@ jobs:
       # pin explicit.
       - name: Install actionlint
         run: |
-          set -e
+          set -eu
+          # A version bump must update both lines: sha= is the
+          # actionlint_<ver>_linux_amd64.tar.gz entry of the upstream
+          # actionlint_<ver>_checksums.txt release asset.
           ver=1.7.7
-          curl -sSL -o /tmp/actionlint.tar.gz \
+          sha=023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+          curl -fsSL -o /tmp/actionlint.tar.gz \
             "https://github.com/rhysd/actionlint/releases/download/v${ver}/actionlint_${ver}_linux_amd64.tar.gz"
+          echo "${sha}  /tmp/actionlint.tar.gz" | sha256sum -c -
           tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
           sudo mv /tmp/actionlint /usr/local/bin/actionlint
           actionlint --version

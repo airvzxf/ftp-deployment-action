@@ -16,7 +16,9 @@
 #     tests/integration/run-integration-tests.sh, kept equal by
 #     tests/acceptance/static.sh S19. Upstream has not published
 #     since 2023-01.
-#   - actionlint: the `ver=` line in .github/workflows/ci.yml.
+#   - actionlint: the `ver=` line in .github/workflows/ci.yml, and
+#     the `sha=` line next to it (the tarball's SHA-256 from the
+#     upstream actionlint_<ver>_checksums.txt).
 #   - the `# syntax=docker/dockerfile:1.4` frontends of
 #     tests/Dockerfile.smoke and tests/integration/Dockerfile.test-server
 #     (the docker ecosystem documents `FROM` lines only; whether it
