@@ -744,3 +744,140 @@ make_cdpath_decoy() {
   [[ "$output" == *"OK: v99.0.1 is signed by a key in .github/trusted-signers"* ]]
   [[ "$output" != *"decoy"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# FND-0021: TRUSTED_SSH path with spaces/globs; repo-local gpg.ssh.program
+# ---------------------------------------------------------------------------
+
+@test "FND-0021: a TMPDIR with a space, brackets and a glob character still verifies a trusted SSH-signed tag" {
+  need_ssh
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  ssh_tag v99.0.1 keyA
+  export TMPDIR="${FIX}/tmp dir [x] *"
+  mkdir -p "${TMPDIR}"
+  # A file the unquoted glob would match, so a split/expanded path differs.
+  : > "${TMPDIR}/decoy"
+
+  verify v99.0.1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK: v99.0.1 is signed by a key in .github/trusted-signers"* ]]
+}
+
+@test "FND-0021: a repo-local gpg.ssh.program that always succeeds does not make an unlisted SSH key pass" {
+  need_ssh
+  new_key keyA; new_key keyB
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  ssh_tag v99.0.2 keyB   # keyB is not on origin/main
+  cat > "${FIX}/fake-ssh-keygen" <<'FAKE'
+#!/bin/sh
+echo 'Good "git" signature for a@example.invalid with ED25519 key SHA256:fake'
+exit 0
+FAKE
+  chmod +x "${FIX}/fake-ssh-keygen"
+  git -C "${FIX}/work" config gpg.ssh.program "${FIX}/fake-ssh-keygen"
+
+  verify v99.0.2
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"OK: v99.0.2"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# FND-0020: a corrupt trusted-signers.asc is reported, exit 1
+# ---------------------------------------------------------------------------
+
+@test "FND-0020: a corrupt .asc on origin/main fails an SSH-signed trusted tag with exit 1 and the import error" {
+  need_ssh
+  command -v gpg >/dev/null 2>&1 || skip "gpg not available"
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  echo "this is not a key" > "${FIX}/corrupt.asc"
+  publish_asc "${FIX}/corrupt.asc"
+  make_work
+  ssh_tag v99.0.3 keyA
+
+  verify v99.0.3
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"ERROR: could not import origin/main:.github/trusted-signers.asc into the temporary keyring"* ]]
+  [[ "$output" != *"OK: v99.0.3"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# FND-0024: INT and TERM exit 130/143 and remove the temp dirs
+# ---------------------------------------------------------------------------
+
+# signal_run SIG: run the script with a fake git that blocks during the
+# fetch (after writing its pid to ${FIX}/fetching), send SIG once the
+# marker exists, then let the blocked fetch end so the shell can run its
+# trap. The runner is a bash with job control (set -m): without it a
+# background child starts with SIGINT ignored and cannot trap INT.
+# Sets $status to the script's exit status; TMPDIR is a fresh dir.
+signal_run() {
+  mkdir -p "${FIX}/fakebin" "${FIX}/sigtmp"
+  rm -f "${FIX}/fetching"
+  REAL_GIT=$(command -v git)
+  cat > "${FIX}/fakebin/git" <<FAKE
+#!/bin/sh
+for a in "\$@"; do
+  if [ "\$a" = fetch ]; then
+    echo \$\$ > "${FIX}/fetching.tmp"
+    mv "${FIX}/fetching.tmp" "${FIX}/fetching"
+    exec sleep 30
+  fi
+done
+exec "${REAL_GIT}" "\$@"
+FAKE
+  chmod +x "${FIX}/fakebin/git"
+  cat > "${FIX}/runner.sh" <<'RUN'
+set -m
+sig=$1
+scripts/verify-tag.sh "$2" >"$3/out" 2>&1 &
+pid=$!
+i=0
+while [ ! -f "$3/fetching" ]; do
+  i=$((i + 1))
+  [ "$i" -le 200 ] || { kill -KILL "$pid" 2>/dev/null; exit 99; }
+  sleep 0.05
+done
+kill -"$sig" "$pid"
+kill -KILL "$(cat "$3/fetching")" 2>/dev/null
+wait "$pid"
+exit $?
+RUN
+  cd "${FIX}/work"
+  run env TMPDIR="${FIX}/sigtmp" PATH="${FIX}/fakebin:${PATH}" \
+    bash "${FIX}/runner.sh" "$1" v99.0.1 "${FIX}"
+}
+
+@test "FND-0024: SIGINT during the fetch exits 130 and leaves no temp dir" {
+  need_ssh
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  ssh_tag v99.0.1 keyA
+
+  signal_run INT
+  [ "$status" -eq 130 ]
+  [ -z "$(ls -A "${FIX}/sigtmp")" ]
+  [[ "$output" != *"OK: v99.0.1"* ]]
+}
+
+@test "FND-0024: SIGTERM during the fetch exits 143 and leaves no temp dir" {
+  need_ssh
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  ssh_tag v99.0.1 keyA
+
+  signal_run TERM
+  [ "$status" -eq 143 ]
+  [ -z "$(ls -A "${FIX}/sigtmp")" ]
+  [[ "$output" != *"OK: v99.0.1"* ]]
+}

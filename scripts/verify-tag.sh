@@ -24,14 +24,15 @@
 #
 # It deliberately writes **nothing** to the developer's environment:
 #
-#   * `GNUPGHOME` is a `mktemp -d` (cleaned by trap on exit) so the
-#     PGP keyring import never lands in permanent `~/.gnupg`, and
-#     `git verify-tag` never consults it, whatever the tag's format.
+#   * `GNUPGHOME` is a `mktemp -d` (cleaned by trap on exit, INT or
+#     TERM) so the PGP keyring import never lands in permanent
+#     `~/.gnupg`, and `git verify-tag` never consults it, whatever the
+#     tag's format.
 #   * Git config is passed via per-invocation `git -c` overrides (or
 #     `--local` config in a temp repo, see below) — never written to
 #     the developer's `.git/config`.
 #   * The allow-lists are copied out of `origin/main` into a
-#     `mktemp -d` (cleaned by trap on exit). The only change to the
+#     `mktemp -d` (cleaned by the same trap). The only change to the
 #     repository is the fetch refreshing `refs/remotes/origin/main`
 #     (and FETCH_HEAD); it never makes the clone shallow.
 #
@@ -53,8 +54,12 @@
 #      signature could not be verified against the origin/main
 #      allow-lists, or its tag header does not name <tag>, or
 #      origin/main (and so its allow-list) could not be fetched or has
-#      no trusted-signers.
+#      no trusted-signers, or origin/main's trusted-signers.asc could
+#      not be imported into the temp keyring (this affects SSH-signed
+#      tags too).
 #   2  usage error.
+#   130 interrupted (SIGINT), after removing the temp dirs.
+#   143 terminated (SIGTERM), after removing the temp dirs.
 #
 # Dependencies
 # ------------
@@ -62,7 +67,8 @@
 #   * gpg (used for any signed tag when origin/main has a
 #     trusted-signers.asc, to import it into the temp keyring; a
 #     PGP-signed tag fails without it, an SSH-signed one does not
-#     need it).
+#     need it, but if gpg is installed and the import fails, either
+#     format fails).
 
 set -eu
 
@@ -74,20 +80,48 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" >/dev/null && pwd)
 # shellcheck disable=SC1007
 REPO_ROOT=$(CDPATH= cd -- "${SCRIPT_DIR}/.." >/dev/null && pwd)
 
+# Remove the temp dirs. The trap names this function rather than
+# embedding the paths, so it reads them when it runs and a path with a
+# quote in it cannot change the trap command (FND-0024). The trap is
+# set before the first mktemp, so a failed second mktemp still removes
+# the first dir. INT and TERM clean up and then exit with the usual
+# 128+signal status instead of resuming the script.
+ALLOWLIST_DIR=
+VERIFY_GNUPGHOME=
+cleanup() {
+  [ -z "${ALLOWLIST_DIR}" ] || rm -rf -- "${ALLOWLIST_DIR}"
+  [ -z "${VERIFY_GNUPGHOME}" ] || rm -rf -- "${VERIFY_GNUPGHOME}"
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+
 # The allow-lists are read from origin/main (see fetch_allowlists),
 # as release.yml does, into this temp dir.
-ALLOWLIST_DIR=$(mktemp -d)
+ALLOWLIST_DIR=$(mktemp -d) || exit 1
 # Isolated keyring for every `git verify-tag` run: it holds only
 # origin/main's trusted-signers.asc (or nothing), never ~/.gnupg.
-VERIFY_GNUPGHOME=$(mktemp -d) || { rm -rf "${ALLOWLIST_DIR}"; exit 1; }
-# shellcheck disable=SC2064  # expand the paths now, not on exit.
-trap "rm -rf '${ALLOWLIST_DIR}' '${VERIFY_GNUPGHOME}'" EXIT INT TERM
+VERIFY_GNUPGHOME=$(mktemp -d) || exit 1
 TRUSTED_SSH="${ALLOWLIST_DIR}/trusted-signers"
 TRUSTED_PGP="${ALLOWLIST_DIR}/trusted-signers.asc"
 
-# Default git-invocation prefix: `git -c` overrides. Used so the
-# script never touches the developer's `.git/config`.
-GIT_PREFIX="git -c gpg.format=ssh -c gpg.ssh.allowedsignersfile=${TRUSTED_SSH}"
+# git with per-invocation `-c` overrides, so the script never touches
+# the developer's `.git/config`. A function rather than a command
+# string, so a path with spaces or glob characters stays one argument
+# (FND-0021). The gpg.program and gpg.ssh.program pins stop a value set
+# in the developer's repo .git/config (or global config) from pointing
+# verify-tag at a program that fakes a pass; gpg.x509.program=false
+# does the same for x509, which is never a valid release format here.
+# GNUPGHOME is set on the git command itself, so the isolated keyring
+# reaches git without relying on env prefixes on a function call.
+# These pins harden the check; they do not protect against someone who
+# can write .git/config (a hook could still run during `git fetch`).
+vgit() {
+  GNUPGHOME="${VERIFY_GNUPGHOME}" \
+    git -c gpg.format=ssh -c "gpg.ssh.allowedsignersfile=${TRUSTED_SSH}" \
+    -c gpg.program=gpg -c gpg.ssh.program=ssh-keygen \
+    -c gpg.x509.program=false "$@"
+}
 
 # Fetch origin/main and copy its allow-lists into ALLOWLIST_DIR,
 # mirroring release.yml's "Fetch allow-list from origin/main" step:
@@ -168,12 +202,18 @@ verify_signature() {
   esac
 
   # Use GNUPGHOME rather than --homedir so the same call works with
-  # gpg 1.x and 2.x.
+  # gpg 1.x and 2.x. The import runs for SSH-signed tags too, so a
+  # corrupt or non-key .asc fails both formats; report it with gpg's
+  # stderr and exit 1 rather than gpg's own status (FND-0020).
   if [ -s "${TRUSTED_PGP}" ] && command -v gpg >/dev/null 2>&1; then
-    GNUPGHOME="${VERIFY_GNUPGHOME}" gpg --batch --import "${TRUSTED_PGP}" \
-      >/dev/null 2>&1
+    if ! _import_err=$(GNUPGHOME="${VERIFY_GNUPGHOME}" gpg --batch \
+        --import "${TRUSTED_PGP}" 2>&1 >/dev/null); then
+      printf 'ERROR: could not import origin/main:.github/trusted-signers.asc into the temporary keyring\n' >&2
+      printf '%s\n' "${_import_err}" >&2
+      exit 1
+    fi
   fi
-  GNUPGHOME="${VERIFY_GNUPGHOME}" ${GIT_PREFIX} verify-tag "refs/tags/${_tag}"
+  vgit verify-tag "refs/tags/${_tag}"
 }
 
 # The legacy tags that SECURITY.md ("Legacy lightweight tags") lists
