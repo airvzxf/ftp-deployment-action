@@ -133,6 +133,16 @@ by an `EXIT` trap — so it does not appear in `/proc/<pid>/cmdline`,
 in the runner log, or in any subsequent container filesystem
 state.
 
+Because the `.netrc` lives in `/home/lftp` for the whole mirror,
+the action rejects (exit 2) a `local_dir` that is `/home/lftp`,
+lies inside it, or contains it (`/`, `/home`); otherwise the reverse
+mirror would upload the credentials to `remote_dir`. The check is
+lexical and does not follow symlinks. lftp gets `local_dir` in
+double quotes, so it opens the path that was checked. A `local_dir`
+that contains `\` or starts with `~` or `file:` is rejected too,
+because `\` is lftp's escape character inside the quotes, and lftp
+expands `~` to `/home/lftp` and reads `file:` as a local file URL.
+
 A self-hosted runner operator who needs to verify that the
 password never reaches the host can:
 

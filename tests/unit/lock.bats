@@ -20,7 +20,9 @@ setup() {
   # and that errexit is what fails a test on ANY failing command, not
   # only the last one. A call that is expected to fail is wrapped in
   # `run` or `|| rc=$?`. bats does not enable nounset, so no `set +u`.
-  LIB="${BATS_TEST_DIRNAME}/../../lib.sh"
+  # LIB_SRC overrides the lib.sh under test (used to prove the FND-0003
+  # tests fail on the pre-fix lib.sh).
+  LIB="${LIB_SRC:-${BATS_TEST_DIRNAME}/../../lib.sh}"
   # shellcheck disable=SC1090
   . "${LIB}"
 
@@ -463,9 +465,11 @@ FAKE
   [ -z "${ACQUIRED_LOCK_SENTINEL:-}" ]
 }
 
-# #250: a sentinel is only stale once it is older than 6 h (GitHub's
-# maximum job time). An older-than-timeout but younger-than-6-h
-# sentinel belongs to a live run (a long mirror) and must be kept.
+# #250: a sentinel is only stale once it is older than 6 h. Since the
+# FND-0003 heartbeat the holder renames its sentinel to a fresh stamp
+# before every mirror attempt, so "stale" means no attempt has started
+# for 6 h. An older-than-timeout but younger-than-6-h sentinel belongs
+# to a live run (a long mirror) and must be kept.
 _install_scripted_lftp() {
   cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
 #!/bin/sh
@@ -1013,6 +1017,119 @@ LIST
   fi
 }
 
+# ----------------------------------------------------------------------------
+# FND-0003: lock heartbeat. refresh_lock_sentinel renames the holder's
+# sentinel (lftp `mv` = RNFR/RNTO) to a fresh stamp before every mirror
+# attempt. A fake `date` (stamp read from FAKE_DATE_FILE) makes the new
+# names deterministic and independent of second boundaries.
+# ----------------------------------------------------------------------------
+
+_install_fake_date() {
+  export FAKE_DATE_FILE="${BATS_TEST_TMPDIR}/fake-date.stamp"
+  printf '%s\n' "$1" > "${FAKE_DATE_FILE}"
+  cat > "${BATS_TEST_TMPDIR}/bin/date" <<'FAKE'
+#!/bin/sh
+cat "${FAKE_DATE_FILE}"
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/date"
+}
+
+FND3_LOCK=".lftp-deployment.lock"
+FND3_OLD=".lftp-deployment.lock.20260101T000000Z.1234.info"
+
+@test "refresh_lock_sentinel: FND-0003: success renames old -> new (same PID scheme, fresh stamp), switches the name, clears TRIED" {
+  _install_fake_date "20260601T120000Z"
+  export FAKE_LFTP_RC=0
+  ACQUIRED_LOCK_SENTINEL="${FND3_OLD}"
+  ACQUIRED_LOCK_SENTINEL_TRIED="stale-name-from-earlier"
+  refresh_lock_sentinel "ftp://example.test" "${FND3_LOCK}" "ftptest" > "${BATS_TEST_TMPDIR}/out" || exit 1
+  new=$(_lock_sentinel_name "20260601T120000Z" "$$")
+  [ "$(wc -l < "${FAKE_LFTP_LOG}")" -eq 1 ] || { cat "${FAKE_LFTP_LOG}"; exit 1; }
+  grep -qF "mv ${FND3_LOCK}/${FND3_OLD} ${FND3_LOCK}/${new}; quit;" "${FAKE_LFTP_LOG}" || { cat "${FAKE_LFTP_LOG}"; exit 1; }
+  grep -qF "ftp://ftptest@example.test" "${FAKE_LFTP_LOG}" || exit 1
+  printf '%s\n' "${new}" | grep -Eq '^\.lftp-deployment\.lock\.[0-9]{8}T[0-9]{6}Z\.[0-9]+\.info$' || exit 1
+  [ "${ACQUIRED_LOCK_SENTINEL}" = "${new}" ] || exit 1
+  [ -z "${ACQUIRED_LOCK_SENTINEL_TRIED}" ] || exit 1
+  [ ! -s "${BATS_TEST_TMPDIR}/out" ] || { cat "${BATS_TEST_TMPDIR}/out"; exit 1; }
+}
+
+@test "refresh_lock_sentinel: FND-0003: lftp failure returns 0, warns, keeps the old name, records the attempted name in TRIED" {
+  _install_fake_date "20260601T120000Z"
+  export FAKE_LFTP_RC=5
+  ACQUIRED_LOCK_SENTINEL="${FND3_OLD}"
+  ACQUIRED_LOCK_SENTINEL_TRIED=""
+  rc=0
+  refresh_lock_sentinel "ftp://example.test" "${FND3_LOCK}" "ftptest" > "${BATS_TEST_TMPDIR}/out" || rc=$?
+  new=$(_lock_sentinel_name "20260601T120000Z" "$$")
+  [ "${rc}" -eq 0 ] || exit 1
+  grep -qF "::warning::concurrency lock: could not refresh the sentinel ${FND3_LOCK}/${FND3_OLD} (lftp exit 5)" "${BATS_TEST_TMPDIR}/out" || { cat "${BATS_TEST_TMPDIR}/out"; exit 1; }
+  [ "${ACQUIRED_LOCK_SENTINEL}" = "${FND3_OLD}" ] || exit 1
+  [ "${ACQUIRED_LOCK_SENTINEL_TRIED}" = "${new}" ] || { echo "TRIED=${ACQUIRED_LOCK_SENTINEL_TRIED}"; exit 1; }
+}
+
+@test "refresh_lock_sentinel: FND-0003: a new name equal to the current one (same second) makes no lftp call" {
+  _install_fake_date "20260601T120000Z"
+  ACQUIRED_LOCK_SENTINEL=$(_lock_sentinel_name "20260601T120000Z" "$$")
+  ACQUIRED_LOCK_SENTINEL_TRIED=""
+  before="${ACQUIRED_LOCK_SENTINEL}"
+  refresh_lock_sentinel "ftp://example.test" "${FND3_LOCK}" "ftptest" > "${BATS_TEST_TMPDIR}/out" || exit 1
+  [ ! -e "${FAKE_LFTP_LOG}" ] || { cat "${FAKE_LFTP_LOG}"; exit 1; }
+  [ "${ACQUIRED_LOCK_SENTINEL}" = "${before}" ] || exit 1
+  [ -z "${ACQUIRED_LOCK_SENTINEL_TRIED}" ] || exit 1
+}
+
+@test "refresh_lock_sentinel: FND-0003: no sentinel held (or empty lock path) makes no lftp call" {
+  _install_fake_date "20260601T120000Z"
+  ACQUIRED_LOCK_SENTINEL=""
+  ACQUIRED_LOCK_SENTINEL_TRIED=""
+  refresh_lock_sentinel "ftp://example.test" "${FND3_LOCK}" "ftptest" > "${BATS_TEST_TMPDIR}/out" || exit 1
+  unset ACQUIRED_LOCK_SENTINEL
+  refresh_lock_sentinel "ftp://example.test" "${FND3_LOCK}" "ftptest" > "${BATS_TEST_TMPDIR}/out" || exit 1
+  ACQUIRED_LOCK_SENTINEL="${FND3_OLD}"
+  refresh_lock_sentinel "ftp://example.test" "" "ftptest" > "${BATS_TEST_TMPDIR}/out" || exit 1
+  [ ! -e "${FAKE_LFTP_LOG}" ] || { cat "${FAKE_LFTP_LOG}"; exit 1; }
+  [ -z "${ACQUIRED_LOCK_SENTINEL_TRIED}" ] || exit 1
+}
+
+@test "release_lock_safely: FND-0003: after failed refreshes DELEs the current sentinel AND every TRIED name, then RMDs" {
+  export FAKE_LFTP_RC=5
+  ACQUIRED_LOCK_SENTINEL="${FND3_OLD}"
+  ACQUIRED_LOCK_SENTINEL_TRIED=""
+  _install_fake_date "20260601T120000Z"
+  refresh_lock_sentinel "ftp://example.test" "${FND3_LOCK}" "ftptest" > "${BATS_TEST_TMPDIR}/out" || exit 1
+  printf '%s\n' "20260601T130000Z" > "${FAKE_DATE_FILE}"
+  refresh_lock_sentinel "ftp://example.test" "${FND3_LOCK}" "ftptest" > "${BATS_TEST_TMPDIR}/out" || exit 1
+  t1=$(_lock_sentinel_name "20260601T120000Z" "$$")
+  t2=$(_lock_sentinel_name "20260601T130000Z" "$$")
+  [ "${ACQUIRED_LOCK_SENTINEL_TRIED}" = "${t1} ${t2}" ] || { echo "TRIED=${ACQUIRED_LOCK_SENTINEL_TRIED}"; exit 1; }
+  rm -f "${FAKE_LFTP_LOG}"
+  export FAKE_LFTP_RC=0
+  release_lock_safely "ftp://example.test" "${FND3_LOCK}" "${ACQUIRED_LOCK_SENTINEL}" "ftptest" || exit 1
+  [ "$(wc -l < "${FAKE_LFTP_LOG}")" -eq 1 ] || { cat "${FAKE_LFTP_LOG}"; exit 1; }
+  grep -qF "quote DELE ${FND3_LOCK}/${FND3_OLD}; quote DELE ${FND3_LOCK}/${t1}; quote DELE ${FND3_LOCK}/${t2}; quote RMD ${FND3_LOCK}; quit;" "${FAKE_LFTP_LOG}" || {
+    echo "release script wrong:"; cat "${FAKE_LFTP_LOG}"; exit 1
+  }
+}
+
+@test "release_lock_safely: FND-0003: after a failed and then a successful refresh the TRIED list is empty and release is the plain DELE + RMD" {
+  ACQUIRED_LOCK_SENTINEL="${FND3_OLD}"
+  ACQUIRED_LOCK_SENTINEL_TRIED=""
+  _install_fake_date "20260601T120000Z"
+  export FAKE_LFTP_RC=5
+  refresh_lock_sentinel "ftp://example.test" "${FND3_LOCK}" "ftptest" > "${BATS_TEST_TMPDIR}/out" || exit 1
+  printf '%s\n' "20260601T130000Z" > "${FAKE_DATE_FILE}"
+  export FAKE_LFTP_RC=0
+  refresh_lock_sentinel "ftp://example.test" "${FND3_LOCK}" "ftptest" > "${BATS_TEST_TMPDIR}/out" || exit 1
+  new=$(_lock_sentinel_name "20260601T130000Z" "$$")
+  [ "${ACQUIRED_LOCK_SENTINEL}" = "${new}" ] || exit 1
+  [ -z "${ACQUIRED_LOCK_SENTINEL_TRIED}" ] || exit 1
+  rm -f "${FAKE_LFTP_LOG}"
+  release_lock_safely "ftp://example.test" "${FND3_LOCK}" "${ACQUIRED_LOCK_SENTINEL}" "ftptest" || exit 1
+  grep -qF " quote DELE ${FND3_LOCK}/${new}; quote RMD ${FND3_LOCK}; quit;" "${FAKE_LFTP_LOG}" || {
+    echo "release script wrong:"; cat "${FAKE_LFTP_LOG}"; exit 1
+  }
+}
+
 @test "release_lock_safely: no-op when lock_path is empty" {
   rm -f "${FAKE_LFTP_LOG}"
   run release_lock_safely "ftp://example.test" "" "" "ftptest"
@@ -1308,7 +1425,7 @@ LIST
 _run_entrypoint_with_lock_rc() {
   local root="${BATS_TEST_DIRNAME}/../.."
   local app="${BATS_TEST_TMPDIR}/app"
-  mkdir -p "${app}" "${BATS_TEST_TMPDIR}/home/lftp"
+  mkdir -p "${app}" "${BATS_TEST_TMPDIR}/home/lftp" "${BATS_TEST_TMPDIR}/site"
   cp "${root}/lib.sh" "${app}/lib.sh"
   printf '0.0.0-test\n' > "${app}/VERSION"
   cat >> "${app}/lib.sh" <<'STUB'
@@ -1321,7 +1438,7 @@ STUB
   # image's busybox ash has but dash (/bin/sh on ubuntu runners) lacks.
   FAKE_ACQ_RC="$1" \
   INPUT_SERVER="ftp://example.test" INPUT_USER="ftptest" INPUT_PASSWORD="pw" \
-  INPUT_LOCAL_DIR="${BATS_TEST_TMPDIR}/" INPUT_REMOTE_DIR="./" \
+  INPUT_LOCAL_DIR="${BATS_TEST_TMPDIR}/site/" INPUT_REMOTE_DIR="./" \
   INPUT_CONCURRENCY_LOCK="true" INPUT_CONCURRENCY_LOCK_TIMEOUT="7" \
     run bash -eu "${app}/entrypoint.sh"
 }
@@ -1352,4 +1469,131 @@ STUB
   if grep -Eq '(if|while|until)[[:space:]]+!?[[:space:]]*acquire_lock_with_recovery|!+[[:space:]]*acquire_lock_with_recovery' "${entry}"; then
     echo "acquire_lock_with_recovery is negated or used as a condition"; exit 1
   fi
+}
+
+# ----------------------------------------------------------------------------
+# FND-0003 at the entrypoint level. A scratch copy of entrypoint.sh (paths
+# rewritten into BATS_TEST_TMPDIR, as in the FND-0043 tests above) runs with a
+# lib.sh copy whose acquire_lock_with_recovery, run_lftp_once and
+# compute_backoff_seconds are stubs that append to one call log, while the
+# REAL refresh_lock_sentinel and release_lock_safely run against a fake lftp
+# (appending to the same log) and a fake date that advances one second per
+# call (so no two refreshes share a stamp). The mirror stub fails on the
+# first attempt and succeeds on the second. ENTRYPOINT_SRC overrides the
+# entrypoint under test (used to prove the tests fail on the pre-fix one);
+# FAKE_MV_FAIL=1 makes the fake lftp fail every `mv`; HB_LOCK overrides
+# concurrency_lock.
+# ----------------------------------------------------------------------------
+
+_run_entrypoint_heartbeat() {
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local src="${ENTRYPOINT_SRC:-${root}/entrypoint.sh}"
+  local app="${BATS_TEST_TMPDIR}/app"
+  mkdir -p "${app}" "${BATS_TEST_TMPDIR}/home/lftp" "${BATS_TEST_TMPDIR}/site"
+  cp "${LIB}" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  cat >> "${app}/lib.sh" <<'STUB'
+
+acquire_lock_with_recovery() {
+  printf 'ACQUIRE\n' >> "${CALL_LOG}"
+  ACQUIRED_LOCK_SENTINEL=".lftp-deployment.lock.20200101T000000Z.1234.info"
+  return 0
+}
+run_lftp_once() {
+  _n=$(cat "${MIRROR_COUNT_FILE}" 2>/dev/null || echo 0)
+  _n=$((_n + 1))
+  printf '%s\n' "${_n}" > "${MIRROR_COUNT_FILE}"
+  printf 'MIRROR %s\n' "${_n}" >> "${CALL_LOG}"
+  [ "${_n}" -ge 2 ]
+}
+compute_backoff_seconds() { echo 0; }
+STUB
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${BATS_TEST_TMPDIR}/home/lftp#g" \
+    "${src}" > "${app}/entrypoint.sh"
+
+  export CALL_LOG="${BATS_TEST_TMPDIR}/calls.log"
+  export MIRROR_COUNT_FILE="${BATS_TEST_TMPDIR}/mirror.count"
+  export FAKE_DATE_FILE="${BATS_TEST_TMPDIR}/date.count"
+  rm -f "${CALL_LOG}" "${MIRROR_COUNT_FILE}"
+  : > "${CALL_LOG}"
+  printf '0\n' > "${FAKE_DATE_FILE}"
+  cat > "${BATS_TEST_TMPDIR}/bin/date" <<'FAKE'
+#!/bin/sh
+n=$(cat "${FAKE_DATE_FILE}")
+n=$((n + 1))
+printf '%s\n' "${n}" > "${FAKE_DATE_FILE}"
+printf '20260601T12%04dZ\n' "${n}"
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/date"
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/sh
+all="$*"
+case "${all}" in
+  *" mv "*) printf 'LFTP mv %s\n' "${all#* mv }" >> "${CALL_LOG}"
+            if [ -n "${FAKE_MV_FAIL:-}" ]; then exit 5; fi ;;
+  *"quote DELE"*) printf 'LFTP release %s\n' "${all#*; quote DELE }" >> "${CALL_LOG}" ;;
+  *) printf 'LFTP other %s\n' "${all}" >> "${CALL_LOG}" ;;
+esac
+exit 0
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/lftp"
+
+  # bash, not sh: see _run_entrypoint_with_lock_rc.
+  HOME="${BATS_TEST_TMPDIR}/home" \
+  INPUT_SERVER="ftp://example.test" INPUT_USER="ftptest" INPUT_PASSWORD="pw" \
+  INPUT_LOCAL_DIR="${BATS_TEST_TMPDIR}/site/" INPUT_REMOTE_DIR="./" \
+  INPUT_CONCURRENCY_LOCK="${HB_LOCK:-true}" INPUT_MAX_RETRIES="3" \
+    run bash -eu "${app}/entrypoint.sh"
+}
+
+_call_kinds() {
+  sed -e 's/^\(LFTP [a-z]*\).*/\1/' -e 's/^\(MIRROR\) .*/\1/' "${CALL_LOG}" | tr '\n' ','
+}
+
+@test "entrypoint: FND-0003: the sentinel is refreshed before every mirror attempt, in order, and released after (acquire, mv, mirror 1, mv, mirror 2, release)" {
+  _run_entrypoint_heartbeat
+  echo "status=${status}"; echo "${output}"; cat "${CALL_LOG}"
+  [ "${status}" -eq 0 ]
+  kinds=$(_call_kinds)
+  [ "${kinds}" = "ACQUIRE,LFTP mv,MIRROR,LFTP mv,MIRROR,LFTP release," ] || { echo "order: ${kinds}"; exit 1; }
+  # The chain is acquire name -> stamp 1 -> stamp 2: the second mv starts
+  # from the name the first one produced, and the release DELEs the last
+  # name only (both renames succeeded, so TRIED is empty).
+  p=".lftp-deployment.lock"
+  old="${p}/.lftp-deployment.lock.20200101T000000Z.1234.info"
+  mv1=$(grep '^LFTP mv' "${CALL_LOG}" | sed -n 1p)
+  mv2=$(grep '^LFTP mv' "${CALL_LOG}" | sed -n 2p)
+  [[ "${mv1}" == "LFTP mv ${old} ${p}/.lftp-deployment.lock.2026"*".info; quit;" ]] || { echo "mv1: ${mv1}"; exit 1; }
+  n1=${mv1#"LFTP mv ${old} "}
+  n1=${n1%"; quit;"}
+  [[ "${mv2}" == "LFTP mv ${n1} ${p}/.lftp-deployment.lock.2026"*".info; quit;" ]] || { echo "mv2: ${mv2} (n1=${n1})"; exit 1; }
+  n2=${mv2#"LFTP mv ${n1} "}
+  n2=${n2%"; quit;"}
+  [ "${n1}" != "${n2}" ] || exit 1
+  rel=$(grep '^LFTP release' "${CALL_LOG}")
+  [ "${rel}" = "LFTP release ${n2}; quote RMD ${p}; quit;" ] || { echo "release: ${rel}"; exit 1; }
+}
+
+@test "entrypoint: FND-0003: a refresh failure during the run only warns; the deploy still succeeds and the release DELEs the TRIED names" {
+  FAKE_MV_FAIL=1 _run_entrypoint_heartbeat
+  echo "status=${status}"; echo "${output}"; cat "${CALL_LOG}"
+  [ "${status}" -eq 0 ]
+  n=$(printf '%s\n' "${output}" | grep -c '^::warning::concurrency lock: could not refresh the sentinel')
+  [ "${n}" -eq 2 ]
+  kinds=$(_call_kinds)
+  [ "${kinds}" = "ACQUIRE,LFTP mv,MIRROR,LFTP mv,MIRROR,LFTP release," ] || { echo "order: ${kinds}"; exit 1; }
+  # Both renames started from the unchanged old name; the release DELEs the
+  # old name and both attempted names, then the RMD.
+  p=".lftp-deployment.lock"
+  old="${p}/.lftp-deployment.lock.20200101T000000Z.1234.info"
+  [ "$(grep -c "^LFTP mv ${old} " "${CALL_LOG}")" -eq 2 ] || exit 1
+  rel=$(grep '^LFTP release' "${CALL_LOG}")
+  [[ "${rel}" == "LFTP release ${old}; quote DELE ${p}/.lftp-deployment.lock.2026"*".info; quote DELE ${p}/.lftp-deployment.lock.2026"*".info; quote RMD ${p}; quit;" ]] || { echo "release: ${rel}"; exit 1; }
+}
+
+@test "entrypoint: FND-0003: concurrency_lock=false makes no refresh and no release call" {
+  HB_LOCK=false _run_entrypoint_heartbeat
+  echo "status=${status}"; echo "${output}"; cat "${CALL_LOG}"
+  [ "${status}" -eq 0 ]
+  [ "$(_call_kinds)" = "MIRROR,MIRROR," ]
 }
