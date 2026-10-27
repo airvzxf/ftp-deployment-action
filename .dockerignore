@@ -1,20 +1,11 @@
-.git
-.github
-.idea
-.vscode
-.opencode
-.worktrees
-.env
-.env.*
-*.bak
-*.log
-*.swp
-.DS_Store
-AGENTS.md
-CHANGELOG.md
-Makefile
-SECURITY.md
-action.yml
-scripts
-tests
-PROPOSAL.md
+# Allow-list: exclude everything, then re-include only the files the
+# root Dockerfile COPYs. A deny-list misses untracked local files
+# (.claude/, CLAUDE.local.md, .netrc, ...) and its root-only globs do
+# not match in subdirectories, so those files would reach the build
+# context. If you add a COPY/ADD to the Dockerfile, add a matching `!`
+# line here, or the build fails with "not found".
+*
+!entrypoint.sh
+!lib.sh
+!openssl-tls12.cnf
+!VERSION
