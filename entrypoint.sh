@@ -312,6 +312,12 @@ write_netrc "${NETRC}" "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
 # FND-0048: `trap ... EXIT` replaces write_netrc's trap rather than
 # adding to it, so both branches below end with `rm -f "${NETRC}"`:
 # from here on this trap owns the .netrc removal.
+#
+# FND-0101: the trap reads these, so clear them before it is set; a
+# value inherited from the environment must never reach the release.
+# FND-0003: names of unconfirmed sentinel renames, DELEd by the release.
+ACQUIRED_LOCK_SENTINEL=""
+ACQUIRED_LOCK_SENTINEL_TRIED=""
 if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
   trap 'release_lock_safely "${INPUT_SERVER}" "${INPUT_CONCURRENCY_LOCK_PATH}" "${ACQUIRED_LOCK_SENTINEL:-}" "${INPUT_USER}"; rm -f "${NETRC}"' EXIT
 else
@@ -330,9 +336,6 @@ fi
 # every mirror attempt in the loop below (FND-0003), so a live run's
 # sentinel is never older than one attempt (5 h + 30 s) plus backoff.
 # ------------------------------------------------------------------------------
-# FND-0003: names of unconfirmed sentinel renames, DELEd by the release.
-# Start empty so a value inherited from the environment is never used.
-ACQUIRED_LOCK_SENTINEL_TRIED=""
 if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
   printf '::group::Concurrency lock acquire\n'
   LOCK_RC=0
