@@ -69,6 +69,9 @@ common_env() {
 #   outer timeout for the lftp call inside the container.
 #   /app is a bind-mount of the repo root, so /app/VERSION is the
 #   repo's VERSION file, as in the image.
+#   The script runs as `sh -eu`, which is what the kernel runs for the
+#   image's exec-form ENTRYPOINT through the `#!/bin/sh -eu` shebang.
+#   A plain `sh entrypoint.sh` would drop those flags (FND-0098).
 run_init() {
   _t=15
   # Pop the trailing numeric argument as the timeout, if any.
@@ -92,7 +95,7 @@ run_init() {
     -w /app \
     --env-file "${_env_file}" \
     "${SMOKE_IMAGE}" \
-    /bin/sh -c "timeout ${_t} sh ${INIT_REL} 2>&1; echo EXIT=\$?" \
+    /bin/sh -c "timeout ${_t} sh -eu ${INIT_REL} 2>&1; echo EXIT=\$?" \
     2>&1
   rm -f "${_env_file}"
 }

@@ -25,6 +25,12 @@
 # change vs. the pre-v2.5.0 single-file layout; the behaviour is
 # preserved bit-by-bit.
 #
+# errexit and nounset are set here as well as in the shebang. The
+# shebang's `-eu` applies only when the kernel runs the file (the
+# image's exec-form ENTRYPOINT); `sh ./entrypoint.sh` ignores it
+# (FND-0013).
+set -eu
+
 # pipefail is busybox ash (the shell that actually runs in alpine);
 # it fails the script on the first command in a pipeline that
 # returns non-zero, instead of only the last one. POSIX sh does not
@@ -87,11 +93,15 @@ printf 'ftp-deployment-action v%s\n' "$(cat /app/VERSION)"
 # `[ ... = "true" ]` compare, so `concurrency_lock: yes` was silently
 # disabled. normalize_bool calls validate_bool, which rejects RCE
 # payloads and capitalised variants (e.g. `True`) with exit 2.
-INPUT_DELETE=$(normalize_bool                  "delete"                "${INPUT_DELETE}")
-INPUT_NO_SYMLINKS=$(normalize_bool             "no_symlinks"           "${INPUT_NO_SYMLINKS}")
-INPUT_DRY_RUN=$(normalize_bool                 "dry_run"               "${INPUT_DRY_RUN}")
-INPUT_CONCURRENCY_LOCK=$(normalize_bool        "concurrency_lock"      "${INPUT_CONCURRENCY_LOCK}")
-INPUT_DEBUG=$(normalize_bool                   "debug"                 "${INPUT_DEBUG}")
+# That exit ends only the `$(...)` subshell. An assignment-only
+# command takes the status of its last command substitution, so
+# `|| exit 2` makes the rejection end the script, with or without
+# errexit (FND-0013).
+INPUT_DELETE=$(normalize_bool                  "delete"                "${INPUT_DELETE}") || exit 2
+INPUT_NO_SYMLINKS=$(normalize_bool             "no_symlinks"           "${INPUT_NO_SYMLINKS}") || exit 2
+INPUT_DRY_RUN=$(normalize_bool                 "dry_run"               "${INPUT_DRY_RUN}") || exit 2
+INPUT_CONCURRENCY_LOCK=$(normalize_bool        "concurrency_lock"      "${INPUT_CONCURRENCY_LOCK}") || exit 2
+INPUT_DEBUG=$(normalize_bool                   "debug"                 "${INPUT_DEBUG}") || exit 2
 
 # v2.11.8 (#195): reject URL userinfo WITH EMBEDDED PASSWORD in
 # INPUT_SERVER. lftp 4.9.3 parses `ftp://user:pw@host/path` and
@@ -215,10 +225,10 @@ fi
 #
 # The order matters: normalize_dir must run before validate_path so
 # the trailing-slash normalization is reflected in the validation
-# message, and validate_path must run in the main shell context
-# (not inside `$(...)`) so its `exit 2` actually aborts the script.
-# See the docstring on normalize_dir for the busybox ash quirk
-# that drives this ordering.
+# message. validate_path runs in the main shell context, so its
+# `exit 2` ends the script directly. Inside `$(...)` the exit would
+# end only the subshell, and the script would stop only through the
+# assignment's status (see the normalize_bool block above).
 # ------------------------------------------------------------------------------
 FTP_SETTINGS=$(build_ftp_settings)
 INPUT_LOCAL_DIR=$(normalize_dir "${INPUT_LOCAL_DIR}")

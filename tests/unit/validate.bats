@@ -723,3 +723,72 @@ STUB
     [[ "${output}" != *"embedded password"* ]]
   done
 }
+
+# ----------------------------------------------------------------------------
+# FND-0013: a rejected gate boolean must end entrypoint.sh with exit 2 however
+# it is invoked. The exit inside `X=$(normalize_bool ...)` ends only the
+# subshell; before the fix the script stopped only if errexit was on. The
+# shebang's -eu does not apply to `bash ./entrypoint.sh`, so the plain-bash
+# case (no -e/-u) is the one that failed on HEAD. The marker printed by the
+# add_masks stub (the first command after the bool block and the userinfo
+# guard) shows whether the script carried on past the gate.
+# ENTRYPOINT_SRC overrides the script under test (used to prove the tests
+# fail on the pre-fix entrypoint.sh). dash is not covered: entrypoint.sh has
+# `set -o pipefail`, which dash rejects with exit 2 before the gate is reached.
+# ----------------------------------------------------------------------------
+
+_bool_gate_case() {
+  local flags="$1" name="$2" val="$3" out
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local src="${ENTRYPOINT_SRC:-${root}/entrypoint.sh}"
+  local app="${BATS_TEST_TMPDIR}/app"
+  mkdir -p "${app}" "${BATS_TEST_TMPDIR}/home/lftp"
+  cp "${root}/lib.sh" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  printf '\nadd_masks() { printf "PAST_BOOL_GATE\\n"; exit 0; }\n' >> "${app}/lib.sh"
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${BATS_TEST_TMPDIR}/home/lftp#g" \
+    "${src}" > "${app}/entrypoint.sh"
+  if [ -n "${flags}" ]; then
+    out=$(env HOME="${BATS_TEST_TMPDIR}/home" INPUT_SERVER="ftp.example.com" INPUT_USER="ftptest" \
+      INPUT_PASSWORD="pw" "${name}=${val}" bash "${flags}" "${app}/entrypoint.sh" 2>&1) && status=0 || status=$?
+  else
+    out=$(env HOME="${BATS_TEST_TMPDIR}/home" INPUT_SERVER="ftp.example.com" INPUT_USER="ftptest" \
+      INPUT_PASSWORD="pw" "${name}=${val}" bash "${app}/entrypoint.sh" 2>&1) && status=0 || status=$?
+  fi
+  output="${out}"
+}
+
+@test "entrypoint: FND-0013: bad gate booleans exit 2 under plain bash (no -e/-u), nothing runs after the gate" {
+  for c in 'concurrency_lock=True' 'dry_run=TRUE' 'delete=Yes' 'no_symlinks=2' 'debug=on;id'; do
+    name="INPUT_$(printf '%s' "${c%%=*}" | tr 'a-z' 'A-Z')"
+    _bool_gate_case "" "${name}" "${c#*=}"
+    echo "case=${c} status=${status}"; echo "${output}"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"ERROR: ${c%%=*} must be a bool"* ]]
+    [[ "${output}" != *"PAST_BOOL_GATE"* ]]
+  done
+}
+
+@test "entrypoint: FND-0013: bad gate booleans exit 2 under bash -eu, nothing runs after the gate" {
+  for c in 'concurrency_lock=True' 'dry_run=TRUE' 'delete=Yes' 'no_symlinks=2' 'debug=on;id'; do
+    name="INPUT_$(printf '%s' "${c%%=*}" | tr 'a-z' 'A-Z')"
+    _bool_gate_case "-eu" "${name}" "${c#*=}"
+    echo "case=${c} status=${status}"; echo "${output}"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"ERROR: ${c%%=*} must be a bool"* ]]
+    [[ "${output}" != *"PAST_BOOL_GATE"* ]]
+  done
+}
+
+@test "entrypoint: FND-0013: valid aliases (debug=yes, concurrency_lock=on) pass the gate under plain bash and bash -eu" {
+  for flags in "" "-eu"; do
+    _bool_gate_case "${flags}" INPUT_DEBUG yes
+    echo "flags='${flags}' status=${status}"; echo "${output}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PAST_BOOL_GATE"* ]]
+    [[ "${output}" != *"must be a bool"* ]]
+    _bool_gate_case "${flags}" INPUT_CONCURRENCY_LOCK on
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PAST_BOOL_GATE"* ]]
+  done
+}
