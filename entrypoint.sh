@@ -210,7 +210,9 @@ validate_glob_pattern "exclude" "${INPUT_EXCLUDE}"
 # poll_interval > 0 (0 would be a division-by-zero in the count
 # computation).
 if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
-  validate_path "concurrency_lock_path" "${INPUT_CONCURRENCY_LOCK_PATH}"
+  # FND-0100: "unquoted" — the lock path is pasted into the lftp lock
+  # commands (mkdir/put/cls/mv/quote) without surrounding quotes.
+  validate_path "concurrency_lock_path" "${INPUT_CONCURRENCY_LOCK_PATH}" "unquoted"
   validate_int "concurrency_lock_timeout" "${INPUT_CONCURRENCY_LOCK_TIMEOUT}"
   validate_int "concurrency_lock_poll_interval" "${INPUT_CONCURRENCY_LOCK_POLL_INTERVAL}"
   if [ "${INPUT_CONCURRENCY_LOCK_POLL_INTERVAL}" = "0" ]; then
@@ -236,7 +238,9 @@ INPUT_REMOTE_DIR=$(normalize_dir "${INPUT_REMOTE_DIR}")
 # B-04: path traversal and shell-metacharacter guard. Run AFTER
 # normalize_dir, in the main shell context, so a failure aborts.
 validate_path "local_dir"  "${INPUT_LOCAL_DIR}"
-validate_path "remote_dir" "${INPUT_REMOTE_DIR}"
+# FND-0100: "unquoted" — remote_dir is pasted into the lftp mirror
+# command without surrounding quotes (run_lftp_once), unlike local_dir.
+validate_path "remote_dir" "${INPUT_REMOTE_DIR}" "unquoted"
 # FND-0015: local_dir must not be, contain, or lie inside the home
 # directory that holds the .netrc (pinned to /home/lftp below).
 validate_local_dir_outside_home "local_dir" "${INPUT_LOCAL_DIR}" "/home/lftp"

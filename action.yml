@@ -18,7 +18,7 @@ inputs:
     required: false
     default: './'
   remote_dir:
-    description: 'Remote directory.'
+    description: 'Remote directory. Must be a valid FTP path: it is validated by `validate_path` (lib.sh) and, because it is passed to the lftp mirror command without quotes, must not contain `>`, `\` or `''` (lftp would read them as an output redirection, an escape or a quote and change which directory is used).'
     required: false
     default: './'
   delete:
@@ -90,7 +90,7 @@ inputs:
     required: false
     default: ''
   exclude:
-    description: 'Comma-separated shell globs (e.g. `*.map, *.bak, node_modules/`). Matching files are neither uploaded nor deleted. Items must not contain spaces or start with `-`.'
+    description: 'Comma-separated shell globs (e.g. `*.map, *.bak, node_modules/`). Matching files are neither uploaded nor deleted. Items must not start with `-` or contain spaces, backslashes, single quotes or `>`.'
     required: false
     default: ''
   debug:
@@ -106,7 +106,7 @@ inputs:
     required: false
     default: 'false'
   concurrency_lock_path:
-    description: 'Path of the sentinel directory used by `concurrency_lock`. Relative paths are resolved against the FTP user''s home; absolute paths are accepted. Must be a valid FTP path: validated by `validate_path` (lib.sh), which rejects `..` path-traversal components, a leading `-` (would be misread as an lftp option), embedded newlines and other `[[:cntrl:]]` control characters, `;|&`` shell metacharacters, `$` (shell substitution), `!` (lftp shell escape), `"` (breaks lftp -e string parsing), ASCII space (breaks lftp -e token parsing), unbalanced IPv6 brackets, and empty `[]` brackets. Default: ".lftp-deployment.lock" (a hidden directory alongside the deployed files). The directory will be created and removed by the action, and each run writes its sentinel file inside it, so different paths are independent locks; do not use a path that holds user data.'
+    description: 'Path of the sentinel directory used by `concurrency_lock`. Relative paths are resolved against the FTP user''s home; absolute paths are accepted. Must be a valid FTP path: validated by `validate_path` (lib.sh), which rejects `..` path-traversal components, a leading `-` (would be misread as an lftp option), embedded newlines and other `[[:cntrl:]]` control characters, `;|&`` shell metacharacters, `$` (shell substitution), `!` (lftp shell escape), `"` (breaks lftp -e string parsing), ASCII space (breaks lftp -e token parsing), unbalanced IPv6 brackets, empty `[]` brackets, and (because the path is pasted unquoted into the lock commands) `>`, `\` and `''` (lftp output redirection, escape and quote; FND-0100). Default: ".lftp-deployment.lock" (a hidden directory alongside the deployed files). The directory will be created and removed by the action, and each run writes its sentinel file inside it, so different paths are independent locks; do not use a path that holds user data.'
     required: false
     default: '.lftp-deployment.lock'
   concurrency_lock_timeout:

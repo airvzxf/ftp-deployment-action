@@ -239,8 +239,10 @@ validate_duration() {
 #   `mirror -X`, so lftp command separators (`; & |`), `"`, newlines
 #   and control characters are rejected first. Then each trimmed item
 #   must not start with `-` (read as a mirror option) or contain a
-#   space (breaks lftp's tokenising). `!`, backtick and `$` are
-#   allowed. Exits 2 on any violation.
+#   space, `\`, `'` or `>` (they change lftp's tokenising, so the
+#   paths after the -X items could become part of the glob or the
+#   mirror could lose its directory arguments; FND-0099, FND-0100).
+#   `!`, backtick and `$` are allowed. Exits 2 on any violation.
 # ------------------------------------------------------------------------------
 validate_glob_pattern() {
   _vgp_name=$1
@@ -277,6 +279,19 @@ validate_glob_pattern() {
             "${_vgp_name}" "${_vgp_item}" >&2; exit 2 ;;
       *' '*) printf 'ERROR: %s item contains a space: %s\n' \
             "${_vgp_name}" "${_vgp_item}" >&2; exit 2 ;;
+      # FND-0099: lftp reads `\` as an escape and `'` as a quote in the
+      # -e script, so either one can merge local_dir/remote_dir into
+      # the -X glob and change which directory mirror uploads.
+      *\\*) printf 'ERROR: %s item contains a backslash (lftp escape character): %s\n' \
+            "${_vgp_name}" "${_vgp_item}" >&2; exit 2 ;;
+      *"'"*) printf 'ERROR: %s item contains a single quote (lftp quote character): %s\n' \
+            "${_vgp_name}" "${_vgp_item}" >&2; exit 2 ;;
+      # FND-0100: lftp parses `>` as an output redirection even mid-token,
+      # so `-X a>x` runs `mirror ... -X a` with no directory arguments and
+      # uploads the working directory, and `-X a> -X <next>` lets the word
+      # after the redirect target start a fresh lftp command.
+      *'>'*) printf 'ERROR: %s item contains a greater-than sign (lftp output redirection): %s\n' \
+            "${_vgp_name}" "${_vgp_item}" >&2; exit 2 ;;
     esac
   done
   set +f
@@ -306,6 +321,18 @@ validate_glob_pattern() {
 validate_path() {
   _vp_name=$1
   _vp_value=$2
+  # FND-0100: the third argument, when "unquoted", marks an input that
+  # is pasted into the `lftp -e` script WITHOUT surrounding double
+  # quotes: remote_dir (run_lftp_once: `... "<local>" <remote>; quit;`)
+  # and concurrency_lock_path (the mkdir/put/cls/mv/quote lock
+  # commands). lftp then parses lftp-special characters in the value,
+  # so those inputs get the extra checks at the end of this function.
+  # server is NOT marked: it reaches lftp as an argv URL word (not
+  # inside -e), so lftp treats `>`/`'`/`\` in it literally (they only
+  # make the connection or path fail, probed). local_dir is NOT marked
+  # either: run_lftp_once double-quotes it (FND-0015 accepts `>`, `'`,
+  # `<`, `#` there, and rejects `\` in validate_local_dir_outside_home).
+  _vp_unquoted=${3:-}
   # v2.11.3 (#172): check for double-quote BEFORE the generic
   # shell-metacharacter branch below, so the error message points
   # at the actual problem. `"` is also a shell metacharacter
@@ -422,6 +449,42 @@ validate_path() {
     printf 'ERROR: %s has empty IPv6 brackets: %s\n' \
       "${_vp_name}" "${_vp_value}" >&2
     exit 2
+  fi
+  # FND-0100: same injection class as FND-0099, other inputs. remote_dir
+  # and concurrency_lock_path are pasted unquoted into the lftp -e
+  # script. lftp 4.9.3 parses these characters there, so they change
+  # which directory the command uses (probed, lftp 4.9.3):
+  #   `>`  mirror/mkdir read it as an output redirection even mid-token:
+  #        `mirror ... "site/" a>x` uploads to remote `a`, not `a>x`;
+  #        `mkdir a>x` creates `a`, not `a>x`.
+  #   `'`  opens a quote that swallows the following words (and `; quit;`)
+  #        into the path: `cls -la a'` lists `a; quit;`.
+  #   `\`  escapes the next character, merging `; quit;` into the path:
+  #        remote `a\` becomes `a;`.
+  # `<` and `#` stay literal in an argument, at the start of the value
+  # too (lftp 4.9.3 has no `<` redirection, and `#` there is not a
+  # comment: `mkdir #lk` creates `#lk`), so they are not rejected here.
+  # server is an argv URL (no -e parsing) and local_dir is double-quoted
+  # (FND-0015), so neither is marked "unquoted" and neither gets these
+  # checks.
+  if [ "${_vp_unquoted}" = "unquoted" ]; then
+    case "${_vp_value}" in
+      *'>'*)
+        printf 'ERROR: %s contains greater-than (lftp output redirection): %s\n' \
+          "${_vp_name}" "${_vp_value}" >&2
+        exit 2
+        ;;
+      *"'"*)
+        printf 'ERROR: %s contains single-quote (lftp quote character): %s\n' \
+          "${_vp_name}" "${_vp_value}" >&2
+        exit 2
+        ;;
+      *\\*)
+        printf 'ERROR: %s contains backslash (lftp escape character): %s\n' \
+          "${_vp_name}" "${_vp_value}" >&2
+        exit 2
+        ;;
+    esac
   fi
 }
 

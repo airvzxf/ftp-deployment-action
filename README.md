@@ -487,7 +487,8 @@ option, so every matching file or directory, at any depth, is
 **neither uploaded nor deleted**. With `delete: "true"`, this is how
 you protect server-only files such as logs or user uploads.
 
-Each glob must not start with `-` or contain a space; the whole value
+Each glob must not start with `-` or contain a space, a backslash (`\`),
+a single quote (`'`) or a greater-than sign (`>`); the whole value
 must not contain control characters, newlines, `;`, `&`, `|` or `"`.
 Otherwise the action exits with code `2` before connecting.
 
@@ -771,7 +772,7 @@ non-buildable image) **before** a tag is pushed.
 |------|---------|
 | `0`  | Upload finished successfully. |
 | `1`  | Upload failed after all retries; the last lftp error is printed above. |
-| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` or `user:pass@host` — the userinfo password is rejected); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a `local_dir` that is, contains, or lies inside `/home/lftp`, or that contains `\` or starts with `~` or `file:`; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives; an `exclude` value rejected by `validate_glob_pattern` (control chars, `;`, `&`, `|`, `"`, or an item that starts with a dash or contains a space). |
+| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` or `user:pass@host` — the userinfo password is rejected); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a `remote_dir` or `concurrency_lock_path` that contains `>`, `\` or `'` (they are pasted unquoted into lftp commands); a `local_dir` that is, contains, or lies inside `/home/lftp`, or that contains `\` or starts with `~` or `file:`; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives; an `exclude` value rejected by `validate_glob_pattern` (control chars, `;`, `&`, `|`, `"`, or an item that starts with a dash or contains a space, `\`, `'` or `>`). |
 
 lftp's own output (transferred files, the `dry_run` plan, server errors) is
 printed in the step log; there is nothing else to download.
@@ -878,7 +879,13 @@ components, leading dashes (which `lftp` would misread as options),
 control characters, newlines, double quotes, shell metacharacters
 (`;`, `&`, `|`, backtick, and dollar), `!` (lftp's shell escape),
 and ASCII space — a value like `/my data/site/` exits `2`
-instead of silently breaking the lftp `-e` tokeniser. The
+instead of silently breaking the lftp `-e` tokeniser.
+`remote_dir` and `concurrency_lock_path` are pasted into their
+lftp commands without surrounding quotes, so they additionally
+reject `>`, `\` and `'`: lftp 4.9.3 reads `>` as an output
+redirection (even mid-token, so `a>x` uploads to `a` and drops
+the rest), `\` as an escape and `'` as a quote, each of which
+changes which directory the command uses (FND-0100). The
 `server` input additionally rejects URL userinfo that embeds a
 password (the `ftp://user:pass@host` form — lftp would otherwise
 authenticate with the embedded credentials and silently bypass
@@ -915,7 +922,10 @@ The `exclude` input uses a separate `validate_glob_pattern`
 validator because its globs are passed to the lftp `mirror` command.
 It rejects control characters, newlines and command-separator
 characters (`;`, `&`, `|`, and `"`), and any glob that starts with a
-dash or contains a space, while allowing glob metacharacters such as
+dash or contains a space, a backslash, a single quote or a `>` (lftp's
+escape, quote and output-redirection characters could make the paths
+after the glob part of it, or drop the mirror's directory arguments so
+it uploads the working directory), while allowing glob metacharacters such as
 `!`, backticks, and `$`. The action exits with code `2` and a clear
 error when validation fails.
 

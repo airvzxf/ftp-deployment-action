@@ -468,7 +468,7 @@ pass "INPUT_EXCLUDE=-rf is rejected (would be misread as mirror option)"
 # Test 28d (v2.11.3 #160): the `!` (lftp shell escape) is now
 # accepted in INPUT_EXCLUDE — the previous validation was over-
 # rejecting this valid glob character.
-out=$(run_init "INPUT_DRY_RUN=true" 'INPUT_EXCLUDE=!important\.txt' 30)
+out=$(run_init "INPUT_DRY_RUN=true" 'INPUT_EXCLUDE=!important.txt' 30)
 if echo "${out}" | grep -qE "ERROR:.*(lftp_settings|\"!\")"; then
   fail "INPUT_EXCLUDE with '!' was rejected by old validator (v2.11.3 #160 over-rejection); output was:\n${out}"
 fi
