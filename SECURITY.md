@@ -143,6 +143,16 @@ that contains `\` or starts with `~` or `file:` is rejected too,
 because `\` is lftp's escape character inside the quotes, and lftp
 expands `~` to `/home/lftp` and reads `file:` as a local file URL.
 
+`remote_dir` and `concurrency_lock_path`, unlike `local_dir`, are
+pasted into their lftp commands **without** surrounding quotes, so
+they reject `>`, `\` and `'`: lftp 4.9.3 reads `>` as an output
+redirection (even in the middle of a token, so `a>x` makes the
+command use `a` and drops the rest), `\` as an escape and `'` as a
+quote, each of which changes which directory the mirror or the lock
+command operates on (FND-0100). These are workflow-author-controlled
+inputs, not a privilege boundary; the check turns a silent wrong-path
+deploy into an exit 2.
+
 A self-hosted runner operator who needs to verify that the
 password never reaches the host can:
 

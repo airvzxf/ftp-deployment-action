@@ -744,7 +744,7 @@ _fnd15_reject_why() {
 }
 
 @test "validate_glob_pattern accepts a regex with '!' (the over-rejection v2.11.3 fixes)" {
-  run validate_glob_pattern "exclude" '!important\.txt'
+  run validate_glob_pattern "exclude" '!important.txt'
   [ "$status" -eq 0 ]
 }
 
@@ -1338,4 +1338,315 @@ _fnd15_lftp_script() {
     [ "${status}" -eq 0 ] || return 1
     [[ "${output}" == *"PAST_LOCAL_DIR_GATE"* ]] || return 1
   done
+}
+
+# ----------------------------------------------------------------------------
+# FND-0099: validate_glob_pattern rejects an exclude item that contains a
+# backslash or a single quote. build_mirror_command appends each item unquoted
+# to the lftp -e script; lftp reads `\` as an escape and `'` as a quote, so the
+# paths after the -X items could become part of the glob. Items are trimmed
+# before the check, so the ERROR names the trimmed item. `<` and `#` are
+# harmless in lftp 4.9.3 and are pinned as accepted. `>` is rejected too
+# (FND-0100, decided; see the FND-0100 tests below).
+# LIB_SRC / ENTRYPOINT_SRC override the scripts under test (used to prove the
+# tests fail on HEAD).
+# ----------------------------------------------------------------------------
+
+# _fnd99_expect_reject VALUE KIND ITEM: runs the validator in the current shell
+# context via `run`, checks exit 2 and the exact ERROR line for ITEM.
+_fnd99_expect_reject() {
+  local value="$1" kind="$2" item="$3" want
+  case "${kind}" in
+    backslash) want="ERROR: exclude item contains a backslash (lftp escape character): ${item}" ;;
+    quote)     want="ERROR: exclude item contains a single quote (lftp quote character): ${item}" ;;
+  esac
+  run validate_glob_pattern "exclude" "${value}"
+  if [ "${status}" -ne 2 ] || [ "${output}" != "${want}" ]; then
+    printf 'CASE value=[%s] status=%s\n  want=[%s]\n  got =[%s]\n' "${value}" "${status}" "${want}" "${output}"
+    return 1
+  fi
+}
+
+@test "validate_glob_pattern: FND-0099: an exclude item with a backslash exits 2 with the ERROR naming the item" {
+  bs='\'
+  _fnd99_expect_reject "a${bs}" backslash "a${bs}" || return 1
+  _fnd99_expect_reject "${bs}" backslash "${bs}" || return 1
+  _fnd99_expect_reject "a${bs}b" backslash "a${bs}b" || return 1
+  _fnd99_expect_reject "*.lo${bs}g" backslash "*.lo${bs}g" || return 1
+  _fnd99_expect_reject "!important${bs}.txt" backslash "!important${bs}.txt" || return 1
+}
+
+@test "validate_glob_pattern: FND-0099: a backslash in any list position or after trimming is still rejected (the ERROR shows the trimmed item)" {
+  bs='\'
+  _fnd99_expect_reject "x,a${bs} ,y" backslash "a${bs}" || return 1
+  _fnd99_expect_reject " a${bs} " backslash "a${bs}" || return 1
+  _fnd99_expect_reject "ok.txt,b${bs}c" backslash "b${bs}c" || return 1
+}
+
+@test "validate_glob_pattern: FND-0099: an exclude item with a single quote exits 2 with the ERROR naming the item" {
+  q="'"
+  _fnd99_expect_reject "a${q}" quote "a${q}" || return 1
+  _fnd99_expect_reject "${q}*.log" quote "${q}*.log" || return 1
+  _fnd99_expect_reject "it${q}s.txt" quote "it${q}s.txt" || return 1
+}
+
+@test "validate_glob_pattern: FND-0099: an even number of single quotes across items is still rejected (first offending item named)" {
+  q="'"
+  _fnd99_expect_reject "a${q},b${q}" quote "a${q}" || return 1
+  _fnd99_expect_reject "ok,a${q},b${q}" quote "a${q}" || return 1
+}
+
+@test "validate_glob_pattern: FND-0099: ordinary glob excludes still pass with status 0 and no output" {
+  for v in '*.log' '.git/' 'node_modules/' 'dir/*.tmp' '*.log,.git/,node_modules/,dir/*.tmp' \
+           '*.map, *.bak, node_modules/' '!important.txt' 'a<x' '#a'; do
+    run validate_glob_pattern "exclude" "${v}"
+    if [ "${status}" -ne 0 ] || [ -n "${output}" ]; then
+      printf 'CASE value=[%s] status=%s output=[%s]\n' "${v}" "${status}" "${output}"
+      return 1
+    fi
+  done
+}
+
+# _fnd99_entry_case EXCLUDE REMOTE_DIR MODE: runs the scratch entrypoint (same
+# rewrite as _local_dir_gate_case) with INPUT_EXCLUDE and INPUT_REMOTE_DIR set.
+# Mode "reject" runs the real write_netrc; a failing lftp stub logs every call
+# to lftp.calls. Mode "accept" stubs write_netrc with a marker and exit 0.
+_fnd99_entry_case() {
+  local excl="$1" rdir="$2" mode="$3"
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local src="${ENTRYPOINT_SRC:-${root}/entrypoint.sh}"
+  local lib="${LIB_SRC:-${root}/lib.sh}"
+  local app="${BATS_TEST_TMPDIR}/app" fb="${BATS_TEST_TMPDIR}/fakebin" out
+  rm -rf "${BATS_TEST_TMPDIR}/home" "${fb}" "${BATS_TEST_TMPDIR}/lftp.calls"
+  mkdir -p "${app}" "${BATS_TEST_TMPDIR}/home/lftp" "${BATS_TEST_TMPDIR}/ws" "${fb}"
+  cp "${lib}" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  if [ "${mode}" = "accept" ]; then
+    printf '\nwrite_netrc() { printf "PAST_EXCLUDE_GATE\\n"; exit 0; }\n' >> "${app}/lib.sh"
+  fi
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${BATS_TEST_TMPDIR}/home/lftp#g" \
+    "${src}" > "${app}/entrypoint.sh"
+  printf '#!/bin/sh\necho called >> "%s/lftp.calls"\nexit 1\n' "${BATS_TEST_TMPDIR}" > "${fb}/lftp"
+  printf '#!/bin/sh\nexit 0\n' > "${fb}/sleep"
+  chmod +x "${fb}/lftp" "${fb}/sleep"
+  out=$(cd "${BATS_TEST_TMPDIR}/ws" && env PATH="${fb}:${PATH}" HOME="${BATS_TEST_TMPDIR}/home" \
+    INPUT_SERVER="ftp.example.com" INPUT_USER="ftptest" INPUT_PASSWORD="pw" \
+    INPUT_REMOTE_DIR="${rdir}" INPUT_LOCAL_DIR="./" INPUT_EXCLUDE="${excl}" INPUT_MAX_RETRIES=1 \
+    bash "${app}/entrypoint.sh" 2>&1) && status=0 || status=$?
+  output="${out}"
+}
+
+@test "entrypoint: FND-0099: exclude with a backslash or single quote and remote_dir=/home/lftp/ exits 2 before the .netrc is written and before any lftp call" {
+  bs='\'
+  q="'"
+  h="${BATS_TEST_TMPDIR}/home/lftp"
+  for entry in "a${bs}|backslash" "a${q}|quote" "x,a${bs} ,y|backslash" "a${q},b${q}|quote"; do
+    v="${entry%|*}"
+    kind="${entry##*|}"
+    _fnd99_entry_case "${v}" "/home/lftp/" reject
+    printf 'CASE exclude=[%s] status=%s\n%s\n' "${v}" "${status}" "${output}"
+    [ "${status}" -eq 2 ] || return 1
+    case "${kind}" in
+      backslash) [[ "${output}" == *"ERROR: exclude item contains a backslash (lftp escape character): "* ]] || return 1 ;;
+      quote)     [[ "${output}" == *"ERROR: exclude item contains a single quote (lftp quote character): "* ]] || return 1 ;;
+    esac
+    [ ! -e "${h}/.netrc" ] || { echo "netrc was written for exclude=${v}"; return 1; }
+    [ ! -e "${BATS_TEST_TMPDIR}/lftp.calls" ] || { echo "lftp was called for exclude=${v}"; return 1; }
+  done
+}
+
+@test "entrypoint: FND-0099: a normal exclude gets past validation to write_netrc" {
+  for v in '*.log' '*.log,.git/,node_modules/,dir/*.tmp' '!important.txt'; do
+    _fnd99_entry_case "${v}" "/home/lftp/" accept
+    printf 'CASE exclude=[%s] status=%s\n%s\n' "${v}" "${status}" "${output}"
+    [ "${status}" -eq 0 ] || return 1
+    [[ "${output}" == *"PAST_EXCLUDE_GATE"* ]] || return 1
+    [[ "${output}" != *"ERROR: exclude"* ]] || return 1
+  done
+}
+
+# ----------------------------------------------------------------------------
+# FND-0100: lftp reads `>` as an output redirection even mid-token.
+#  - validate_glob_pattern rejects `>` in an exclude item.
+#  - validate_path takes an optional 3rd argument "unquoted" (remote_dir and
+#    concurrency_lock_path, which are pasted unquoted into the lftp -e script);
+#    with it, `>`, `'` and `\` are rejected. Without it (server, local_dir) they
+#    still pass, so the flag scopes the check.
+# LIB_SRC / ENTRYPOINT_SRC override the scripts under test (used to prove the
+# tests fail on a tree with only the FND-0099 change).
+# ----------------------------------------------------------------------------
+
+# _fnd100_expect_glob_gt VALUE ITEM: exit 2 and the exact `>` ERROR for ITEM.
+_fnd100_expect_glob_gt() {
+  local value="$1" item="$2" want
+  want="ERROR: exclude item contains a greater-than sign (lftp output redirection): ${item}"
+  run validate_glob_pattern "exclude" "${value}"
+  if [ "${status}" -ne 2 ] || [ "${output}" != "${want}" ]; then
+    printf 'CASE value=[%s] status=%s\n  want=[%s]\n  got =[%s]\n' "${value}" "${status}" "${want}" "${output}"
+    return 1
+  fi
+}
+
+@test "validate_glob_pattern: FND-0100: an exclude item with a greater-than sign exits 2 with the ERROR naming the item" {
+  _fnd100_expect_glob_gt 'a>x' 'a>x' || return 1
+  _fnd100_expect_glob_gt 'a>' 'a>' || return 1
+  _fnd100_expect_glob_gt '>x' '>x' || return 1
+  _fnd100_expect_glob_gt '*.log>/tmp/o' '*.log>/tmp/o' || return 1
+}
+
+@test "validate_glob_pattern: FND-0100: a greater-than sign in a later or padded list item names the trimmed item" {
+  _fnd100_expect_glob_gt 'ok,a>x' 'a>x' || return 1
+  _fnd100_expect_glob_gt ' a>x , ok' 'a>x' || return 1
+  _fnd100_expect_glob_gt 'a>,!cat${IFS}/home/lftp/.netrc' 'a>' || return 1
+}
+
+# _fnd100_expect_path_reject NAME VALUE KIND: validate_path with "unquoted"
+# exits 2 with the exact ERROR for KIND (gt | quote | backslash).
+_fnd100_expect_path_reject() {
+  local name="$1" value="$2" kind="$3" want
+  case "${kind}" in
+    gt)        want="ERROR: ${name} contains greater-than (lftp output redirection): ${value}" ;;
+    quote)     want="ERROR: ${name} contains single-quote (lftp quote character): ${value}" ;;
+    backslash) want="ERROR: ${name} contains backslash (lftp escape character): ${value}" ;;
+  esac
+  run validate_path "${name}" "${value}" "unquoted"
+  if [ "${status}" -ne 2 ] || [ "${output}" != "${want}" ]; then
+    printf 'CASE name=%s value=[%s] status=%s\n  want=[%s]\n  got =[%s]\n' "${name}" "${value}" "${status}" "${want}" "${output}"
+    return 1
+  fi
+}
+
+@test "validate_path: FND-0100: with \"unquoted\", remote_dir and concurrency_lock_path values with >, ' or a backslash exit 2 with the new ERROR" {
+  q="'"
+  bs='\'
+  for n in remote_dir concurrency_lock_path; do
+    _fnd100_expect_path_reject "${n}" 'a>x' gt || return 1
+    _fnd100_expect_path_reject "${n}" "x${q}" quote || return 1
+    _fnd100_expect_path_reject "${n}" "${q}/home/lftp/" quote || return 1
+    _fnd100_expect_path_reject "${n}" "a${bs}b" backslash || return 1
+    _fnd100_expect_path_reject "${n}" "a${bs}" backslash || return 1
+  done
+}
+
+@test "validate_path: FND-0100: with \"unquoted\", ordinary paths and < or # still pass with status 0 and no output" {
+  for v in 'a<b' 'a#b' '/www/site/' '.lftp-deployment.lock' ./ /; do
+    run validate_path "remote_dir" "${v}" "unquoted"
+    if [ "${status}" -ne 0 ] || [ -n "${output}" ]; then
+      printf 'CASE value=[%s] status=%s output=[%s]\n' "${v}" "${status}" "${output}"
+      return 1
+    fi
+  done
+}
+
+@test "validate_path: FND-0100: WITHOUT the flag, the same >, ' and backslash values still pass (server and local_dir are unchanged)" {
+  q="'"
+  bs='\'
+  for n in server local_dir remote_dir; do
+    for v in 'a>x' "x${q}" "${q}/home/lftp/" "a${bs}b" "a${bs}"; do
+      run validate_path "${n}" "${v}"
+      if [ "${status}" -ne 0 ] || [ -n "${output}" ]; then
+        printf 'CASE name=%s value=[%s] status=%s output=[%s]\n' "${n}" "${v}" "${status}" "${output}"
+        return 1
+      fi
+    done
+  done
+}
+
+@test "validate_path: FND-0100: a third argument other than \"unquoted\" does not enable the check" {
+  run validate_path "remote_dir" 'a>x' "quoted"
+  [ "${status}" -eq 0 ] || return 1
+  [ -z "${output}" ] || return 1
+}
+
+@test "validate_path: FND-0100: \"unquoted\" does not change the earlier checks (a '..' value keeps its own ERROR)" {
+  run validate_path "remote_dir" '../x>' "unquoted"
+  [ "${status}" -eq 2 ] || return 1
+  [[ "${output}" == *'remote_dir contains ".." path traversal'* ]] || return 1
+}
+
+# _fnd100_entry_case MODE [VAR=value ...]: like _fnd99_entry_case, but the
+# caller supplies the INPUT_* variables. Defaults: remote_dir /www/site/,
+# local_dir ./, exclude empty. Mode "reject" runs the real write_netrc; the
+# failing lftp stub logs every call to lftp.calls. Mode "accept" stubs
+# write_netrc with a marker and exits 0.
+_fnd100_entry_case() {
+  local mode="$1"
+  shift
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local src="${ENTRYPOINT_SRC:-${root}/entrypoint.sh}"
+  local lib="${LIB_SRC:-${root}/lib.sh}"
+  local app="${BATS_TEST_TMPDIR}/app" fb="${BATS_TEST_TMPDIR}/fakebin" out
+  rm -rf "${BATS_TEST_TMPDIR}/home" "${fb}" "${BATS_TEST_TMPDIR}/lftp.calls"
+  mkdir -p "${app}" "${BATS_TEST_TMPDIR}/home/lftp" "${BATS_TEST_TMPDIR}/ws" "${fb}"
+  cp "${lib}" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  if [ "${mode}" = "accept" ]; then
+    printf '\nwrite_netrc() { printf "PAST_FND100_GATE\\n"; exit 0; }\n' >> "${app}/lib.sh"
+  fi
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${BATS_TEST_TMPDIR}/home/lftp#g" \
+    "${src}" > "${app}/entrypoint.sh"
+  printf '#!/bin/sh\necho called >> "%s/lftp.calls"\nexit 1\n' "${BATS_TEST_TMPDIR}" > "${fb}/lftp"
+  printf '#!/bin/sh\nexit 0\n' > "${fb}/sleep"
+  chmod +x "${fb}/lftp" "${fb}/sleep"
+  out=$(cd "${BATS_TEST_TMPDIR}/ws" && env PATH="${fb}:${PATH}" HOME="${BATS_TEST_TMPDIR}/home" \
+    INPUT_SERVER="ftp.example.com" INPUT_USER="ftptest" INPUT_PASSWORD="pw" \
+    INPUT_REMOTE_DIR="/www/site/" INPUT_LOCAL_DIR="./" INPUT_EXCLUDE="" INPUT_MAX_RETRIES=1 \
+    "$@" timeout 20 bash "${app}/entrypoint.sh" 2>&1) && status=0 || status=$?
+  output="${out}"
+}
+
+# _fnd100_assert_rejected WANT_FRAGMENT: status 2, the fragment in the output
+# (fixed-string match), no .netrc written, lftp never called.
+_fnd100_assert_rejected() {
+  local frag="$1"
+  printf 'status=%s\n%s\n' "${status}" "${output}"
+  [ "${status}" -eq 2 ] || return 1
+  [[ "${output}" == *"${frag}"* ]] || return 1
+  [ ! -e "${BATS_TEST_TMPDIR}/home/lftp/.netrc" ] || { echo "netrc was written"; return 1; }
+  [ ! -e "${BATS_TEST_TMPDIR}/lftp.calls" ] || { echo "lftp was called"; return 1; }
+}
+
+@test "entrypoint: FND-0100: exclude 'a>,!cat\${IFS}/home/lftp/.netrc' exits 2 before the .netrc is written and before any lftp call" {
+  _fnd100_entry_case reject 'INPUT_EXCLUDE=a>,!cat${IFS}/home/lftp/.netrc'
+  _fnd100_assert_rejected "ERROR: exclude item contains a greater-than sign (lftp output redirection): a>" || return 1
+}
+
+@test "entrypoint: FND-0100: exclude 'a>x' with local_dir=put and remote_dir=/home/lftp/.netrc exits 2 before any lftp call" {
+  _fnd100_entry_case reject 'INPUT_EXCLUDE=a>x' 'INPUT_LOCAL_DIR=put' 'INPUT_REMOTE_DIR=/home/lftp/.netrc'
+  _fnd100_assert_rejected "ERROR: exclude item contains a greater-than sign (lftp output redirection): a>x" || return 1
+}
+
+@test "entrypoint: FND-0100: remote_dir with > or a single quote exits 2 before any lftp call" {
+  _fnd100_entry_case reject 'INPUT_REMOTE_DIR=a>x'
+  _fnd100_assert_rejected "ERROR: remote_dir contains greater-than (lftp output redirection): a>x/" || return 1
+  q="'"
+  _fnd100_entry_case reject "INPUT_REMOTE_DIR=x${q}"
+  _fnd100_assert_rejected "ERROR: remote_dir contains single-quote (lftp quote character): x${q}/" || return 1
+}
+
+@test "entrypoint: FND-0100: concurrency_lock_path with > or a single quote exits 2 before any lftp call" {
+  _fnd100_entry_case reject 'INPUT_CONCURRENCY_LOCK=true' 'INPUT_CONCURRENCY_LOCK_PATH=lk>x'
+  _fnd100_assert_rejected "ERROR: concurrency_lock_path contains greater-than (lftp output redirection): lk>x" || return 1
+  q="'"
+  _fnd100_entry_case reject 'INPUT_CONCURRENCY_LOCK=true' "INPUT_CONCURRENCY_LOCK_PATH=lk${q}"
+  _fnd100_assert_rejected "ERROR: concurrency_lock_path contains single-quote (lftp quote character): lk${q}" || return 1
+}
+
+@test "entrypoint: FND-0100: a concurrency_lock_path with > is not validated when concurrency_lock is off" {
+  _fnd100_entry_case accept 'INPUT_CONCURRENCY_LOCK=false' 'INPUT_CONCURRENCY_LOCK_PATH=lk>x'
+  printf 'status=%s\n%s\n' "${status}" "${output}"
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"PAST_FND100_GATE"* ]] || return 1
+}
+
+@test "entrypoint: FND-0100: a normal remote_dir and lock path get past validation to write_netrc" {
+  _fnd100_entry_case accept
+  printf 'status=%s\n%s\n' "${status}" "${output}"
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"PAST_FND100_GATE"* ]] || return 1
+  _fnd100_entry_case accept 'INPUT_CONCURRENCY_LOCK=true' 'INPUT_CONCURRENCY_LOCK_PATH=.lftp-deployment.lock' 'INPUT_REMOTE_DIR=/'
+  printf 'status=%s\n%s\n' "${status}" "${output}"
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"PAST_FND100_GATE"* ]] || return 1
+  [[ "${output}" != *"ERROR:"* ]] || return 1
 }
