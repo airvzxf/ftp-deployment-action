@@ -937,6 +937,190 @@ else
   fail "S19 vsftpd image not pinned to one digest ${_ref19:-?}:${_s19}"
 fi
 
+# S20 — release.yml refuses a tag whose CHANGELOG.md has no usable
+#       [X.Y.Z] section (FND-0030). The GitHub Release body is that
+#       section; a missing or empty one used to fall back to generated
+#       notes after the images were already published.
+#       (a) the "Fail if CHANGELOG ..." run block and the workflow-level
+#           CHANGELOG_SECTION_AWK are extracted and run under bash in a
+#           throwaway git repo with TAG and TAG_COMMIT set: a present
+#           section, a vX.Y.Z-rc.1 tag, an [Unreleased] block above (its
+#           text must not leak) and the last section of the file pass;
+#           a missing section, a missing CHANGELOG.md, an empty body and
+#           a whitespace-only body exit 1 with an ::error:: line;
+#       (b) the build job's "Extract CHANGELOG notes" step and the check
+#           both use "${CHANGELOG_SECTION_AWK}", and the awk program
+#           exists once (no second inline copy); build fails (::error::,
+#           exit 1) on an empty result and no longer warns.
+#       RELEASE_YML overrides the file under test.
+_s20=""
+_tmp20=$(mktemp -d) || _tmp20=""
+if [ -z "${_tmp20}" ] || [ ! -r "${_rel}" ] || ! command -v bash >/dev/null 2>&1 \
+    || ! command -v git >/dev/null 2>&1; then
+  _s20="${_s20} setup(need mktemp, bash, git and a readable ${_rel})"
+else
+  # Workflow-level env block: 2-space key, 4-space body.
+  awk '
+    /^  CHANGELOG_SECTION_AWK: \|/ { cap = 1; next }
+    cap && /^    /                 { sub(/^    /, ""); print; next }
+    cap && /^[[:space:]]*$/        { print ""; next }
+    cap                            { exit }
+  ' "${_rel}" > "${_tmp20}/awk.txt"
+  # A step's run block: 6-space "- name:", 10-space body.
+  s20_step() { # $1=name prefix; prints the run block
+    awk -v n="      - name: $1" '
+      index($0, n) == 1               { step = 1; next }
+      step && /^      - name:/        { exit }
+      step && /^        run: \|/      { cap = 1; next }
+      cap && /^          /            { sub(/^          /, ""); print; next }
+      cap && /^[[:space:]]*$/         { print ""; next }
+      cap                             { exit }
+    ' "${_rel}"
+  }
+  s20_step 'Fail if CHANGELOG at the tag commit has no section' > "${_tmp20}/check.sh"
+  s20_step 'Extract CHANGELOG notes for this version' > "${_tmp20}/extract.sh"
+  if [ ! -s "${_tmp20}/awk.txt" ]; then
+    _s20="${_s20} (a)(workflow-level CHANGELOG_SECTION_AWK not found)"
+  elif [ ! -s "${_tmp20}/check.sh" ]; then
+    _s20="${_s20} (a)(CHANGELOG check run block not found)"
+  else
+    # s20_run <label> <expect 0|1> <tag> <changelog-text|-> ; "-" = no file
+    s20_run() {
+      _r="${_tmp20}/repo"
+      rm -rf "${_r}"; mkdir -p "${_r}"
+      (
+        cd "${_r}" || exit 1
+        git init -q . \
+          && if [ "$4" != "-" ]; then printf '%s' "$4" > CHANGELOG.md; fi \
+          && echo x > f && git add . \
+          && git -c user.email=t@example.invalid -c user.name=t \
+               -c commit.gpgsign=false commit -q -m c
+      ) >/dev/null 2>&1 || { _s20="${_s20} (a)($1: fixture setup failed)"; return; }
+      _c=$(git -C "${_r}" rev-parse HEAD)
+      (
+        cd "${_r}" || exit 1
+        CHANGELOG_SECTION_AWK=$(cat "${_tmp20}/awk.txt") \
+          TAG="$3" TAG_COMMIT="${_c}" \
+          bash --noprofile --norc "${_tmp20}/check.sh" > "${_tmp20}/out" 2>&1
+      )
+      _rc=$?
+      if [ "${_rc}" -ne "$2" ]; then
+        _s20="${_s20} (a)($1: exit ${_rc}, expected $2)"
+      elif [ "$2" -ne 0 ] && ! grep -qF '::error::' "${_tmp20}/out"; then
+        _s20="${_s20} (a)($1: failed without an ::error:: line)"
+      fi
+    }
+    _nl='
+'
+    _foot="[1.2.3]: https://example.invalid/compare/v1.2.2...v1.2.3"
+    s20_run "section present" 0 v1.2.3 "# Changelog${_nl}${_nl}## [1.2.3] - 2026-01-01${_nl}${_nl}- a change${_nl}${_nl}## [1.2.2] - 2025-12-01${_nl}${_nl}- old${_nl}"
+    s20_run "section missing" 1 v1.2.3 "# Changelog${_nl}${_nl}## [1.2.2] - 2025-12-01${_nl}${_nl}- old${_nl}"
+    s20_run "CHANGELOG.md missing" 1 v1.2.3 -
+    s20_run "empty body" 1 v1.2.3 "# Changelog${_nl}${_nl}## [1.2.3] - 2026-01-01${_nl}## [1.2.2] - 2025-12-01${_nl}- old${_nl}"
+    s20_run "whitespace-only body" 1 v1.2.3 "# Changelog${_nl}${_nl}## [1.2.3] - 2026-01-01${_nl}   ${_nl}${_nl}	${_nl}## [1.2.2] - 2025-12-01${_nl}- old${_nl}"
+    s20_run "rc tag uses the [X.Y.Z] section" 0 v1.2.3-rc.1 "## [1.2.3] - 2026-01-01${_nl}${_nl}- a change${_nl}"
+    s20_run "rc tag, no section" 1 v1.2.3-rc.1 "## [1.2.2] - 2025-12-01${_nl}${_nl}- old${_nl}"
+    s20_run "last section in the file" 0 v1.2.3 "## [Unreleased]${_nl}${_nl}## [1.2.3] - 2026-01-01${_nl}${_nl}- a change${_nl}"
+    s20_run "Unreleased text is not a section" 1 v1.2.3 "## [Unreleased]${_nl}${_nl}- pending${_nl}${_nl}## [1.2.2] - 2025-12-01${_nl}- old${_nl}"
+    s20_run "version dots are literal" 1 v1.2.3 "## [1x2y3] - 2026-01-01${_nl}${_nl}- a change${_nl}"
+    s20_run "footer-only body" 1 v1.2.3 "## [1.2.3] - 2026-01-01${_nl}${_nl}${_foot}${_nl}"
+    # Unreleased above a real section: the awk must print only the
+    # [1.2.3] body.
+    _un="## [Unreleased]${_nl}${_nl}- PENDING-TEXT${_nl}${_nl}## [1.2.3] - 2026-01-01${_nl}${_nl}- shipped${_nl}${_nl}## [1.2.2] - 2025-12-01${_nl}- old${_nl}"
+    _got=$(printf '%s' "${_un}" | awk -v v=1.2.3 "$(cat "${_tmp20}/awk.txt")")
+    case "${_got}" in
+      *PENDING-TEXT*) _s20="${_s20} (a)(Unreleased text leaked into the section)" ;;
+      *shipped*) ;;
+      *) _s20="${_s20} (a)(section body not printed)" ;;
+    esac
+    case "${_got}" in
+      *old*) _s20="${_s20} (a)(next section leaked into the section)" ;;
+    esac
+    s20_run "Unreleased above a real section" 0 v1.2.3 "${_un}"
+  fi
+  # (b) wiring.
+  if [ ! -s "${_tmp20}/extract.sh" ]; then
+    _s20="${_s20} (b)(build 'Extract CHANGELOG notes' run block not found)"
+  else
+    for _f20 in check extract; do
+      # shellcheck disable=SC2016
+      if ! grep -qF '"${CHANGELOG_SECTION_AWK}"' "${_tmp20}/${_f20}.sh"; then
+        _s20="${_s20} (b)(${_f20} step does not use \"\${CHANGELOG_SECTION_AWK}\")"
+      fi
+      if grep -qF 'heading_re' "${_tmp20}/${_f20}.sh"; then
+        _s20="${_s20} (b)(${_f20} step has its own inline awk program)"
+      fi
+    done
+    _n20=$(grep -cF 'next_heading_re = ' "${_rel}")
+    [ "${_n20}" = 1 ] \
+      || _s20="${_s20} (b)(the section awk program appears ${_n20} times in release.yml, expected 1)"
+    grep -qF '::error::' "${_tmp20}/extract.sh" && grep -qE '^[[:space:]]*exit 1$' "${_tmp20}/extract.sh" \
+      || _s20="${_s20} (b)(build extraction does not fail with ::error:: on an empty section)"
+    if grep -qF '::warning::' "${_tmp20}/extract.sh"; then
+      _s20="${_s20} (b)(build extraction still only warns)"
+    fi
+  fi
+fi
+rm -rf "${_tmp20}"
+if [ -z "${_s20}" ]; then
+  pass "S20 release.yml fails a tag with no usable CHANGELOG section; check and build share one awk"
+else
+  fail "S20 release.yml CHANGELOG section check:${_s20}"
+fi
+
+# S21 — release.yml has no empty-body / generated-notes fallback
+#       (FND-0030, FND-0036): no body-empty file or output,
+#       no generate_release_notes, and fail_on_unmatched_files is the
+#       literal true (not an expression).
+_s21=$(grep -vE '^[[:space:]]*#' "${_rel}" \
+  | grep -nE 'body-empty|body_empty|generate_release_notes')
+_ff21=$(grep -vE '^[[:space:]]*#' "${_rel}" | grep -F 'fail_on_unmatched_files')
+if [ -n "${_s21}" ]; then
+  fail "S21 release.yml still has an empty-body fallback:"
+  printf '%s\n' "${_s21}" | sed 's/^/     /'
+elif [ "$(printf '%s\n' "${_ff21}" | grep -c .)" -ne 1 ] \
+    || ! printf '%s\n' "${_ff21}" | grep -qxE '[[:space:]]*fail_on_unmatched_files: true[[:space:]]*'; then
+  fail "S21 fail_on_unmatched_files is not exactly one literal 'true': ${_ff21:-none}"
+else
+  pass "S21 release.yml has no empty-body fallback; fail_on_unmatched_files is always true"
+fi
+
+# S22 — .dockerignore is an allow-list that matches the Dockerfile: the
+#       first rule is `*` and the `!` re-includes are exactly the files
+#       the Dockerfile COPYs (FND-0073). A new COPY without a `!` line
+#       fails the build ("not found"); a stale `!` line sends a file to
+#       the build context for nothing. The Dockerfile must have no ADD,
+#       --mount or --from copy, whose sources this check cannot read.
+#       DOCKERFILE and DOCKERIGNORE override the files under test.
+_df=${DOCKERFILE:-Dockerfile}
+_di=${DOCKERIGNORE:-.dockerignore}
+_s22=""
+if [ ! -r "${_df}" ] || [ ! -r "${_di}" ]; then
+  _s22=" setup(${_df} or ${_di} not readable)"
+else
+  _rules=$(grep -vE '^[[:space:]]*(#|$)' "${_di}")
+  [ "$(printf '%s\n' "${_rules}" | head -n 1)" = '*' ] \
+    || _s22="${_s22} (first rule is not '*': $(printf '%s\n' "${_rules}" | head -n 1))"
+  _neg=$(printf '%s\n' "${_rules}" | sed '1d' | grep -vE '^!' )
+  [ -z "${_neg}" ] || _s22="${_s22} (rules other than '!' after '*': $(printf '%s' "${_neg}" | tr '\n' ' '))"
+  _allow=$(printf '%s\n' "${_rules}" | sed -n 's/^!//p' | sort)
+  if grep -qE '^[[:space:]]*(ADD|COPY[[:space:]]+--)|--mount' "${_df}"; then
+    _s22="${_s22} (Dockerfile uses ADD, COPY --flag or --mount; extend S22)"
+  fi
+  # COPY <src>... <dest>: every word but the last. Joins continuation lines.
+  _copy=$(sed -e ':a' -e '/\\$/{N;s/\\\n/ /;ba' -e '}' "${_df}" \
+    | awk '$1 == "COPY" { for (i = 2; i < NF; i++) print $i }' | sort -u)
+  [ -n "${_copy}" ] || _s22="${_s22} (no COPY sources found in ${_df})"
+  if [ "${_copy}" != "$(printf '%s\n' "${_allow}" | sort -u)" ]; then
+    _s22="${_s22} (COPY sources [$(printf '%s' "${_copy}" | tr '\n' ' ')] differ from '!' lines [$(printf '%s' "${_allow}" | tr '\n' ' ')])"
+  fi
+fi
+if [ -z "${_s22}" ]; then
+  pass "S22 .dockerignore allow-lists exactly the files the Dockerfile COPYs"
+else
+  fail "S22 .dockerignore vs Dockerfile:${_s22}"
+fi
+
 if [ "${_failed}" -ne 0 ]; then
   printf '\nRESULT: FAIL\n'
   exit 1

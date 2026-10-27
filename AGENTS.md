@@ -112,7 +112,10 @@ the release branch BEFORE the tag.
    follow-up commit, push, and loop back to step 2. Do NOT open
    a release PR until the trunk is green.
 7. Only when the trunk is green: open the release PR (CHANGELOG
-   + `VERSION` bump). Run CI on the release branch.
+   + `VERSION` bump). Run CI on the release branch. The release
+   workflow fails if `CHANGELOG.md` at the tag has no
+   `## [X.Y.Z]` section for the version, or the section is empty;
+   there is no generated-notes fallback.
 8. **If the release branch CI is red**: same repair loop. Do NOT
    tag until the release branch is fully green.
 9. Only when the release branch is green: merge the release PR.
@@ -212,7 +215,10 @@ hold.
    immutable tag commit SHA so a tag force-push mid-run
    cannot redirect it. `Publish · GitHub Release` creates
    the release page from the `CHANGELOG.md` section for this
-   version.
+   version. That section must exist and be non-empty at the tag
+   commit (`[X.Y.Z]`, also for a `vX.Y.Z-rc.N` tag): if it is
+   missing or empty, `Verify · tag is reachable from main` fails
+   before any image is built.
 
 **If you discover you orphaned a tag** (e.g. you tagged before
 the squash, or ④ fails):
@@ -345,6 +351,6 @@ Settled; reopen one only when its "revisit" condition holds.
 - No AUR / pacman packaging. ftp-deployment-action is a
   Docker image, not a binary; AUR is a moagan concern.
 - No `release-please` / `release-drafter` automation. The
-  release body is extracted from `CHANGELOG.md` by an inline
-  awk step in `release.yml`; introducing a third-party tool
+  release body is extracted from `CHANGELOG.md` by an awk
+  program in `release.yml`; introducing a third-party tool
   for this would be over-engineering.

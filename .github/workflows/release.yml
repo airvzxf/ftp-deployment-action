@@ -64,6 +64,27 @@ concurrency:
 # No top-level `permissions:` — each job declares its own,
 # following the principle of least privilege.
 
+# The awk program that prints the CHANGELOG.md section for version
+# `v` (passed with `awk -v v=X.Y.Z`). It is defined once here so the
+# verify-tag-reachability check and the build job's extraction cannot
+# disagree on what the section is. It ignores any `## [Unreleased]`
+# block and stops at the next `## [...]` heading or the compare-link
+# footer. Both callers treat a whitespace-only result as no section.
+env:
+  CHANGELOG_SECTION_AWK: |
+    BEGIN {
+        in_section = 0
+        v_escaped = v
+        gsub(/\./, "\\.", v_escaped)
+        heading_re = "^## \\[" v_escaped "\\]( -.*)?$"
+        next_heading_re = "^## \\["
+        compare_re = "^\\[[0-9]+\\.[0-9]+\\.[0-9]+\\]:"
+    }
+    $0 ~ heading_re { in_section = 1; next }
+    in_section && $0 ~ next_heading_re { exit }
+    in_section && $0 ~ compare_re { exit }
+    in_section { print }
+
 jobs:
   # Job 1: tag-input validator. Fails fast on a malformed
   # dispatch input. The `push` tag filter already restricts to
@@ -201,6 +222,31 @@ jobs:
             exit 1
           fi
           echo "✓ VERSION ${version} matches ${TAG}"
+
+      # The release page is the CHANGELOG [X.Y.Z] section (FND-0030).
+      # Check it here, before any image is built or pushed, with the
+      # same core-version rule as the VERSION step and the same awk
+      # program (workflow-level CHANGELOG_SECTION_AWK) as the build
+      # job's extraction. A missing heading or a whitespace-only body
+      # fails the run.
+      - name: Fail if CHANGELOG at the tag commit has no section for the version
+        env:
+          TAG: ${{ steps.resolve.outputs.TAG }}
+          TAG_COMMIT: ${{ steps.resolve.outputs.TAG_COMMIT }}
+        run: |
+          set -euo pipefail
+          core="${TAG#v}"
+          core="${core%%-*}"
+          if ! changelog="$(git show "${TAG_COMMIT}:CHANGELOG.md")"; then
+            echo "::error::CHANGELOG.md is missing at ${TAG} (${TAG_COMMIT}); expected a '## [${core}]' section. Add it in the release PR (AGENTS.md 'Red / failed workflows' step 7) and re-tag."
+            exit 1
+          fi
+          notes="$(awk -v v="${core}" "${CHANGELOG_SECTION_AWK}" <<< "${changelog}")"
+          if [ -z "${notes//[[:space:]]/}" ]; then
+            echo "::error::CHANGELOG.md at ${TAG} (${TAG_COMMIT}) has no '## [${core}]' section, or the section is empty. Add the release notes in the release PR (AGENTS.md 'Red / failed workflows' step 7) and re-tag."
+            exit 1
+          fi
+          echo "✓ CHANGELOG.md has a non-empty [${core}] section for ${TAG}"
 
       - name: Fail if tag^{commit} is not an ancestor of main
         env:
@@ -801,13 +847,13 @@ jobs:
 
       # Extract the CHANGELOG.md section for this version so
       # the GitHub Release body mirrors the existing markdown.
-      # The awk pattern ignores any `## [Unreleased]` block
-      # (defensive against the duplicate that lived in the
-      # changelog once) and stops at the next `## [...]`
-      # heading or the compare-link footer. The body is
-      # written to a deterministic path inside the bundle so
-      # the `publish` job can find it without re-running the
-      # awk.
+      # The awk program is the workflow-level
+      # CHANGELOG_SECTION_AWK, the one verify-tag-reachability
+      # already ran on this commit, so an empty result here is
+      # unexpected; it fails the run rather than publishing a
+      # release without notes. The body is written to a
+      # deterministic path inside the bundle so the `publish`
+      # job can find it without re-running the awk.
       - name: Extract CHANGELOG notes for this version
         id: notes
         run: |
@@ -816,29 +862,15 @@ jobs:
           # A pre-release (X.Y.Z-rc.N) uses the final release's
           # CHANGELOG [X.Y.Z] section, as it uses its VERSION.
           version="${version%%-*}"
-          notes=$(awk -v v="${version}" '
-              BEGIN {
-                  in_section = 0
-                  v_escaped = v
-                  gsub(/\./, "\\.", v_escaped)
-                  heading_re = "^## \\[" v_escaped "\\]( -.*)?$"
-                  next_heading_re = "^## \\["
-                  compare_re = "^\\[[0-9]+\\.[0-9]+\\.[0-9]+\\]:"
-              }
-              $0 ~ heading_re { in_section = 1; next }
-              in_section && $0 ~ next_heading_re { exit }
-              in_section && $0 ~ compare_re { exit }
-              in_section { print }
-          ' CHANGELOG.md)
+          notes=$(awk -v v="${version}" "${CHANGELOG_SECTION_AWK}" CHANGELOG.md)
+          if [ -z "${notes//[[:space:]]/}" ]; then
+            echo "::error::no non-empty CHANGELOG section found for ${version}. Add the release notes in the release PR (AGENTS.md 'Red / failed workflows' step 7) and re-tag."
+            exit 1
+          fi
           ART_DIR="${{ runner.temp }}/release-artifacts"
           mkdir -p "${ART_DIR}"
-          if [ -z "${notes}" ]; then
-            echo "::warning::no CHANGELOG section found for ${version}; falling back to generate_release_notes"
-            touch "${ART_DIR}/body-empty"
-          else
-            printf '%s\n' "${notes}" > "${ART_DIR}/CHANGELOG.body.md"
-            echo "wrote $(wc -l < "${ART_DIR}/CHANGELOG.body.md") lines to CHANGELOG.body.md"
-          fi
+          printf '%s\n' "${notes}" > "${ART_DIR}/CHANGELOG.body.md"
+          echo "wrote $(wc -l < "${ART_DIR}/CHANGELOG.body.md") lines to CHANGELOG.body.md"
 
       # Bundle the SBOM + CHANGELOG body so `publish` can pick
       # them up without re-running the work. Mirrors moagan's
@@ -955,13 +987,7 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${INPUT_VERSION:-${GITHUB_REF_NAME}}"
-          if [ -f release/body-empty ]; then
-            body=""
-            body_empty=true
-          else
-            body="$(cat release/CHANGELOG.body.md)"
-            body_empty=false
-          fi
+          body="$(cat release/CHANGELOG.body.md)"
           # Random delimiter (GitHub's documented guidance for
           # multi-line values): a CHANGELOG line that is exactly
           # `EOF` would end a fixed `EOF` value early.
@@ -969,7 +995,6 @@ jobs:
           {
             echo "tag=${TAG}"
             echo "version=${TAG#v}"
-            echo "body-empty=${body_empty}"
             echo "body<<${delim}"
             printf '%s\n' "${body}"
             echo "${delim}"
@@ -977,22 +1002,13 @@ jobs:
 
       # Create the GitHub Release. Pre-release tags must not become the
       # repository's Latest release or replace the stable notification target.
-      # If `build` did not find a CHANGELOG section,
-      # `generate_release_notes` builds the body from the tag
-      # delta as a fallback. `fail_on_unmatched_files: true`
-      # (moagan's hardening) aborts the publish if the bundle
-      # is missing the expected SBOM.
-      # v2.11.10 (#293): `body_path` previously collapsed to `''`
-      # when `body-empty == 'true'`, which `softprops/action-gh-release`
-      # interpreted as the cwd and tried to read `body.md` from there
-      # (failing), then escalated via `fail_on_unmatched_files: true`.
-      # Switch to `body:` (content carried through the `meta` step's
-      # heredoc output) so the empty-body case is a clean empty string
-      # rather than a filesystem lookup. `fail_on_unmatched_files` is
-      # still true when a body IS expected (so a missing SBOM still
-      # fails the publish), and false when the body is intentionally
-      # empty (so the SBOM-missing failure mode doesn't shadow the
-      # generate_release_notes fallback).
+      # The body is always the CHANGELOG section: a missing or empty
+      # section fails the run in verify-tag-reachability (and again
+      # in `build`), so there is no generated-notes fallback.
+      # `body:` carries the content through the `meta` step's
+      # heredoc output (v2.11.10, #293, replaced `body_path`).
+      # `fail_on_unmatched_files: true` (moagan's hardening)
+      # aborts the publish if the bundle is missing the SBOM.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -1000,8 +1016,7 @@ jobs:
           name: ${{ steps.meta.outputs.tag }}
           prerelease: ${{ contains(steps.meta.outputs.tag, '-') }}
           make_latest: ${{ !contains(steps.meta.outputs.tag, '-') }}
-          generate_release_notes: ${{ steps.meta.outputs.body-empty == 'true' }}
           body: ${{ steps.meta.outputs.body }}
           files: |
             release/sbom.cyclonedx.json
-          fail_on_unmatched_files: ${{ steps.meta.outputs.body-empty != 'true' }}
+          fail_on_unmatched_files: true
