@@ -1597,3 +1597,117 @@ _call_kinds() {
   [ "${status}" -eq 0 ]
   [ "$(_call_kinds)" = "MIRROR,MIRROR," ]
 }
+
+# ----------------------------------------------------------------------------
+# FND-0101: ACQUIRED_LOCK_SENTINEL was never initialised, so a value inherited
+# from the environment reached release_lock_safely through the EXIT trap after
+# a FAILED acquire: it skipped the never-acquired guard (#188), sent
+# `quote RMD` for a lock this run never held and pasted the value unvalidated
+# into the lftp -e script (`quote DELE <path>/<name>;`), i.e. lftp command
+# injection (`!cmd` is lftp's shell escape). The scratch entrypoint below runs
+# with a stubbed acquire_lock_with_recovery (returns $FAKE_ACQ_RC, sets no
+# sentinel) and the REAL release_lock_safely against a fake lftp that logs
+# every -e script, one per line. ENTRYPOINT_SRC points at the entrypoint under
+# test (the tests were proven to fail on `git show HEAD:entrypoint.sh`).
+# ----------------------------------------------------------------------------
+
+_run_entrypoint_inherited_sentinel() {
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local src="${ENTRYPOINT_SRC:-${root}/entrypoint.sh}"
+  local app="${BATS_TEST_TMPDIR}/app"
+  mkdir -p "${app}" "${BATS_TEST_TMPDIR}/home/lftp" "${BATS_TEST_TMPDIR}/site"
+  cp "${LIB}" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  cat >> "${app}/lib.sh" <<'STUB'
+
+acquire_lock_with_recovery() {
+  if [ "${FAKE_ACQ_RC}" -eq 0 ]; then
+    ACQUIRED_LOCK_SENTINEL=".lftp-deployment.lock.20200101T000000Z.1234.info"
+  fi
+  return "${FAKE_ACQ_RC}"
+}
+STUB
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${BATS_TEST_TMPDIR}/home/lftp#g" \
+    "${src}" > "${app}/entrypoint.sh"
+  export CALL_LOG="${BATS_TEST_TMPDIR}/calls.log"
+  : > "${CALL_LOG}"
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/sh
+printf 'LFTP %s\n' "$*" >> "${CALL_LOG}"
+case " $* " in
+  *" mv "*) [ -z "${FAKE_MV_FAIL:-}" ] || exit 5 ;;
+esac
+exit 0
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/lftp"
+  # bash, not sh: see _run_entrypoint_with_lock_rc. timeout: a regression
+  # must fail the test, never hang it.
+  HOME="${BATS_TEST_TMPDIR}/home" \
+  INPUT_SERVER="ftp://example.test" INPUT_USER="ftptest" INPUT_PASSWORD="pw" \
+  INPUT_LOCAL_DIR="${BATS_TEST_TMPDIR}/site/" INPUT_REMOTE_DIR="./" \
+  INPUT_CONCURRENCY_LOCK="true" INPUT_CONCURRENCY_LOCK_TIMEOUT="0" \
+  INPUT_MAX_RETRIES="1" FAKE_ACQ_RC="$1" \
+    run timeout 60 bash -eu "${app}/entrypoint.sh"
+}
+
+@test "entrypoint: FND-0101: an inherited ACQUIRED_LOCK_SENTINEL(_TRIED) is never released or injected into lftp after a failed acquire" {
+  pwned="${BATS_TEST_TMPDIR}/PWNED"
+  export ACQUIRED_LOCK_SENTINEL="x; !touch ${pwned}"
+  export ACQUIRED_LOCK_SENTINEL_TRIED="inherited-tried-name"
+  _run_entrypoint_inherited_sentinel 1
+  echo "status=${status}"; echo "${output}"; cat "${CALL_LOG}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"ERROR: could not acquire concurrency lock"* ]]
+  # No lftp call at all: the never-acquired guard returned early.
+  [ ! -s "${CALL_LOG}" ]
+  run grep -cF 'quote DELE' "${CALL_LOG}"
+  [ "${output}" = "0" ]
+  run grep -cF 'quote RMD' "${CALL_LOG}"
+  [ "${output}" = "0" ]
+  run grep -cF 'PWNED' "${CALL_LOG}"
+  [ "${output}" = "0" ]
+  run grep -cF 'inherited-tried-name' "${CALL_LOG}"
+  [ "${output}" = "0" ]
+  [ ! -e "${pwned}" ]
+}
+
+# Positive control (the same stub, successful acquire, nothing inherited):
+# the release still DELEs this run's sentinel and RMDs the lock directory.
+# (The FND-0003 heartbeat test above covers the same path with refreshes.)
+@test "entrypoint: FND-0101: positive control: a successful acquire is still released (DELE this run's sentinel, then RMD)" {
+  unset ACQUIRED_LOCK_SENTINEL ACQUIRED_LOCK_SENTINEL_TRIED
+  _run_entrypoint_inherited_sentinel 0
+  echo "status=${status}"; echo "${output}"; cat "${CALL_LOG}"
+  [ "${status}" -eq 0 ]
+  p=".lftp-deployment.lock"
+  [ "$(grep -c '^LFTP ' "${CALL_LOG}")" -ge 1 ]
+  rel=$(grep -F 'quote DELE' "${CALL_LOG}")
+  # The heartbeat renamed the stubbed name to a fresh stamp; the release
+  # DELEs that current name (exactly one DELE), then RMDs.
+  [ "$(grep -cF 'quote DELE' "${CALL_LOG}")" -eq 1 ]
+  [[ "${rel}" == *"quote DELE ${p}/.lftp-deployment.lock.2026"*".info; quote RMD ${p}; quit;" ]] || { echo "release: ${rel}"; exit 1; }
+}
+
+# The TRIED reset is invisible on a failed acquire (TRIED is read only when a
+# sentinel exists). On the success path an inherited TRIED survives when the
+# attempt-1 refresh does not clear it (here: the refresh mv fails), and the
+# release would then DELE the inherited names: injection into the lftp script.
+@test "entrypoint: FND-0101: an inherited ACQUIRED_LOCK_SENTINEL_TRIED is not DELEd or injected by the release after a successful acquire with a failed refresh" {
+  pwned="${BATS_TEST_TMPDIR}/PWNED"
+  export ACQUIRED_LOCK_SENTINEL_TRIED="inh-tried-marker; !touch ${pwned}"
+  unset ACQUIRED_LOCK_SENTINEL
+  FAKE_MV_FAIL=1 _run_entrypoint_inherited_sentinel 0
+  echo "status=${status}"; echo "${output}"; cat "${CALL_LOG}"
+  [ "${status}" -eq 0 ]
+  # The refresh mv really ran and failed (so TRIED was not cleared by it).
+  [ "$(grep -c ' mv ' "${CALL_LOG}")" -ge 1 ]
+  p=".lftp-deployment.lock"
+  rel=$(grep -F 'quote DELE' "${CALL_LOG}")
+  [ "$(grep -cF 'quote DELE' "${CALL_LOG}")" -eq 1 ]
+  [[ "${rel}" == *"quote DELE ${p}/.lftp-deployment.lock.20200101T000000Z.1234.info; quote DELE ${p}/.lftp-deployment.lock.2026"*".info; quote RMD ${p}; quit;" ]] || { echo "release: ${rel}"; exit 1; }
+  run grep -cF 'inh-tried-marker' "${CALL_LOG}"
+  [ "${output}" = "0" ]
+  run grep -cF 'PWNED' "${CALL_LOG}"
+  [ "${output}" = "0" ]
+  [ ! -e "${pwned}" ]
+}
