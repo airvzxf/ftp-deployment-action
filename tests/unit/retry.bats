@@ -281,3 +281,86 @@ setup() {
   [ "$n" -ge 4 ]
   [ "$n" -le 12 ]
 }
+
+# ----------------------------------------------------------------------------
+# FND-0049: the jitter seed is per process, not per second
+# ----------------------------------------------------------------------------
+# Helper. Runs compute_backoff_seconds in $1 separate bash processes
+# (counter $2) and leaves the values, one per line, in $BATCH. The
+# batch is retried (up to 5 times) when the wall-clock second changed
+# while it ran, so every accepted batch ran inside one second. That
+# is the condition under which the old bare `srand()` gave identical
+# values. A bare `bash -c` is used because /bin/sh is dash on CI and
+# pipefail is a bash feature. BACKOFF_LIB can point at another
+# lib.sh (used to prove the tests fail on the pre-fix file).
+_backoff_batch() {
+  _bb_n=$1
+  _bb_counter=$2
+  _bb_lib="${BACKOFF_LIB:-${LIB}}"
+  _bb_try=0
+  while [ "${_bb_try}" -lt 5 ]; do
+    _bb_try=$((_bb_try + 1))
+    _bb_t0=$(date +%s)
+    BATCH=''
+    _bb_i=0
+    while [ "${_bb_i}" -lt "${_bb_n}" ]; do
+      _bb_i=$((_bb_i + 1))
+      _bb_v=$(bash -c 'set -eu; set -o pipefail; . "$1"; compute_backoff_seconds "$2"' _ "${_bb_lib}" "${_bb_counter}")
+      BATCH="${BATCH}${_bb_v}
+"
+    done
+    _bb_t1=$(date +%s)
+    [ "${_bb_t0}" = "${_bb_t1}" ] && return 0
+  done
+  return 1
+}
+
+# Asserts every line of $BATCH is an integer in [$1, $2] and that
+# more than one distinct value occurs.
+_assert_spread_in_range() {
+  _as_lo=$1
+  _as_hi=$2
+  _as_distinct=$(printf '%s' "${BATCH}" | sort -u | wc -l)
+  [ "${_as_distinct}" -gt 1 ]
+  for _as_v in ${BATCH}; do
+    case "${_as_v}" in
+      '' | *[!0-9]*) return 1 ;;
+    esac
+    [ "${_as_v}" -ge "${_as_lo}" ]
+    [ "${_as_v}" -le "${_as_hi}" ]
+  done
+}
+
+@test "FND-0049: separate processes in the same second get different jitter, within range" {
+  # counter=6 -> delay=16, jitter in [-8, 8], sleep in [8, 24]
+  # (17 values; 20 identical results by chance is about 17^-19).
+  _backoff_batch 20 6
+  _assert_spread_in_range 8 24
+}
+
+@test "FND-0049: with od failing, the call neither aborts nor collapses to one value" {
+  # The fallback seed is time + $$, so PIDs still separate processes
+  # in the same second. A failing od must not abort under
+  # `set -eu` + pipefail.
+  stub="${BATS_TEST_TMPDIR}/odfail"
+  mkdir -p "$stub"
+  printf '#!/bin/sh\nexit 1\n' > "$stub/od"
+  chmod +x "$stub/od"
+  PATH="$stub:$PATH"
+  export PATH
+  run od -An -N4 -tu4 /dev/urandom
+  [ "$status" -eq 1 ]
+  _backoff_batch 20 6
+  _assert_spread_in_range 8 24
+}
+
+@test "FND-0049: with od printing non-numeric text, the fallback seed is used" {
+  stub="${BATS_TEST_TMPDIR}/odjunk"
+  mkdir -p "$stub"
+  printf '#!/bin/sh\necho "od: garbage"\nexit 0\n' > "$stub/od"
+  chmod +x "$stub/od"
+  PATH="$stub:$PATH"
+  export PATH
+  _backoff_batch 20 6
+  _assert_spread_in_range 8 24
+}
