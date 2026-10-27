@@ -237,6 +237,9 @@ INPUT_REMOTE_DIR=$(normalize_dir "${INPUT_REMOTE_DIR}")
 # normalize_dir, in the main shell context, so a failure aborts.
 validate_path "local_dir"  "${INPUT_LOCAL_DIR}"
 validate_path "remote_dir" "${INPUT_REMOTE_DIR}"
+# FND-0015: local_dir must not be, contain, or lie inside the home
+# directory that holds the .netrc (pinned to /home/lftp below).
+validate_local_dir_outside_home "local_dir" "${INPUT_LOCAL_DIR}" "/home/lftp"
 MIRROR_COMMAND=$(build_mirror_command)
 
 # ------------------------------------------------------------------------------
@@ -285,6 +288,8 @@ write_netrc "${NETRC}" "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
 # run) so the trap can also DELE the sentinel file. We use the
 # empty string as the default — release_lock_safely falls back
 # to $ACQUIRED_LOCK_SENTINEL, which is set by acquire_lock_with_recovery.
+# The trap string is single-quoted, so the name is read when the trap
+# runs and includes the renames done by refresh_lock_sentinel (FND-0003).
 #
 # v2.11.2: only register the lock-release portion of the EXIT trap
 # when concurrency_lock=true. Without this guard, the trap
@@ -317,8 +322,13 @@ fi
 # INPUT_CONCURRENCY_LOCK_TIMEOUT seconds, print a clear error and
 # exit 1 so the workflow fails fast. A holder's sentinel older than
 # 6 h (LOCK_STALE_AFTER) is taken over; a younger one belongs to a
-# live run and is respected.
+# live run and is respected. The stamp taken here is refreshed before
+# every mirror attempt in the loop below (FND-0003), so a live run's
+# sentinel is never older than one attempt (5 h + 30 s) plus backoff.
 # ------------------------------------------------------------------------------
+# FND-0003: names of unconfirmed sentinel renames, DELEd by the release.
+# Start empty so a value inherited from the environment is never used.
+ACQUIRED_LOCK_SENTINEL_TRIED=""
 if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
   printf '::group::Concurrency lock acquire\n'
   LOCK_RC=0
@@ -382,6 +392,14 @@ while true; do
   echo ""
   echo "Try #${COUNTER}"
   echo "-------"
+
+  # FND-0003: lock heartbeat. Rename this run's sentinel to a fresh
+  # stamp before every attempt, the first one included (the acquire
+  # stamp predates the wait for the lock), so a waiter never sees a
+  # live holder as stale. A failed refresh only warns.
+  if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ] && [ -n "${ACQUIRED_LOCK_SENTINEL:-}" ]; then
+    refresh_lock_sentinel "${INPUT_SERVER}" "${INPUT_CONCURRENCY_LOCK_PATH}" "${INPUT_USER}"
+  fi
 
   # FND-0045: the log is shared by all attempts (tee -a); remember its
   # size so classify_permanent_error reads only this attempt's output.

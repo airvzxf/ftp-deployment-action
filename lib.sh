@@ -426,6 +426,100 @@ validate_path() {
 }
 
 # ------------------------------------------------------------------------------
+# _canon_path PATH
+#   Echo PATH as an absolute, lexically canonical path: a relative
+#   value is resolved against $PWD, repeated slashes are collapsed,
+#   "." components are dropped and the trailing slash is removed
+#   ("/" stays "/"). Purely lexical: symlinks are NOT resolved and
+#   ".." is left as is (validate_path rejects ".." before this runs).
+# ------------------------------------------------------------------------------
+_canon_path() {
+  _cp_value=$1
+  case "${_cp_value}" in
+    /*) ;;
+    *) _cp_value="${PWD:-$(pwd)}/${_cp_value}" ;;
+  esac
+  printf '%s/\n' "${_cp_value}" | sed -e 's#//*#/#g' \
+    -e ':a' -e 's#/\./#/#g' -e 'ta' -e 's#^\(.\{1,\}\)/$#\1#'
+}
+
+# ------------------------------------------------------------------------------
+# validate_local_dir_outside_home NAME VALUE HOME_DIR
+#   FND-0015: exit 2 if VALUE, resolved lexically (see _canon_path), is
+#   HOME_DIR, lies inside HOME_DIR, or is an ancestor of HOME_DIR
+#   ("/", "/home"). HOME_DIR holds the .netrc with the FTP password for
+#   the whole mirror loop, and the reverse mirror uploads dot-files, so
+#   such a local_dir would publish the credentials to remote_dir.
+#   Comparison is component-wise: "/home/lftpx" and "/home/lftp-site"
+#   pass. Run AFTER validate_path, which rejects "..".
+#
+#   A degenerate HOME_DIR (empty, relative, or "/") is a caller bug, and
+#   with "/" every path would be "inside". The function fails closed:
+#   exit 2 with an internal-error message instead of skipping the check.
+#
+#   Residual: lexical only. A symlink under the workspace that points at
+#   HOME_DIR is not caught.
+#
+#   The check must see the path lftp will open. run_lftp_once wraps
+#   VALUE in double quotes in the lftp -e script, so lftp's parser keeps
+#   it as one literal word (no quote removal, no ">" "<" "|" redirects).
+#   validate_path rejects '"', so VALUE cannot close the quotes, and a
+#   backslash is rejected here because it is lftp's escape character
+#   inside quotes ("a\\b" is a\b; a trailing \ would escape the closing
+#   quote). Two lftp 4.9.3 behaviours act after parsing, in mirror, so
+#   the quotes do not stop them: a leading "~" expands to HOME, and a
+#   "file:" prefix is a local URL (file:/home/lftp/). Both are rejected.
+#   These raw-value checks run first, before canonicalizing.
+# ------------------------------------------------------------------------------
+validate_local_dir_outside_home() {
+  _vh_name=$1
+  _vh_value=$2
+  case "${_vh_value}" in
+    *\\*)
+      printf 'ERROR: %s contains a backslash: %s; lftp reads \\ as an escape character, so the path it opens would differ from the one checked here.\n' \
+        "${_vh_name}" "${_vh_value}" >&2
+      exit 2
+      ;;
+    '~'*)
+      printf "ERROR: %s starts with \"~\": %s; lftp expands a leading ~ to the action's home directory, which holds the FTP credentials (.netrc).\n" \
+        "${_vh_name}" "${_vh_value}" >&2
+      exit 2
+      ;;
+    file:*)
+      printf "ERROR: %s starts with \"file:\": %s; lftp reads it as a local file URL, which bypasses the home-directory check. Give a plain path.\n" \
+        "${_vh_name}" "${_vh_value}" >&2
+      exit 2
+      ;;
+  esac
+  case "$3" in
+    /*) _vh_home=$(_canon_path "$3") ;;
+    *) _vh_home="" ;;
+  esac
+  if [ -z "${_vh_home}" ] || [ "${_vh_home}" = "/" ]; then
+    printf 'ERROR: internal: cannot check %s, home directory argument is empty, relative or "/": %s\n' \
+      "${_vh_name}" "$3" >&2
+    exit 2
+  fi
+  _vh_path=$(_canon_path "${_vh_value}")
+  _vh_bad=false
+  if [ "${_vh_path}" = "/" ]; then
+    _vh_bad=true
+  else
+    case "${_vh_path}" in
+      "${_vh_home}" | "${_vh_home}"/*) _vh_bad=true ;;
+    esac
+    case "${_vh_home}" in
+      "${_vh_path}"/*) _vh_bad=true ;;
+    esac
+  fi
+  if [ "${_vh_bad}" = "true" ]; then
+    printf "ERROR: %s '%s' (resolved to %s) is or contains the action's home directory %s, or lies inside it; that directory holds the FTP credentials (.netrc). Choose a directory under the workspace.\n" \
+      "${_vh_name}" "${_vh_value}" "${_vh_path}" "${_vh_home}" >&2
+    exit 2
+  fi
+}
+
+# ------------------------------------------------------------------------------
 # validate_lftp_settings VALUE
 #   Mistake guard for the free-form lftp_settings input (B-16). The
 #   documented use case is 1-3 'set' directives chained with ';', so
@@ -1142,15 +1236,20 @@ run_lftp_once() {
   # to the log file that classify_permanent_error reads. pipefail makes
   # the function return lftp's exit code, not tee's; it is also set
   # here because bats calls this function without entrypoint.sh.
+  # FND-0015: local_dir is double-quoted in the lftp script, so lftp
+  # opens exactly the path validate_local_dir_outside_home checked
+  # (quotes, ">", "<", "|" and "#" stay literal; '"' and '\' are rejected).
   # shellcheck disable=SC3040
   set -o pipefail
   timeout -k "${_rlo_kill_after}" "${_rlo_timeout}" lftp \
     "${_rlo_server_eff}" \
-    -e "${_rlo_settings} ${_rlo_mirror} ${_rlo_local} ${_rlo_remote}; quit;" \
+    -e "${_rlo_settings} ${_rlo_mirror} \"${_rlo_local}\" ${_rlo_remote}; quit;" \
     2>&1 | tee -a "${_rlo_log}"
 }
 
-# 6 h is GitHub's maximum job time, so an older sentinel cannot belong to a live run.
+# The holder renames its sentinel to a fresh stamp before every mirror attempt
+# (refresh_lock_sentinel, FND-0003), and one attempt is capped at 5 h + 30 s, so
+# a sentinel older than 6 h means no attempt has started for 6 h: the run is gone.
 LOCK_STALE_AFTER=21600
 # A lock dir without a sentinel may belong to a holder between its MKD and its
 # sentinel PUT (30 s hard cap), so wait 4x that before treating it as abandoned.
@@ -1163,7 +1262,11 @@ LOCK_EMPTY_GRACE=120
 #   On a successful acquire, write a sentinel file inside LOCK_PATH
 #   named `.lftp-deployment.lock.<TIMESTAMP>.<PID>.info` and store
 #   the sentinel name in the global `ACQUIRED_LOCK_SENTINEL` so
-#   `release_lock_safely` (and the EXIT trap) can clean it up.
+#   `release_lock_safely` (and the EXIT trap) can clean it up. The
+#   stamp taken here is only the first one: the holder renames the
+#   sentinel to a fresh stamp before every mirror attempt
+#   (refresh_lock_sentinel, FND-0003), so its age is the time since
+#   the holder's last attempt started, not since the acquire.
 #
 #   Stale-lock recovery: on every MKD failure (550, lock held), the
 #   function does a `cls -la LOCK_PATH` (lftp's high-level ls) to look
@@ -1276,7 +1379,9 @@ acquire_lock_with_recovery() {
   fi
 
   # Sentinel identity for THIS acquisition. Timestamp is captured
-  # once per attempt-set; PID is the runner shell PID.
+  # once per attempt-set (it can be old by the time MKD wins, which
+  # is why the entrypoint refreshes it before the first mirror attempt
+  # too, FND-0003); PID is the runner shell PID.
   _alwr_stamp=$(date -u +%Y%m%dT%H%M%SZ)
   _alwr_pid=$$
   _alwr_sentinel=$(_lock_sentinel_name "${_alwr_stamp}" "${_alwr_pid}")
@@ -1533,6 +1638,80 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
+# refresh_lock_sentinel SERVER LOCK_PATH [USER]
+#   FND-0003 lock heartbeat. The entrypoint calls it before every mirror
+#   attempt while it holds the lock. It renames this run's sentinel
+#   ($ACQUIRED_LOCK_SENTINEL) inside LOCK_PATH to the same name scheme
+#   with the current stamp (_lock_sentinel_name NOW $$). A waiter takes
+#   the lock over only when the oldest sentinel is older than
+#   LOCK_STALE_AFTER (6 h), and one attempt is capped at 5 h + 30 s
+#   kill, so a live holder never looks stale, however long the run is
+#   (self-hosted runners, max_retries=0). Worst gap between two stamps:
+#   30 s rename + 5 h attempt + 30 s kill + 45 s backoff.
+#
+#   lftp's high-level `mv` sends RNFR/RNTO, an atomic server-side
+#   rename, so the sentinel is never absent and never doubled: a PUT
+#   of the new name and a DELE of the old one would either leave an
+#   empty dir (waiters see "no sentinel") or, on a failed DELE, keep
+#   the old stamp as the oldest sentinel, which the waiter checks.
+#   `mv` (unlike `quote RNFR`/`quote RNTO`) makes lftp exit non-zero on
+#   a 5xx reply, as `mkdir` does in acquire_lock_with_recovery.
+#
+#   A failed rename never fails the deploy: it prints a warning and the
+#   old sentinel stays in use. The outcome can be ambiguous (the server
+#   renamed it but the reply was lost, or `timeout` killed lftp), so the
+#   new name is added to $ACQUIRED_LOCK_SENTINEL_TRIED (space-separated;
+#   names hold no spaces) before the call, and release_lock_safely DELEs
+#   those names too before its RMD. A successful rename proves that no
+#   earlier tried name was applied (each one would have renamed the old
+#   name away), so it clears the list. The sentinel body (started_at)
+#   keeps the acquire time; only the file name is parsed.
+#
+#   Skips the server call when the new name equals the current one (same
+#   second, e.g. attempt 1 right after the acquire), or when no sentinel
+#   is held. Reads and writes ACQUIRED_LOCK_SENTINEL and
+#   ACQUIRED_LOCK_SENTINEL_TRIED. Always returns 0.
+# ------------------------------------------------------------------------------
+refresh_lock_sentinel() {
+  _rfs_server=$1
+  _rfs_path=$2
+  _rfs_user=${3:-}
+  _rfs_old=${ACQUIRED_LOCK_SENTINEL:-}
+
+  if [ -z "${_rfs_path}" ] || [ -z "${_rfs_old}" ]; then
+    return 0
+  fi
+  _rfs_new=$(_lock_sentinel_name "$(date -u +%Y%m%dT%H%M%SZ)" "$$")
+  if [ "${_rfs_new}" = "${_rfs_old}" ]; then
+    return 0
+  fi
+
+  # Same URL rewrite (#132) and tightened reconnect preamble as
+  # acquire_lock_with_recovery / release_lock_safely.
+  _rfs_server_eff=$(rewrite_lftp_url "${_rfs_server}" "${_rfs_user}")
+  _rfs_preamble="set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5;"
+
+  # Recorded before the call, so the EXIT trap also DELEs the new name
+  # if this run dies while the rename is in flight.
+  ACQUIRED_LOCK_SENTINEL_TRIED="${ACQUIRED_LOCK_SENTINEL_TRIED:+${ACQUIRED_LOCK_SENTINEL_TRIED} }${_rfs_new}"
+  set +e
+  timeout 30s lftp "${_rfs_server_eff}" \
+    -e "${_rfs_preamble} mv ${_rfs_path}/${_rfs_old} ${_rfs_path}/${_rfs_new}; quit;" \
+    >/dev/null 2>&1
+  _rfs_rc=$?
+  set -e
+
+  if [ "${_rfs_rc}" -eq 0 ]; then
+    ACQUIRED_LOCK_SENTINEL=${_rfs_new}
+    ACQUIRED_LOCK_SENTINEL_TRIED=""
+  else
+    printf '::warning::concurrency lock: could not refresh the sentinel %s/%s (lftp exit %s); continuing with it. Once it is older than 6 hours, a waiting run can take the lock over.\n' \
+      "${_rfs_path}" "${_rfs_old}" "${_rfs_rc}"
+  fi
+  return 0
+}
+
+# ------------------------------------------------------------------------------
 # release_lock_safely SERVER LOCK_PATH [SENTINEL] [USER]
 #   Best-effort release of the server-side concurrency lock:
 #   DELE the sentinel file inside LOCK_PATH (if SENTINEL is provided or
@@ -1544,7 +1723,12 @@ EOF
 #   SERVER: lftp server URL (e.g. ftp://host).
 #   LOCK_PATH: the lock dir on the FTP server (e.g. .lftp-deployment.lock).
 #   SENTINEL: (optional) the sentinel filename to DELE first. Falls
-#             back to $ACQUIRED_LOCK_SENTINEL. If neither is set,
+#             back to $ACQUIRED_LOCK_SENTINEL. The names in
+#             $ACQUIRED_LOCK_SENTINEL_TRIED (failed or interrupted
+#             refresh_lock_sentinel renames, FND-0003) are DELEd too,
+#             best-effort: a DELE of a missing file is harmless and
+#             the RMD still runs. If neither SENTINEL nor
+#             $ACQUIRED_LOCK_SENTINEL is set,
 #             the function is a no-op — we never acquired the lock
 #             in this run, and issuing `quote RMD <lock_path>` would
 #             race any concurrent holder's lock dir. The
@@ -1604,8 +1788,14 @@ release_lock_safely() {
 
   set +e
   if [ -n "${_rls_sentinel}" ]; then
+    # FND-0003: an unconfirmed refresh may have renamed the sentinel to
+    # one of these names; the RMD fails on a non-empty dir otherwise.
+    _rls_dele="quote DELE ${_rls_path}/${_rls_sentinel};"
+    for _rls_tried in ${ACQUIRED_LOCK_SENTINEL_TRIED:-}; do
+      _rls_dele="${_rls_dele} quote DELE ${_rls_path}/${_rls_tried};"
+    done
     timeout 30s lftp "${_rls_server_eff}" \
-      -e "${_rls_preamble} quote DELE ${_rls_path}/${_rls_sentinel}; quote RMD ${_rls_path}; quit;" \
+      -e "${_rls_preamble} ${_rls_dele} quote RMD ${_rls_path}; quit;" \
       >/dev/null 2>&1
   else
     timeout 30s lftp "${_rls_server_eff}" \

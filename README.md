@@ -394,7 +394,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | server                 | FTP server: `ftp://host[:port]` or `ftps://host[:port]` (implicit TLS); a bare `host[:port]` means `ftp://`. IPv6 in brackets (`ftp://[2001:db8::1]:21`). No `user:pass@`, with or without a scheme (exit 2): use `user` / `password`. The target directory is `remote_dir`, not the URL path. | Yes      | N/A     | rovisoft.net                                                                                      |
 | user                   | FTP Username.                                                                         | Yes      | N/A     | myself@rovisoft.net                                                                               |
 | password               | FTP Password.                                                                         | Yes      | N/A     | ExampleOnlyAlphabets                                                                              |
-| local_dir              | Local directory.                                                                      | No       | "./"    | "./public_html"                                                                                   |
+| local_dir              | Local directory. Must not be, contain or lie inside `/home/lftp` (see [Security](#security)). | No       | "./"    | "./public_html"                                                                                   |
 | remote_dir             | Remote directory.                                                                     | No       | "./"    | "/www/user/home"                                                                                  |
 | max_retries            | Number of tries on error; `1` = no retries. `0` = retry until success, a permanent error, or the job is stopped (set `timeout-minutes`). Each attempt is limited to 5 h. | No       | 10      | N/A                                                                                               |
 | delete                 | Delete remote files that do not exist locally (files matching `exclude` are kept).   | No       | false   | N/A                                                                                               |
@@ -590,6 +590,17 @@ timestamp-encoded sentinel file inside the lock dir, e.g.
 (stamp and runner PID). Only that lock dir's own sentinel counts,
 so different `concurrency_lock_path` values never affect each
 other, and `RMD` of the dir fails while a sentinel is still in it.
+Before every mirror attempt, the first one included, the holder
+renames its sentinel to the current stamp (lftp `mv`, an atomic
+FTP `RNFR`/`RNTO`, so the sentinel is never missing). One attempt
+is capped at 5 hours (plus a 30-second kill), so as long as the
+renames succeed, the stamp of a live run is never 6 hours old,
+even on a self-hosted runner whose job runs longer than 6 hours
+or with `max_retries: "0"`. If a rename fails, the action prints
+a warning and goes on with the old sentinel; the deploy does not
+fail, but once that sentinel is 6 hours old a waiting run can
+take the lock over. The sentinel's content
+(`started_at=`) keeps the acquire time; only the file name counts.
 A runner that finds the lock held reads that stamp:
 
 - **Sentinel younger than 6 hours**: the holder may still be
@@ -598,8 +609,10 @@ A runner that finds the lock held reads that stamp:
   runner polls up to `concurrency_lock_timeout` seconds and then
   fails with exit 1 and an error that names the lock and the
   sentinel.
-- **Sentinel older than 6 hours**: 6 hours is GitHub's maximum
-  job time, so that run is gone (runner OOM, `kill -9`). The
+- **Sentinel older than 6 hours**: the holder has not refreshed
+  its sentinel (once per mirror attempt) for 6 hours, so that run
+  is gone (runner OOM,
+  `kill -9`). The
   runner `DELE`s the sentinel, `RMD`s the lock dir, waits
   `concurrency_lock_poll_interval` seconds and takes the lock.
 - **Lock dir without a sentinel**: the holder may be between its
@@ -758,7 +771,7 @@ non-buildable image) **before** a tag is pushed.
 |------|---------|
 | `0`  | Upload finished successfully. |
 | `1`  | Upload failed after all retries; the last lftp error is printed above. |
-| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` or `user:pass@host` — the userinfo password is rejected); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives; an `exclude` value rejected by `validate_glob_pattern` (control chars, `;`, `&`, `|`, `"`, or an item that starts with a dash or contains a space). |
+| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` or `user:pass@host` — the userinfo password is rejected); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a `local_dir` that is, contains, or lies inside `/home/lftp`, or that contains `\` or starts with `~` or `file:`; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;`-chained directives; an `exclude` value rejected by `validate_glob_pattern` (control chars, `;`, `&`, `|`, `"`, or an item that starts with a dash or contains a space). |
 
 lftp's own output (transferred files, the `dry_run` plan, server errors) is
 printed in the step log; there is nothing else to download.
@@ -870,6 +883,21 @@ instead of silently breaking the lftp `-e` tokeniser. The
 password (the `ftp://user:pass@host` form — lftp would otherwise
 authenticate with the embedded credentials and silently bypass
 the action's documented credential source).
+
+`local_dir` must also stay out of the action's home directory
+`/home/lftp`, which holds the `.netrc` with the password while the
+mirror runs. A `local_dir` that is `/home/lftp`, lies inside it, or
+contains it (`/`, `/home`) exits `2`, because the reverse mirror
+would upload the `.netrc` to `remote_dir`. Relative values are
+resolved against the job workspace (`/github/workspace`), and
+repeated or trailing slashes do not matter. The check is lexical:
+it does not follow symlinks, so do not point a symlink in the
+workspace at `/home/lftp`. The action passes `local_dir` to lftp
+in double quotes, so characters such as `'`, `>` or `#` are part of
+the path. A `local_dir` that contains a backslash (`\`), starts with
+`~` or starts with `file:` exits `2`, because lftp reads `\` as an
+escape character inside the quotes, expands `~` to the action's
+home and reads `file:` as a local file URL.
 
 `lftp_settings` is **trusted input**. Its value runs as lftp
 commands inside the container, and lftp commands can run shell

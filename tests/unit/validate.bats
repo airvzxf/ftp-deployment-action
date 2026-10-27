@@ -12,7 +12,9 @@ setup() {
   # so unset INPUT_* don't trigger errexit. The lib.sh functions
   # themselves use set -u-safe patterns (e.g. ${VAR-}).
   set +u
-  LIB="${BATS_TEST_DIRNAME}/../../lib.sh"
+  # LIB_SRC overrides the lib.sh under test (used to prove the FND-0015
+  # tests fail without the fix).
+  LIB="${LIB_SRC:-${BATS_TEST_DIRNAME}/../../lib.sh}"
   # shellcheck disable=SC1090
   . "${LIB}"
 }
@@ -321,6 +323,281 @@ setup() {
   [ "$status" -eq 0 ]
   run validate_path "server" 'ftp://example.com/some/path'
   [ "$status" -eq 0 ]
+}
+
+# ----------------------------------------------------------------------------
+# FND-0015: _canon_path and validate_local_dir_outside_home. local_dir must not
+# be, contain or lie inside the action's home (it holds the .netrc, and the
+# reverse mirror uploads dot-files). HOME_DIR is an argument; PWD is set per
+# test (bats runs each test in its own process, so the export does not leak).
+# ----------------------------------------------------------------------------
+
+_fnd15_reject() {
+  # $1 = local_dir value, $2 = home dir
+  run validate_local_dir_outside_home "local_dir" "$1" "$2"
+  if [ "${status}" -ne 2 ]; then
+    echo "case='$1' home='$2' PWD='${PWD}': expected status 2, got ${status}"; echo "${output}"
+    return 1
+  fi
+  case "${output}" in
+    "ERROR: local_dir "*) ;;
+    *) echo "case='$1' home='$2': ERROR does not name local_dir"; echo "${output}"; return 1 ;;
+  esac
+  case "${output}" in
+    *"holds the FTP credentials"*) ;;
+    *) echo "case='$1' home='$2': message lacks the credentials hint"; echo "${output}"; return 1 ;;
+  esac
+}
+
+_fnd15_accept() {
+  run validate_local_dir_outside_home "local_dir" "$1" "$2"
+  if [ "${status}" -ne 0 ]; then
+    echo "case='$1' home='$2' PWD='${PWD}': expected status 0, got ${status}"; echo "${output}"
+    return 1
+  fi
+  if [ -n "${output}" ]; then
+    echo "case='$1' home='$2': expected no output"; echo "${output}"
+    return 1
+  fi
+}
+
+@test "validate_local_dir_outside_home: FND-0015: rejects every spelling of the literal /home/lftp, its contents, and its ancestors" {
+  export PWD=/github/workspace
+  for v in /home/lftp /home/lftp/ //home//lftp// /home/lftp/sub /home/lftp/.lftp-logs \
+           /home/./lftp /home/lftp/./sub/ / // /home /home/ /home/.; do
+    _fnd15_reject "${v}" /home/lftp || return 1
+  done
+}
+
+@test "validate_local_dir_outside_home: FND-0015: rejects the same forms against a temporary home dir" {
+  export PWD=/github/workspace
+  h="${BATS_TEST_TMPDIR}/home/lftp"
+  for v in "${h}" "${h}/" "${h}/sub" "${h}/.lftp-logs" "${BATS_TEST_TMPDIR}/home" \
+           "${BATS_TEST_TMPDIR}/home/./lftp" "${BATS_TEST_TMPDIR}//home//lftp//" "${BATS_TEST_TMPDIR}" /; do
+    _fnd15_reject "${v}" "${h}" || return 1
+  done
+}
+
+@test "validate_local_dir_outside_home: FND-0015: the ERROR carries the value, the resolved path and the home dir" {
+  export PWD=/github/workspace
+  run validate_local_dir_outside_home "local_dir" "//home//lftp//x/" "/home/lftp"
+  [ "${status}" -eq 2 ]
+  [[ "${output}" == *"local_dir '//home//lftp//x/' (resolved to /home/lftp/x)"* ]]
+  [[ "${output}" == *"home directory /home/lftp,"* ]]
+}
+
+@test "validate_local_dir_outside_home: FND-0015: a relative value is resolved against PWD inside the home dir" {
+  export PWD=/home/lftp
+  for v in ./ . sub sub/ ./sub/ ; do
+    _fnd15_reject "${v}" /home/lftp || return 1
+  done
+  export PWD=/home/lftp/work
+  _fnd15_reject ./ /home/lftp || return 1
+  _fnd15_reject public/ /home/lftp || return 1
+  export PWD="${BATS_TEST_TMPDIR}/home/lftp/work"
+  _fnd15_reject ./ "${BATS_TEST_TMPDIR}/home/lftp" || return 1
+}
+
+@test "validate_local_dir_outside_home: FND-0015: './' is rejected when PWD is / (it would mirror the whole filesystem)" {
+  export PWD=/
+  for v in ./ . ; do
+    _fnd15_reject "${v}" /home/lftp || return 1
+  done
+  # A subdir of / that is not the home dir or an ancestor of it is fine.
+  _fnd15_accept public/ /home/lftp || return 1
+}
+
+@test "validate_local_dir_outside_home: FND-0015: relative value with PWD=/home (an ancestor) is rejected, a sibling subdir is accepted" {
+  export PWD=/home
+  _fnd15_reject ./ /home/lftp || return 1
+  _fnd15_reject lftp /home/lftp || return 1
+  _fnd15_accept other/ /home/lftp || return 1
+}
+
+@test "validate_local_dir_outside_home: FND-0015: accepts workspace and sibling paths silently (PWD=/github/workspace)" {
+  export PWD=/github/workspace
+  for v in ./ public/ dist/site/ /github/workspace /github/workspace/public/ /home/lftpx \
+           /home/lftp-site /home/lftpx/sub /home/lftp.d /data/ /var/www/; do
+    _fnd15_accept "${v}" /home/lftp || return 1
+  done
+}
+
+@test "validate_local_dir_outside_home: FND-0015: accepts the same siblings against a temporary home dir, PWD outside it" {
+  export PWD="${BATS_TEST_TMPDIR}/ws"
+  h="${BATS_TEST_TMPDIR}/home/lftp"
+  for v in ./ public/ "${h}x" "${h}-site/" "${BATS_TEST_TMPDIR}/home/other" "${BATS_TEST_TMPDIR}/homelftp"; do
+    _fnd15_accept "${v}" "${h}" || return 1
+  done
+}
+
+@test "validate_local_dir_outside_home: FND-0015: a degenerate HOME_DIR (empty, relative, '/', './', '//') fails closed with exit 2" {
+  export PWD=/github/workspace
+  for h in "" "home/lftp" "." "./" "/" "//" "/./"; do
+    run validate_local_dir_outside_home "local_dir" "/github/workspace/public/" "${h}"
+    if [ "${status}" -ne 2 ]; then
+      echo "home='${h}': expected status 2, got ${status}"; echo "${output}"
+      return 1
+    fi
+    case "${output}" in
+      "ERROR: internal: cannot check local_dir, home directory argument is empty, relative or \"/\""*) ;;
+      *) echo "home='${h}': unexpected message"; echo "${output}"; return 1 ;;
+    esac
+  done
+}
+
+@test "validate_local_dir_outside_home: FND-0015: a missing HOME_DIR argument also fails closed" {
+  run validate_local_dir_outside_home "local_dir" "/data/"
+  [ "${status}" -eq 2 ]
+  [[ "${output}" == *"internal: cannot check local_dir"* ]]
+}
+
+# FND-0015 round 2/3: the raw-value checks (backslash, leading "~", leading
+# lowercase "file:") run BEFORE the HOME_DIR check and before _canon_path, so
+# they fire even with a degenerate HOME_DIR. run_lftp_once double-quotes
+# local_dir (round 3), where "\" is lftp's escape character; lftp 4.9.3 also
+# expands a leading ~ and reads file: as a local URL after parsing, so the
+# canonical form of the raw string is not the path lftp opens. Reject helper
+# with a reason fragment.
+_fnd15_reject_why() {
+  # $1 = value, $2 = fragment the ERROR must contain, $3 = home dir (default /home/lftp)
+  run validate_local_dir_outside_home "local_dir" "$1" "${3-/home/lftp}"
+  if [ "${status}" -ne 2 ]; then
+    echo "case='$1' PWD='${PWD}': expected status 2, got ${status}"; echo "${output}"
+    return 1
+  fi
+  case "${output}" in
+    "ERROR: local_dir "*) ;;
+    *) echo "case='$1': ERROR does not start with 'ERROR: local_dir '"; echo "${output}"; return 1 ;;
+  esac
+  case "${output}" in
+    *"$2"*) ;;
+    *) echo "case='$1': ERROR lacks reason '$2'"; echo "${output}"; return 1 ;;
+  esac
+}
+
+@test "validate_local_dir_outside_home: FND-0015 r3: any backslash is rejected with the backslash reason" {
+  export PWD=/github/workspace
+  q="'"
+  bs='\'
+  for v in "/home/${bs}${q}lftp${bs}${q}/" "${bs}~/" "/home/l${bs}ftp/" "${bs}/" "/home/lftp${bs}/" \
+           "${bs}/home/lftp/" "/home/lftp/${bs}" "a${bs}${bs}b/" "${bs}"; do
+    _fnd15_reject_why "${v}" "contains a backslash" || return 1
+  done
+}
+
+@test "validate_local_dir_outside_home: FND-0015 r3: the backslash ERROR carries the raw value and names the escape character" {
+  export PWD=/github/workspace
+  run validate_local_dir_outside_home "local_dir" '/home/l\ftp/' "/home/lftp"
+  [ "${status}" -eq 2 ]
+  [[ "${output}" == 'ERROR: local_dir contains a backslash: /home/l\ftp/;'* ]]
+  [[ "${output}" == *"escape character"* ]]
+}
+
+@test "validate_local_dir_outside_home: FND-0015 r2: a leading ~ is rejected with the tilde reason" {
+  export PWD=/github/workspace
+  for v in '~' '~/' '~lftp/' '~root/' '~x/' '~/sub/' '~+/'; do
+    _fnd15_reject_why "${v}" 'starts with "~"' || return 1
+  done
+  run validate_local_dir_outside_home "local_dir" '~/' "/home/lftp"
+  [[ "${output}" == *"expands a leading ~"* ]] || { echo "${output}"; return 1; }
+  [[ "${output}" == *"holds the FTP credentials"* ]] || { echo "${output}"; return 1; }
+}
+
+@test "validate_local_dir_outside_home: FND-0015 r2: a leading lowercase file: is rejected with the file: reason" {
+  export PWD=/github/workspace
+  for v in 'file:/home/lftp/' 'file:///home/lftp/' 'file://localhost/home/lftp/' 'file:/' 'file:~/' \
+           'file:./' 'file:' 'file:.' 'file:home/lftp/' 'file:/data/'; do
+    _fnd15_reject_why "${v}" 'starts with "file:"' || return 1
+  done
+  run validate_local_dir_outside_home "local_dir" 'file:/home/lftp/' "/home/lftp"
+  [[ "${output}" == *"local file URL"* ]] || { echo "${output}"; return 1; }
+}
+
+@test "validate_local_dir_outside_home: FND-0015 r2: /home/lftp/~/ (mid-path ~) is rejected by the home check, not the tilde check" {
+  export PWD=/github/workspace
+  _fnd15_reject_why '/home/lftp/~/' "is or contains the action's home directory" || return 1
+  [[ "${output}" != *'starts with "~"'* ]]
+}
+
+@test "validate_local_dir_outside_home: FND-0015 r2: harmless lookalikes are accepted silently (PWD outside the home)" {
+  export PWD=/github/workspace
+  for v in 'a/~/b/' 'FILE:x/' 'FILE:/home/lftp/' 'File:/home/lftp/' \
+           '/hom?/lftp/' '/home/lft*/' '/home/l[f]tp/' 'a:b/' 'ftp:x/'; do
+    _fnd15_accept "${v}" /home/lftp || return 1
+  done
+}
+
+@test "validate_local_dir_outside_home: FND-0015 r2: File:/home/lftp/ resolves under PWD (lftp treats it as relative)" {
+  export PWD=/github/workspace
+  # Accepted: the home check sees /github/workspace/File:/home/lftp, outside the home.
+  _fnd15_accept 'File:/home/lftp/' /home/lftp || return 1
+  # The same spelling IS rejected when PWD is the home, proving it is resolved against PWD.
+  export PWD=/home/lftp
+  _fnd15_reject 'File:/home/lftp/' /home/lftp || return 1
+}
+
+@test "validate_local_dir_outside_home: FND-0015 r2: order, the raw-value checks run before the HOME_DIR check (degenerate HOME_DIR still gets the specific ERROR)" {
+  export PWD=/github/workspace
+  for h in "" "rel" "/"; do
+    _fnd15_reject_why '/home/l\ftp/' "contains a backslash" "${h}" || return 1
+    [[ "${output}" != *"internal: cannot check"* ]] || { echo "h='${h}': internal error shown"; echo "${output}"; return 1; }
+    _fnd15_reject_why '~/' 'starts with "~"' "${h}" || return 1
+    [[ "${output}" != *"internal: cannot check"* ]] || { echo "h='${h}': internal error shown"; echo "${output}"; return 1; }
+    _fnd15_reject_why 'file:/home/lftp/' 'starts with "file:"' "${h}" || return 1
+    [[ "${output}" != *"internal: cannot check"* ]] || { echo "h='${h}': internal error shown"; echo "${output}"; return 1; }
+  done
+  # A clean value with the same degenerate HOME_DIR still reaches the internal error.
+  run validate_local_dir_outside_home "local_dir" "/data/" ""
+  [ "${status}" -eq 2 ]
+  [[ "${output}" == *"internal: cannot check local_dir"* ]]
+}
+
+@test "_canon_path: FND-0015: collapses repeated slashes" {
+  run _canon_path "//home///lftp//sub"
+  [ "${status}" -eq 0 ]
+  [ "${output}" = "/home/lftp/sub" ]
+}
+
+@test "_canon_path: FND-0015: drops '.' components, including consecutive and trailing ones" {
+  run _canon_path "/home/./lftp/././sub/."
+  [ "${output}" = "/home/lftp/sub" ]
+  run _canon_path "/./home"
+  [ "${output}" = "/home" ]
+  run _canon_path "/home/."
+  [ "${output}" = "/home" ]
+}
+
+@test "_canon_path: FND-0015: strips the trailing slash but '/' stays '/'" {
+  run _canon_path "/home/lftp/"
+  [ "${output}" = "/home/lftp" ]
+  run _canon_path "/"
+  [ "${output}" = "/" ]
+  run _canon_path "//"
+  [ "${output}" = "/" ]
+  run _canon_path "/."
+  [ "${output}" = "/" ]
+}
+
+@test "_canon_path: FND-0015: keeps names that merely contain dots or start with them" {
+  run _canon_path "/a/.hidden/b.c/..x/"
+  [ "${output}" = "/a/.hidden/b.c/..x" ]
+}
+
+@test "_canon_path: FND-0015: resolves a relative value against PWD" {
+  export PWD=/github/workspace
+  run _canon_path "public/"
+  [ "${output}" = "/github/workspace/public" ]
+  run _canon_path "./"
+  [ "${output}" = "/github/workspace" ]
+  run _canon_path "."
+  [ "${output}" = "/github/workspace" ]
+  run _canon_path "./a/./b"
+  [ "${output}" = "/github/workspace/a/b" ]
+  export PWD=/
+  run _canon_path "./"
+  [ "${output}" = "/" ]
+  run _canon_path "x"
+  [ "${output}" = "/x" ]
 }
 
 # ----------------------------------------------------------------------------
@@ -790,5 +1067,275 @@ _bool_gate_case() {
     _bool_gate_case "${flags}" INPUT_CONCURRENCY_LOCK on
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"PAST_BOOL_GATE"* ]]
+  done
+}
+
+# ----------------------------------------------------------------------------
+# FND-0015: entrypoint-level checks of the local_dir home guard. The scratch
+# entrypoint has /home/lftp rewritten to BATS_TEST_TMPDIR/home/lftp, so the
+# guard is called with that path as HOME_DIR (the production call passes the
+# literal /home/lftp). The script runs with cwd BATS_TEST_TMPDIR/ws (outside
+# the rewritten home). Mode "reject" runs the real write_netrc, so a leaked
+# netrc would show up as a file; mode "accept" stubs write_netrc with a marker
+# and exit 0, which shows the script got past the gate. ENTRYPOINT_SRC and
+# LIB_SRC override the scripts under test (used to prove the tests fail on a
+# tree without the FND-0015 change).
+# ----------------------------------------------------------------------------
+
+_local_dir_gate_case() {
+  local mode="$1" val="$2"
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local src="${ENTRYPOINT_SRC:-${root}/entrypoint.sh}"
+  local lib="${LIB_SRC:-${root}/lib.sh}"
+  local app="${BATS_TEST_TMPDIR}/app"
+  local out
+  rm -rf "${BATS_TEST_TMPDIR}/home"
+  mkdir -p "${app}" "${BATS_TEST_TMPDIR}/home/lftp" "${BATS_TEST_TMPDIR}/ws"
+  cp "${lib}" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  if [ "${mode}" = "accept" ]; then
+    printf '\nwrite_netrc() { printf "PAST_LOCAL_DIR_GATE\\n"; exit 0; }\n' >> "${app}/lib.sh"
+  fi
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${BATS_TEST_TMPDIR}/home/lftp#g" \
+    "${src}" > "${app}/entrypoint.sh"
+  # Failing lftp and no-op sleep stubs, so a regression (guard missing) ends fast instead of
+  # trying to reach a server.
+  mkdir -p "${BATS_TEST_TMPDIR}/fakebin"
+  printf '#!/bin/sh\nexit 1\n' > "${BATS_TEST_TMPDIR}/fakebin/lftp"
+  printf '#!/bin/sh\nexit 0\n' > "${BATS_TEST_TMPDIR}/fakebin/sleep"
+  chmod +x "${BATS_TEST_TMPDIR}/fakebin/lftp" "${BATS_TEST_TMPDIR}/fakebin/sleep"
+  out=$(cd "${BATS_TEST_TMPDIR}/ws" && env PATH="${BATS_TEST_TMPDIR}/fakebin:${PATH}" HOME="${BATS_TEST_TMPDIR}/home" INPUT_SERVER="ftp.example.com" \
+    INPUT_USER="ftptest" INPUT_PASSWORD="pw" INPUT_REMOTE_DIR="./" INPUT_LOCAL_DIR="${val}" INPUT_MAX_RETRIES=1 \
+    bash "${app}/entrypoint.sh" 2>&1) && status=0 || status=$?
+  output="${out}"
+}
+
+@test "entrypoint: FND-0015: a local_dir that is, contains or lies inside the home exits 2 with the ERROR, before the .netrc is written" {
+  h="${BATS_TEST_TMPDIR}/home/lftp"
+  for v in "${h}" "${h}/" "${h}/sub" "${h}/.lftp-logs" "${BATS_TEST_TMPDIR}/home" /; do
+    _local_dir_gate_case reject "${v}"
+    echo "local_dir=${v} status=${status}"; echo "${output}"
+    [ "${status}" -eq 2 ] || return 1
+    [[ "${output}" == *"ERROR: local_dir '"* ]] || return 1
+    [[ "${output}" == *"holds the FTP credentials"* ]] || return 1
+    [ ! -e "${h}/.netrc" ] || { echo "netrc was written for local_dir=${v}"; return 1; }
+  done
+}
+
+@test "entrypoint: FND-0015: an accepted local_dir (workspace-relative, sibling of the home) gets past the gate to write_netrc" {
+  h="${BATS_TEST_TMPDIR}/home/lftp"
+  for v in ./ public/ "${h}x" "${h}-site/" "${BATS_TEST_TMPDIR}/site/" /data/; do
+    _local_dir_gate_case accept "${v}"
+    echo "local_dir=${v} status=${status}"; echo "${output}"
+    [ "${status}" -eq 0 ] || return 1
+    [[ "${output}" == *"PAST_LOCAL_DIR_GATE"* ]] || return 1
+    [[ "${output}" != *"holds the FTP credentials"* ]] || return 1
+  done
+}
+
+@test "entrypoint: FND-0015: validate_path still runs first, a '..' value gets its own ERROR, not the home-dir one" {
+  h="${BATS_TEST_TMPDIR}/home/lftp"
+  for v in "${h}/../lftp" "${h}/.." ../x ../../etc/; do
+    _local_dir_gate_case reject "${v}"
+    echo "local_dir=${v} status=${status}"; echo "${output}"
+    [ "${status}" -eq 2 ] || return 1
+    [[ "${output}" == *"local_dir contains \"..\" path traversal"* ]] || return 1
+    [[ "${output}" != *"holds the FTP credentials"* ]] || return 1
+    [ ! -e "${h}/.netrc" ] || return 1
+  done
+}
+
+@test "entrypoint: FND-0015: the home-dir check also runs before the netrc when the rejected value is the default './' and cwd is the home" {
+  h="${BATS_TEST_TMPDIR}/home/lftp"
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local app="${BATS_TEST_TMPDIR}/app"
+  mkdir -p "${app}" "${h}"
+  cp "${LIB_SRC:-${root}/lib.sh}" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${h}#g" "${ENTRYPOINT_SRC:-${root}/entrypoint.sh}" > "${app}/entrypoint.sh"
+  mkdir -p "${BATS_TEST_TMPDIR}/fakebin"
+  printf '#!/bin/sh\nexit 1\n' > "${BATS_TEST_TMPDIR}/fakebin/lftp"
+  printf '#!/bin/sh\nexit 0\n' > "${BATS_TEST_TMPDIR}/fakebin/sleep"
+  chmod +x "${BATS_TEST_TMPDIR}/fakebin/lftp" "${BATS_TEST_TMPDIR}/fakebin/sleep"
+  run bash -c 'cd "$1" && PATH="$4:$PATH" HOME="$2" INPUT_SERVER=ftp.example.com INPUT_USER=ftptest INPUT_PASSWORD=pw INPUT_LOCAL_DIR=./ INPUT_REMOTE_DIR=./ bash "$3" 2>&1' _ "${h}" "${BATS_TEST_TMPDIR}/home" "${app}/entrypoint.sh" "${BATS_TEST_TMPDIR}/fakebin"
+  echo "status=${status}"; echo "${output}"
+  [ "${status}" -eq 2 ]
+  [[ "${output}" == *"ERROR: local_dir './' (resolved to ${h})"* ]]
+  [ ! -e "${h}/.netrc" ]
+}
+
+# FND-0015 round 2, entrypoint level. The new classes exit 2 before the .netrc
+# is written; the older validate_path rejections still fire first (their own
+# ERROR, not the new ones).
+@test "entrypoint: FND-0015 r3: a backslash, leading-~ or file: local_dir exits 2 with its own ERROR, before the .netrc is written" {
+  h="${BATS_TEST_TMPDIR}/home/lftp"
+  for entry in '/home/l\ftp/|contains a backslash' '\/|contains a backslash' \
+               '~/|starts with "~"' '~|starts with "~"' \
+               'file:/home/lftp/|starts with "file:"' 'file:///home/lftp/|starts with "file:"'; do
+    v="${entry%%|*}"
+    frag="${entry#*|}"
+    _local_dir_gate_case reject "${v}"
+    echo "local_dir=${v} status=${status}"; echo "${output}"
+    [ "${status}" -eq 2 ] || return 1
+    [[ "${output}" == *"ERROR: local_dir ${frag}"* ]] || { echo "missing '${frag}'"; return 1; }
+    [[ "${output}" != *"Choose a directory under the workspace"* ]] || return 1
+    [ ! -e "${h}/.netrc" ] || { echo "netrc was written for local_dir=${v}"; return 1; }
+  done
+}
+
+@test "entrypoint: FND-0015 r2: harmless lookalikes (a/~/b/, FILE:x/, File:/home/lftp/) still get past the gate" {
+  for v in 'a/~/b/' 'FILE:x/' 'File:/home/lftp/'; do
+    _local_dir_gate_case accept "${v}"
+    echo "local_dir=${v} status=${status}"; echo "${output}"
+    [ "${status}" -eq 0 ] || return 1
+    [[ "${output}" == *"PAST_LOCAL_DIR_GATE"* ]] || return 1
+  done
+}
+
+@test "entrypoint: FND-0015 r2: validate_path rejections (double quote, dollar HOME forms, leading dash) still fire first with their own ERROR" {
+  h="${BATS_TEST_TMPDIR}/home/lftp"
+  for entry in '/home/"lftp"/|contains double-quote' '"/"|contains double-quote' \
+               '$HOME/|contains dollar' '${HOME}/|contains dollar' \
+               '-/|starts with a dash' '-rf|starts with a dash'; do
+    v="${entry%%|*}"
+    frag="${entry#*|}"
+    _local_dir_gate_case reject "${v}"
+    echo "local_dir=${v} status=${status}"; echo "${output}"
+    [ "${status}" -eq 2 ] || return 1
+    [[ "${output}" == *"ERROR: local_dir ${frag}"* ]] || { echo "missing '${frag}'"; return 1; }
+    [[ "${output}" != *"single quote"* ]] || return 1
+    [[ "${output}" != *"holds the FTP credentials"* ]] || return 1
+    [ ! -e "${h}/.netrc" ] || return 1
+  done
+}
+
+# ----------------------------------------------------------------------------
+# FND-0015 round 3: run_lftp_once passes local_dir inside lftp double quotes,
+# so the gate only needs the backslash, leading "~" and leading "file:" rules.
+# These tests capture the -e script with a fake `timeout` (the real lftp is
+# never started) and call the real run_lftp_once from lib.sh. Stubs use an
+# explicit bash shebang (/bin/sh is dash on CI).
+# ----------------------------------------------------------------------------
+
+# _fnd15_lftp_script LOCAL REMOTE : sets ${script} to the lftp -e argument.
+_fnd15_lftp_script() {
+  local fb="${BATS_TEST_TMPDIR}/fb15"
+  mkdir -p "${fb}"
+  printf '#!/bin/bash\nfor a in "$@"; do printf "%%s\\n" "$a"; done > "%s/argv"\nexit 0\n' "${BATS_TEST_TMPDIR}" > "${fb}/timeout"
+  chmod +x "${fb}/timeout"
+  rm -f "${BATS_TEST_TMPDIR}/argv"
+  PATH="${fb}:${PATH}" run_lftp_once "ftp://h" "set a b;" "mirror -R --verbose" "$1" "$2" \
+    "${BATS_TEST_TMPDIR}/lftp.log" 5s 1s "" >/dev/null 2>&1 || {
+    echo "run_lftp_once failed for local_dir='$1'"; return 1
+  }
+  script=$(grep -A1 -Fx -e '-e' "${BATS_TEST_TMPDIR}/argv" | tail -n 1)
+  [ -n "${script}" ] || { echo "no -e argument captured"; cat "${BATS_TEST_TMPDIR}/argv"; return 1; }
+}
+
+@test "run_lftp_once: FND-0015 r3: local_dir is double-quoted in the -e script, remote_dir is not (exact string)" {
+  _fnd15_lftp_script "site/" "./rem" || return 1
+  want='set a b; mirror -R --verbose "site/" ./rem; quit;'
+  [ "${script}" = "${want}" ] || { echo "got:  ${script}"; echo "want: ${want}"; return 1; }
+  _fnd15_lftp_script "/github/workspace/" "./" || return 1
+  want='set a b; mirror -R --verbose "/github/workspace/" ./; quit;'
+  [ "${script}" = "${want}" ] || { echo "got:  ${script}"; echo "want: ${want}"; return 1; }
+  _fnd15_lftp_script "./" "./" || return 1
+  want='set a b; mirror -R --verbose "./" ./; quit;'
+  [ "${script}" = "${want}" ] || { echo "got:  ${script}"; echo "want: ${want}"; return 1; }
+}
+
+@test "run_lftp_once: FND-0015 r3: '>' and '<' forms stay inside the quotes, never loose in the script" {
+  for v in '/home/lftp>x/' '/home/>x/' 'a>b/' 'a<b/'; do
+    _fnd15_lftp_script "${v}" "./" || return 1
+    want="set a b; mirror -R --verbose \"${v}\" ./; quit;"
+    [ "${script}" = "${want}" ] || { echo "v=${v}"; echo "got:  ${script}"; echo "want: ${want}"; return 1; }
+  done
+}
+
+@test "run_lftp_once: FND-0015 r3: single quotes and '#' are carried verbatim inside the double quotes" {
+  for v in "it's/" "/home/'lftp'/" "''/" '#x/' '/home/lftp#x/'; do
+    _fnd15_lftp_script "${v}" "./" || return 1
+    case "${script}" in
+      *" \"${v}\" ./; quit;") ;;
+      *) echo "v=${v}"; echo "got: ${script}"; return 1 ;;
+    esac
+  done
+}
+
+@test "run_lftp_once: FND-0015 r3: remote_dir stays unquoted (scope is local_dir only)" {
+  _fnd15_lftp_script "site/" "remote dir" || return 1
+  [ "${script}" = 'set a b; mirror -R --verbose "site/" remote dir; quit;' ] || { echo "${script}"; return 1; }
+}
+
+@test "validate_local_dir_outside_home: FND-0015 r3: forms that are literal inside the quotes are accepted" {
+  export PWD=/github/workspace
+  for v in "it's/" "/home/'lftp'/" "''/" "'/" 'a>b/' 'a<b/' '#x/' '/home/lftp#x/' \
+           '/home/lftp>x/' '/home/>x/'; do
+    _fnd15_accept "${v}" /home/lftp || return 1
+  done
+}
+
+@test "validate_local_dir_outside_home: FND-0015 r3: relative and /github/workspace paths are accepted" {
+  export PWD=/github/workspace
+  for v in site/ ./ /github/workspace/ /github/workspace/site/; do
+    _fnd15_accept "${v}" /home/lftp || return 1
+  done
+}
+
+@test "validate_local_dir_outside_home: FND-0015 r3: raw backslash forms exit 2 with the backslash ERROR naming local_dir" {
+  export PWD=/github/workspace
+  bs='\'
+  for v in '/home/l\ftp/' '\/' '\' 'a\"b' '\~/' 'fi\le:/x/' "/home/lftp/${bs}"; do
+    run validate_local_dir_outside_home "local_dir" "${v}" /home/lftp
+    if [ "${status}" -ne 2 ]; then echo "v=${v} status=${status}"; echo "${output}"; return 1; fi
+    case "${output}" in
+      "ERROR: local_dir contains a backslash: ${v};"*) ;;
+      *) echo "v=${v}: wrong ERROR"; echo "${output}"; return 1 ;;
+    esac
+  done
+}
+
+@test "validate_local_dir_outside_home: FND-0015 r3: still rejected, leading ~ / file: rules and the home check" {
+  export PWD=/github/workspace
+  for v in '~' '~/' '~lftp/' 'file:/home/lftp/' 'file:///home/lftp/' 'file:/' 'file:~/'; do
+    run validate_local_dir_outside_home "local_dir" "${v}" /home/lftp
+    if [ "${status}" -ne 2 ]; then echo "v=${v} status=${status}"; echo "${output}"; return 1; fi
+    case "${output}" in
+      "ERROR: local_dir starts with \"~\": ${v};"* | "ERROR: local_dir starts with \"file:\": ${v};"*) ;;
+      *) echo "v=${v}: wrong ERROR"; echo "${output}"; return 1 ;;
+    esac
+  done
+  for v in /home/lftp/ /; do
+    _fnd15_reject "${v}" /home/lftp || return 1
+  done
+}
+
+@test "entrypoint: FND-0015 r3: backslash forms exit 2 before the .netrc is written (validate_path fires first for a double quote)" {
+  h="${BATS_TEST_TMPDIR}/home/lftp"
+  for entry in '/home/l\ftp/|contains a backslash' '\/|contains a backslash' '\~/|contains a backslash' \
+               'fi\le:/x/|contains a backslash' 'a\"b|contains double-quote'; do
+    v="${entry%%|*}"
+    frag="${entry#*|}"
+    _local_dir_gate_case reject "${v}"
+    echo "local_dir=${v} status=${status}"; echo "${output}"
+    [ "${status}" -eq 2 ] || return 1
+    [[ "${output}" == *"ERROR: local_dir ${frag}"* ]] || { echo "missing '${frag}'"; return 1; }
+    [ ! -e "${h}/.netrc" ] || { echo "netrc was written for local_dir=${v}"; return 1; }
+  done
+}
+
+@test "entrypoint: FND-0015 r3: a trailing backslash is normalized to '\\/' and still exits 2 with the backslash ERROR" {
+  _local_dir_gate_case reject 'site\'
+  echo "status=${status}"; echo "${output}"
+  [ "${status}" -eq 2 ]
+  [[ "${output}" == *"ERROR: local_dir contains a backslash"* ]]
+}
+
+@test "entrypoint: FND-0015 r3: a>b/ and the other literal-in-quotes forms get past the gate" {
+  for v in 'a>b/' 'a<b/' "it's/" '#x/' "/home/'lftp'/" '/home/lftp>x/'; do
+    _local_dir_gate_case accept "${v}"
+    echo "local_dir=${v} status=${status}"; echo "${output}"
+    [ "${status}" -eq 0 ] || return 1
+    [[ "${output}" == *"PAST_LOCAL_DIR_GATE"* ]] || return 1
   done
 }
