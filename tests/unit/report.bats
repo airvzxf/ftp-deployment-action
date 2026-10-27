@@ -475,8 +475,8 @@ second-line-password"
 # /home/lftp rewritten into BATS_TEST_TMPDIR, and a fake lftp on PATH that
 # fails the way the real one does for a missing directory. It runs under
 # `bash -eu` (the shebang's -eu; bash because entrypoint.sh needs pipefail,
-# which dash lacks). tests/smoke.sh runs `sh ./entrypoint.sh`, which drops
-# -e, so the smoke harness cannot catch this bug.
+# which dash lacks). tests/smoke.sh used to run `sh ./entrypoint.sh`,
+# which dropped -e, so smoke could not catch this bug (fixed in FND-0098).
 
 _run_entrypoint_missing_local_dir() {
   local debug=$1

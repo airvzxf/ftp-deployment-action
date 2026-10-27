@@ -149,7 +149,9 @@ apply_tls_max_version() {
 #
 #   Calls validate_bool NAME VALUE first, so any value outside the
 #   canonical lftp set (RCE payload, typo, capitalised variant)
-#   exits 2 BEFORE the gate fires.
+#   exits 2 BEFORE the gate fires. Inside `$(...)` that exit ends
+#   only the subshell, so the caller must pass the status on:
+#   `X=$(normalize_bool ...) || exit 2` (entrypoint.sh, FND-0013).
 # ------------------------------------------------------------------------------
 normalize_bool() {
   _nb_name=$1
@@ -843,10 +845,12 @@ _lock_parse_sentinel_listing() {
 #   Validation is NOT done here. The caller must call
 #   `validate_path` on the result separately, in the main shell
 #   context (not inside a `$(...)` substitution) so that
-#   `validate_path`'s `exit 2` actually aborts the parent script.
-#   busybox ash does NOT propagate a subshell's `exit` through a
-#   `$(...)` substitution; the assignment itself succeeds and the
-#   parent script continues.
+#   `validate_path`'s `exit 2` ends the parent script directly.
+#   Inside `$(...)` the `exit` ends only the subshell. The
+#   assignment then takes the subshell's status (an assignment-only
+#   command takes the status of its last command substitution), so
+#   the parent stops only under `set -e` or an explicit `|| exit`.
+#   busybox ash, dash and bash behave the same here.
 # ------------------------------------------------------------------------------
 normalize_dir() {
   _nd_value=$1
