@@ -985,6 +985,19 @@ classify_permanent_error() {
 #   the alpine runtime and on every CI test runner; the same
 #   pattern is already idiomatic in tests/integration/lib/common.sh
 #   for synthetic-port generation.
+#
+#   The awk RNG is seeded per process (FND-0049). A bare `srand()`
+#   seeds from the time of day in whole seconds, so runners that
+#   failed together and retried in the same second all got the same
+#   jitter, which is what jitter is meant to prevent. The seed is now
+#   4 bytes from /dev/urandom (`od -An -N4 -tu4`, supported by
+#   busybox od), reduced modulo 2^31-1 so every awk (busybox, mawk,
+#   gawk) takes it without truncation. `$$` alone would not do: in a
+#   container the entrypoint is usually PID 1 and its children get
+#   the same small PIDs in every runner. If /dev/urandom cannot be
+#   read, the seed falls back to the time of day plus `$$`, spread by
+#   one MINSTD step (x 48271 mod 2^31-1) so neighbouring PIDs do not
+#   get neighbouring seeds. A failed read never aborts the retry path.
 # ------------------------------------------------------------------------------
 compute_backoff_seconds() {
   _cb_counter=$1
@@ -1001,7 +1014,11 @@ compute_backoff_seconds() {
     # _cb_delay+1 makes the divisor odd, which is what produces the
     # perfectly symmetric [-d/2, +d/2] range for every even delay
     # (verified by tests/unit/retry.bats). jitter in [-d/2, +d/2].
-    _cb_jitter=$(awk -v n="${_cb_delay}" 'BEGIN { srand(); printf "%d", int(rand() * (n + 1)) - int(n / 2) }')
+    _cb_seed=$(od -An -N4 -tu4 /dev/urandom 2> /dev/null | tr -d ' \t\n') || _cb_seed=''
+    case "${_cb_seed}" in
+      '' | *[!0-9]*) _cb_seed='' ;;
+    esac
+    _cb_jitter=$(awk -v n="${_cb_delay}" -v s="${_cb_seed}" -v p="$$" 'BEGIN { if (s == "") { srand(); s = ((srand() + p) * 48271) % 2147483647 } srand(s % 2147483647); printf "%d", int(rand() * (n + 1)) - int(n / 2) }')
     _cb_sleep=$(( _cb_delay + _cb_jitter ))
   else
     _cb_sleep="${_cb_delay}"
@@ -1611,7 +1628,10 @@ print_resolved_config() {
   echo "=== List local directory ==="
   _prc_local=$(_indirection INPUT_LOCAL_DIR)
   echo "${_prc_local}"
-  ls -lha "${_prc_local}"
+  # FND-0050: a missing or unreadable local_dir must not abort here
+  # (errexit) with the group open; the upload reports it as with
+  # debug=false.
+  ls -lha -- "${_prc_local}" || printf '(cannot list %s)\n' "${_prc_local}"
   echo ""
   echo "=== LFTP Settings ==="
   echo " FTP_SETTINGS      -> $(_indirection FTP_SETTINGS)"

@@ -1121,6 +1121,55 @@ else
   fail "S22 .dockerignore vs Dockerfile:${_s22}"
 fi
 
+# S23 — every file the Dockerfile COPYs into /app gets an explicit mode in
+#       a RUN chmod (FND-0038). COPY keeps the build context's mode, so a
+#       context made under umask 077 gives USER lftp an unreadable
+#       /app/lib.sh. Each COPY source <name> needs /app/<name> as an
+#       argument of a `chmod <octal mode>` in a RUN (continuations and
+#       `&&` handled). A COPY with --chmod, or any ADD, fails with a clear
+#       message (not accepted: the mode would not be visible to this
+#       check). DOCKERFILE overrides the file under test.
+_s23=""
+if [ ! -r "${_df}" ]; then
+  _s23=" setup(${_df} not readable)"
+else
+  if grep -qE '^[[:space:]]*(ADD|COPY[[:space:]]+--)' "${_df}"; then
+    _s23="${_s23} (Dockerfile uses ADD or COPY --flag such as --chmod; S23 cannot read the mode, extend S23)"
+  fi
+  _joined=$(sed -e ':a' -e '/\\$/{N;s/\\\n/ /;ba' -e '}' "${_df}")
+  _copy23=$(printf '%s\n' "${_joined}" \
+    | awk '$1 == "COPY" { for (i = 2; i < NF; i++) print $i }' | sort -u)
+  [ -n "${_copy23}" ] || _s23="${_s23} (no COPY sources found in ${_df})"
+  # "<mode> <path>" for each argument of each chmod in a RUN line.
+  _modes23=$(printf '%s\n' "${_joined}" | awk '
+    $1 == "RUN" {
+      state = 0
+      for (i = 2; i <= NF; i++) {
+        w = $i
+        if (w == "&&" || w == ";" || w == "||") { state = 0; continue }
+        if (state == 0) { if (w == "chmod") state = 1; continue }
+        if (state == 1) { mode = w; state = 2; continue }
+        print mode " " w
+      }
+    }')
+  for _f23 in ${_copy23}; do
+    _m23=$(printf '%s\n' "${_modes23}" | awk -v p="/app/${_f23}" '$2 == p { print $1 }')
+    if [ -z "${_m23}" ]; then
+      _s23="${_s23} (/app/${_f23} has no explicit chmod)"
+    else
+      for _x23 in ${_m23}; do
+        printf '%s\n' "${_x23}" | grep -qE '^[0-7][0-7][0-7][0-7]?$' \
+          || _s23="${_s23} (/app/${_f23} mode '${_x23}' is not octal)"
+      done
+    fi
+  done
+fi
+if [ -z "${_s23}" ]; then
+  pass "S23 every file COPYed into /app has an explicit octal chmod in a RUN"
+else
+  fail "S23 Dockerfile COPY vs chmod:${_s23}"
+fi
+
 if [ "${_failed}" -ne 0 ]; then
   printf '\nRESULT: FAIL\n'
   exit 1

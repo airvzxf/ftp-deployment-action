@@ -17,8 +17,11 @@ RUN apk add --no-cache \
 
 # VERSION comes from the repo: GitHub builds this file on the runner
 # without build args, and entrypoint.sh prints it on the first line.
+# COPY keeps each file's mode from the build context, so set every mode
+# here: USER lftp (below) must be able to read lib.sh, which
+# entrypoint.sh sources, even if the context was made under umask 077.
 COPY entrypoint.sh lib.sh openssl-tls12.cnf VERSION /app/
-RUN chmod 0644 /app/VERSION /app/openssl-tls12.cnf \
+RUN chmod 0644 /app/VERSION /app/openssl-tls12.cnf /app/lib.sh \
  && chmod 0755 /app/entrypoint.sh
 
 # B-03 / B-14: the script writes the .netrc file at $HOME/.netrc, so

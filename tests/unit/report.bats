@@ -420,6 +420,108 @@ second-line-password"
   [[ "$output" == *"::endgroup::"* ]]
 }
 
+# FND-0050: with debug=true the listing of a missing or unreadable local_dir
+# must not abort the script (errexit) inside the open "Resolved configuration"
+# group. bats `run` disables errexit for the function, so these tests run it in
+# a child shell with `set -e`. The function is POSIX sh, so dash is enough.
+
+@test "print_resolved_config: FND-0050 a missing local_dir does not abort under set -e and closes the group" {
+  missing="${BATS_TEST_TMPDIR}/no-such-dir/"
+  run env LIB="${LIB}" INPUT_LOCAL_DIR="${missing}" INPUT_REMOTE_DIR="/" \
+    sh -ec '. "$LIB"; print_resolved_config; echo AFTER-RC=$?'
+
+  echo "status=${status}"; echo "${output}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"(cannot list ${missing})"* ]]
+  [[ "$output" == *"=== LFTP Settings ==="* ]]
+  # The group is closed after the message, and the caller carries on.
+  after="${output#*"(cannot list ${missing})"}"
+  [[ "$after" == *"::endgroup::"* ]]
+  [[ "$output" == *"AFTER-RC=0"* ]]
+}
+
+@test "print_resolved_config: FND-0050 an existing local_dir still prints the listing under set -e" {
+  dir="${BATS_TEST_TMPDIR}/site"
+  mkdir -p "${dir}"
+  : > "${dir}/index.html"
+  run env LIB="${LIB}" INPUT_LOCAL_DIR="${dir}/" INPUT_REMOTE_DIR="/" \
+    sh -ec '. "$LIB"; print_resolved_config'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"index.html"* ]]
+  [[ "$output" != *"(cannot list"* ]]
+  [[ "$output" == *"::endgroup::"* ]]
+}
+
+@test "print_resolved_config: FND-0050 an unreadable local_dir does not abort under set -e" {
+  if [ "$(id -u)" -eq 0 ]; then
+    skip "root bypasses directory permissions"
+  fi
+  dir="${BATS_TEST_TMPDIR}/locked"
+  mkdir -p "${dir}"
+  chmod 000 "${dir}"
+  run env LIB="${LIB}" INPUT_LOCAL_DIR="${dir}/" INPUT_REMOTE_DIR="/" \
+    sh -ec '. "$LIB"; print_resolved_config'
+  chmod 755 "${dir}"
+
+  echo "status=${status}"; echo "${output}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"(cannot list ${dir}/)"* ]]
+  [[ "$output" == *"::endgroup::"* ]]
+}
+
+# Entrypoint level. entrypoint.sh only runs inside the image, so (as in
+# lock.bats and validate.bats) the test runs a scratch copy with /app and
+# /home/lftp rewritten into BATS_TEST_TMPDIR, and a fake lftp on PATH that
+# fails the way the real one does for a missing directory. It runs under
+# `bash -eu` (the shebang's -eu; bash because entrypoint.sh needs pipefail,
+# which dash lacks). tests/smoke.sh runs `sh ./entrypoint.sh`, which drops
+# -e, so the smoke harness cannot catch this bug.
+
+_run_entrypoint_missing_local_dir() {
+  local debug=$1
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local app="${BATS_TEST_TMPDIR}/app"
+  mkdir -p "${app}" "${BATS_TEST_TMPDIR}/home/lftp" "${BATS_TEST_TMPDIR}/bin"
+  cp "${root}/lib.sh" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${BATS_TEST_TMPDIR}/home/lftp#g" \
+    "${root}/entrypoint.sh" > "${app}/entrypoint.sh"
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/sh
+echo "mirror: Access failed: ${FAKE_MISSING_DIR}: No such file or directory"
+exit 1
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/lftp"
+  FAKE_MISSING_DIR="${BATS_TEST_TMPDIR}/nope/" \
+  PATH="${BATS_TEST_TMPDIR}/bin:${PATH}" HOME="${BATS_TEST_TMPDIR}/home/lftp" \
+  INPUT_SERVER="ftp://example.test" INPUT_USER="ftptest" INPUT_PASSWORD="pw" \
+  INPUT_LOCAL_DIR="${BATS_TEST_TMPDIR}/nope/" INPUT_REMOTE_DIR="./" \
+  INPUT_MAX_RETRIES="1" INPUT_DEBUG="${debug}" \
+    run bash -eu "${app}/entrypoint.sh"
+}
+
+@test "entrypoint: FND-0050 debug=true with a missing local_dir reaches the lftp failure path like debug=false" {
+  _run_entrypoint_missing_local_dir false
+  false_status=$status
+  false_output=$output
+  [ "$false_status" -eq 1 ]
+  [[ "$false_output" == *"Access failed"* ]]
+
+  _run_entrypoint_missing_local_dir true
+  echo "status=${status}"; echo "${output}"
+  [ "$status" -eq "$false_status" ]
+  [[ "$output" == *"::group::Resolved configuration"* ]]
+  [[ "$output" == *"(cannot list ${BATS_TEST_TMPDIR}/nope/)"* ]]
+  # The Resolved configuration group closes before the Upload group opens.
+  before_upload="${output%%::group::Upload*}"
+  seg="${before_upload##*::group::Resolved configuration}"
+  [[ "$seg" == *"::endgroup::"* ]]
+  # The lftp failure path ran: the lftp error and the failure banner.
+  [[ "$output" == *"Access failed"* ]]
+  [[ "$output" == *"ERROR: UPLOAD FAILED"* ]]
+}
+
 # ----------------------------------------------------------------------------
 # print_success_banner
 # ----------------------------------------------------------------------------
