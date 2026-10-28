@@ -3,16 +3,18 @@
 # tests/integration/Dockerfile.test-server
 #
 # Pre-baked FTPS test server image for the scenarios in
-# tests/integration/scenarios/ (specifically 03-ftps-explicit-upload
-# and 04-ftps-implicit-upload, which source
-# tests/integration/lib/self-signed-cert.sh).
+# tests/integration/scenarios/: the FTPS server of every scenario that
+# calls start_ftps_server (tests/integration/lib/self-signed-cert.sh),
+# and the source of the nc that wait_for_port (called by
+# start_ftp_server, so every plain-FTP scenario) runs and of the lftp
+# that lftp_run_script runs (lib/common.sh; scenarios 01, 02, 05).
 #
 # Build with:
 #   make build-test-server-image TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
 #
 # Why this image exists (closes #135):
-#   The original start_ftps_server booted `alpine:3.23.3 -c 'apk add
-#   --no-cache vsftpd && ...'` on every scenario run. The `apk add`
+#   The original start_ftps_server booted a bare alpine image with
+#   `-c 'apk add --no-cache vsftpd && ...'` on every scenario run. The `apk add`
 #   step downloads the alpine package index from the network, which
 #   made scenario 03 and 04 flaky in CI (ubuntu-latest, GitHub
 #   Actions):
@@ -26,18 +28,20 @@
 #   an already-pulled image, which takes <1s to start and never races
 #   the apk index.
 #
-# Base image: alpine:3.24, digest-pinned to the same value the action
-# Dockerfile uses (Dockerfile:1). Aligned to 3.24 (not the 3.23 the
-# inline `apk add` originally targeted) because:
-#   * the action image is already on 3.24; building both off the
-#     same digest means CI rebuilds only one base and the local
-#     dev / CI parity check is trivial (same digest == same
-#     contents, by definition).
-#   * keeping the test server on 3.23 would have made any future
-#     3.24-vs-3.23 libssl/glibc-compat diff impossible to debug
-#     (which side diverged?). Pin both to 3.24 and the question
-#     goes away.
-# Bump this tag and digest in lockstep with Dockerfile:1.
+# Base image: the same alpine tag and digest as the action Dockerfile
+# (its FROM line), aligned to that image rather than to whatever
+# release the original inline `apk add` happened to use, because:
+#   * building both off the same digest means CI rebuilds only one
+#     base and the local dev / CI parity check is trivial (same
+#     digest == same contents, by definition).
+#   * a test server on a different Alpine release than the action
+#     image would make any libssl/glibc-compat diff between the two
+#     impossible to debug (which side diverged?). Pin both to the
+#     same release and the question goes away.
+# Bump this tag and digest in lockstep with the action Dockerfile's
+# FROM line: Dependabot does it in one grouped PR (.github/
+# dependabot.yml, group dockerfile-base), and tests/acceptance/
+# static.sh S13 fails if the FROM lines drift apart.
 #
 # Packages installed at build time (pinned by version, not by
 # Alpine revision, same rule as the action Dockerfile):
@@ -53,7 +57,7 @@
 #                surface.
 #   * lftp + ca-certificates (v2.11.3 / #136) — the lftp client
 #                used by lftp_run_script (tests/integration/lib/
-#                common.sh:286). Pre-baking them eliminates the
+#                common.sh). Pre-baking them eliminates the
 #                apk-index race the inline `apk add --no-cache lftp`
 #                inside every integration container was hitting
 #                (same class as #135 for the FTPS server, same class

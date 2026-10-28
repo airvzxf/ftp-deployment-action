@@ -34,8 +34,8 @@
 #     needed on rootless runtimes).
 #
 #     Why a pre-baked image (vs the original inline `apk add`):
-#     the original start_ftps_server booted `alpine:3.23.3 -c 'apk
-#     add --no-cache vsftpd openssl && ...'` on every scenario run.
+#     the original start_ftps_server booted a bare alpine image with
+#     `-c 'apk add --no-cache vsftpd openssl && ...'` on every scenario run.
 #     The `apk add` step downloads the alpine package index from the
 #     network, which made scenarios 03 / 04 flaky in CI (#135):
 #       * apk index download took 1-15s and occasionally exceeded
@@ -78,9 +78,10 @@
 # Pre-baked FTPS test server image. Built by `make
 # build-test-server-image` from tests/integration/Dockerfile.test-
 # server; CI / the Makefile pass the matching tag. The image has
-# vsftpd pre-installed and /var/log/vsftpd, /etc/pam.d/
-# vsftpd_virtual, /home/vsftpd pre-created so the per-scenario
-# `docker run` does not need network access to an apk index.
+# vsftpd pre-installed and /var/log/vsftpd and /etc/pam.d/
+# vsftpd_virtual pre-created so the per-scenario `docker run` does
+# not need network access to an apk index. (/home/vsftpd is not in the
+# image: it is the per-scenario bind mount.)
 # Overridable for developers who build the image under a different
 # tag; the default matches the suffix the Makefile and the CI
 # workflow use (`-ci-integration`).
@@ -315,9 +316,10 @@ _write_ftps_vsftpd_conf() {
 #   scenarios actually ran in CI (#120, PR #130). A plain alpine
 #   base avoids the wrapper entirely and runs identically on podman
 #   local and docker CI. The pre-baked Dockerfile keeps us off the
-#   fauria wrapper for the same reason. The base is digest-pinned
-#   alpine 3.24, the same digest the action Dockerfile uses; bump
-#   them in lockstep.
+#   fauria wrapper for the same reason. The base is digest-pinned to
+#   the same tag and digest as the action Dockerfile's FROM line (the
+#   base image's Alpine release); they are bumped in lockstep (see the
+#   comment above FROM in Dockerfile.test-server).
 #
 #   Why --network host: with it, vsftpd inside the container binds
 #   directly on the host ports we want to expose (2121 / 2122),
@@ -430,7 +432,7 @@ start_ftps_server() {
   # mix so ${_sfs_user} and ${_sfs_pass} are expanded by the OUTER
   # shell (the harness) and not by the container's /bin/sh.
   #
-  # alpine's vsftpd 3.0.5-r3 names its TLS version gates without
+  # alpine's vsftpd 3.0.5 package names its TLS version gates without
   # the underscore before the version digit: ssl_tlsv11 / ssl_tlsv12
   # instead of the upstream ssl_tlsv1_1 / ssl_tlsv1_2 used by the
   # _write_ftps_vsftpd_conf helper (which targets the upstream

@@ -1,7 +1,11 @@
 # Makefile — ftp-deployment-action developer shortcuts.
 #
-# Some targets skip (exit 0) if the underlying tool is not installed;
-# others (shellcheck, actionlint, hadolint) exit 1. The Makefile is
+# Missing tools are handled per target. unit (bats), smoke and
+# integration (docker/podman) skip with exit 0; shellcheck, actionlint
+# and hadolint exit 1; build, build-test-server-image, run (docker),
+# release-smoke (docker or podman) and acceptance (bats) fail when
+# their tool is absent, while clean and build-smoke-image exit 0 without a
+# runtime. The Makefile is
 # the source of truth for the shellcheck file list and flags and for
 # the smoke / integration invocations, which .github/workflows/ci.yml
 # calls (`make shellcheck`, `make smoke`, `make integration`); other
@@ -10,9 +14,20 @@
 
 SHELL := /bin/sh
 
-# Use bash where available, fall back to sh. We do not use /bin/bash
-# directly because alpine containers (where the action runs) ship
-# only busybox ash.
+# Use bash where available, fall back to sh. These recipes run on the
+# host, not in the action image. So `make contract`, `make smoke`,
+# `make acceptance`, `make integration` and `make release-smoke` run
+# their #!/bin/sh harness scripts (tests/contract.sh, tests/smoke.sh,
+# tests/acceptance/static.sh, tests/integration/run-integration-tests.sh,
+# tests/release-smoke.sh) under bash (where bash is installed), locally and in the CI jobs that
+# go through make (ci.yml `make smoke`, `make integration`). Through
+# make, none of them is run under dash or busybox ash. tests/smoke.sh and
+# tests/integration/run-integration-tests.sh are only ever run this
+# way. On ubuntu-latest, where /bin/sh is dash, three of them are run
+# directly: tests/contract.sh (ci.yml contract job, by its shebang),
+# tests/acceptance/static.sh (ci.yml acceptance job, `sh`) and
+# tests/release-smoke.sh (release.yml, by its shebang). shellcheck
+# checks all of them as sh (`make shellcheck`).
 SH := $(shell command -v bash 2>/dev/null || echo sh)
 
 # Repository root (parent of this file).
@@ -21,7 +36,12 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 PYTHON           ?= python3
 IMAGE            ?= ftp-deployment-action:local
 # Pre-baked FTPS test server image (tests/integration/Dockerfile.test-
-# server). Used by scenarios 03 / 04 in tests/integration/scenarios/.
+# server). It is the FTPS server of the scenarios that call
+# start_ftps_server; it also supplies nc for wait_for_port (called by
+# start_ftp_server, so every plain-FTP scenario) and lftp for
+# lftp_run_script (the variant B scenarios 01, 02, 05); see
+# tests/integration/lib/. run-integration-tests.sh exits 2 if it is
+# missing.
 # Closed #135: the previous inline `apk add vsftpd openssl` on every
 # scenario start raced the apk index download against the 20s
 # wait_for_port deadline in CI; the pre-baked image eliminates that
@@ -29,13 +49,13 @@ IMAGE            ?= ftp-deployment-action:local
 TEST_SERVER_IMAGE ?= ftp-deployment-action-test-server:ci-integration
 
 # Pre-baked smoke-test image (tests/Dockerfile.smoke). Used by
-# tests/smoke.sh (45 invocations across the suite). Closed #137:
+# tests/smoke.sh (every run_init call in the suite). Closed #137:
 # the previous inline `apk add --no-cache lftp ca-certificates` on
 # every smoke container raced the apk index download and silently
 # masked apk failures behind `>/dev/null 2>&1`. The pre-baked image
 # is built once via `make build-smoke-image` and pinned to the
-# same alpine digest + lftp version as the production image
-# (Dockerfile:18-21), so the smoke suite exercises the same
+# same alpine digest + lftp version as the production image (the
+# FROM line and the lftp pin in the Dockerfile), so the smoke suite exercises the same
 # runtime the user gets.
 SMOKE_IMAGE ?= ftp-deployment-action-smoke:local
 
@@ -73,8 +93,12 @@ export TEST_SERVER_IMAGE
 export SMOKE_IMAGE
 
 # ----------------------------------------------------------------------------
-# Lint: shellcheck on all .sh files, actionlint on action.yml, hadolint
-# on every Dockerfile in the repo. actionlint is installed from
+# Lint: shellcheck on the .sh files listed in the recipe, actionlint on
+# the workflows (the recipe passes no file arguments, so it lints
+# .github/workflows; action.yml is not a workflow and is checked by
+# tests/contract.sh instead), hadolint on every Dockerfile in the repo
+# (the action image, the test server and the smoke image). actionlint
+# is installed from
 # upstream's release tarball to avoid pulling the full Go toolchain.
 # v2.11.9 (#228): tests/release-smoke.sh is included so the
 # post-build smoke check (run between image build and SBOM attach
@@ -97,10 +121,12 @@ shellcheck:
 	shellcheck -x tests/integration/scenarios/*.sh
 	# v2.11.13 (#317): include the FTPS-cert helper and the
 	# tag-verifier script in the lint sweep. verify-tag.sh is clean;
-	# self-signed-cert.sh has three known SC2016 false positives
-	# (lines 225-226 are vsftpd config lines whose $$USER / $$USER
-	# literals are consumed by vsftpd's *own* template expansion at
-	# runtime, not by the outer shell; line 470 uses the
+	# self-signed-cert.sh has known SC2016 false positives
+	# (the user_sub_token and local_root printf lines in
+	# _write_ftps_vsftpd_conf write $$USER literals that are consumed by
+	# vsftpd's *own* template expansion at
+	# runtime, not by the outer shell; the docker -c body in
+	# start_ftps_server (adduser, chpasswd, chmod) uses the
 	# `'"$${var}"'` close-quote / open-double-quote trick to smuggle
 	# outer-shell expansions into a `-c '...'` docker body, and
 	# shellcheck parses the in-line `"$${var}"` segment as outer
@@ -132,10 +158,12 @@ hadolint:
 	hadolint --failure-threshold error tests/Dockerfile.smoke
 
 # ----------------------------------------------------------------------------
-# Test: the contract test (action.yml <-> entrypoint.sh/lib.sh consistency)
-# and the smoke tests (entrypoint.sh run inside an Alpine container). The
-# smoke tests require docker or podman; if neither is available they
-# skip with a notice, mirroring the smoke.sh behaviour.
+# Test (`make test` = contract unit smoke): the contract test
+# (action.yml <-> entrypoint.sh/lib.sh consistency), the bats unit tests
+# (skipped if bats is not installed) and the smoke tests (entrypoint.sh
+# run inside an Alpine container). The smoke tests require docker or
+# podman; if neither is available they skip with a notice, mirroring the
+# smoke.sh behaviour.
 # ----------------------------------------------------------------------------
 .PHONY: test
 # v2.11.13 (#315): make smoke depends on a pre-baked SMOKE_IMAGE
@@ -192,23 +220,11 @@ build:
 
 # ----------------------------------------------------------------------------
 # build-test-server-image: build the pre-baked FTPS test server image
-# (tests/integration/Dockerfile.test-server) used by scenarios 03 and
-# 04. CI builds this before `make integration`; local developers can
-# run it standalone with `make build-test-server-image
-# TEST_SERVER_IMAGE=ftpint-test-server:local`. The Makefile variable
-# TEST_SERVER_IMAGE defaults to `ftp-deployment-action-test-server:
-# ci-integration`, matching the tag the CI workflow uses, so the
-# Makefile target is in lockstep with `make integration` without
-# needing a separate flag.
-#
-# `tests/integration` is the build context (not the repo root) so
-# only the Dockerfile.test-server and its adjacent files are sent to
-# the docker daemon — the rest of the repo (action source, fixtures,
-# etc.) is never visible to the build.
-# ----------------------------------------------------------------------------
-# build-test-server-image: build the pre-baked FTPS test server image
-# (tests/integration/Dockerfile.test-server) used by scenarios 03 and
-# 04. CI builds this before `make integration`; local developers can
+# (tests/integration/Dockerfile.test-server). It is the FTPS server of
+# the scenarios that call start_ftps_server; it also supplies nc for
+# wait_for_port (every start_ftp_server scenario) and lftp for
+# lftp_run_script (scenarios 01, 02, 05). CI builds this before `make
+# integration`; local developers can
 # run it standalone with `make build-test-server-image
 # TEST_SERVER_IMAGE=ftpint-test-server:local`. The Makefile variable
 # TEST_SERVER_IMAGE defaults to `ftp-deployment-action-test-server:
@@ -222,15 +238,16 @@ build:
 # etc.) is never visible to the build.
 #
 # v2.11.3 (#156): Dockerfile.test-server pins `# syntax=docker/
-# dockerfile:1.4` and uses a heredoc (`<<'EOF'`) for the pam.d
-# vsftpd_virtual config. Plain `docker build` defaults to the legacy
-# builder on Docker < 23.0 and rejects both, with a confusing parse
-# error pointing at the heredoc line. CI happens to work today only
-# because the GH Actions `ubuntu-latest` runner ships Docker 23+
-# (BuildKit default builder). Switch to `docker buildx build` to
-# match the canonical path used in `.github/workflows/release.yml`
-# (`docker/setup-buildx-action@v4.3.0`) and make the BuildKit
-# requirement load-bearing rather than incidental.
+# dockerfile:1.4` (still does) and used a heredoc (`<<'EOF'`) for the
+# pam.d vsftpd_virtual config (the file now writes it with printf).
+# Plain `docker build` defaulted to the legacy builder on Docker < 23.0
+# and rejected both, with a confusing parse error pointing at the
+# heredoc line. CI had worked only because the GH Actions
+# `ubuntu-latest` runner ships Docker 23+ (BuildKit default builder).
+# The target therefore uses `docker buildx build`, to match the
+# canonical path used in `.github/workflows/release.yml` (its
+# docker/setup-buildx-action step; the pin lives there) and make the
+# BuildKit requirement load-bearing rather than incidental.
 # ----------------------------------------------------------------------------
 .PHONY: build-test-server-image
 build-test-server-image:
@@ -275,10 +292,14 @@ build-smoke-image:
 # IMAGE=ftp-deployment-action:ci-integration and builds it with `make build
 # IMAGE=ftp-deployment-action:ci-integration` first.
 #
-# TEST_SERVER_IMAGE is the pre-baked FTPS test server image used by
-# scenarios 03 / 04 (closes #135). CI builds it with `make build-test-
-# server-image` before invoking this target. The default tag matches
-# what CI uses; override for local development with a different name.
+# TEST_SERVER_IMAGE is the pre-baked FTPS test server image (closes
+# #135): the FTPS server of the start_ftps_server scenarios; it also
+# supplies nc for wait_for_port (every start_ftp_server scenario) and
+# lftp for lftp_run_script (scenarios 01, 02, 05).
+# run-integration-tests.sh exits 2 if it is missing.
+# CI builds it with `make build-test-server-image` before invoking this
+# target. The default tag matches what CI uses; override for local
+# development with a different name.
 #
 # Skips (exit 0) if no docker/podman is on PATH, mirroring tests/smoke.sh.
 # ----------------------------------------------------------------------------

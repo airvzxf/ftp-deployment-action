@@ -138,15 +138,12 @@ wait_for_port() {
   _wfp_deadline=$((_wfp_timeout * 2))
   _wfp_i=0
   while [ "${_wfp_i}" -lt "${_wfp_deadline}" ]; do
-    # Use the runtime's built-in port-check; `docker run --rm -i
-    # alpine` is reliable and the alpine image is already cached.
-    # v2.11.3 (#136): use the same TEST_SERVER_IMAGE (which now
-    # also has the lftp client pre-installed — the 3.23.3 vs 3.24
-    # alpine drift is gone since #135 pinned the FTPS image to
-    # 3.24, but the smoke / wait_for_port path was left on 3.23.3
-    # and re-introduces a fork: the FTPS server image is on 3.24
-    # while the port-check helper is on 3.23.3. Use the
-    # pre-baked image's nc binary to close the drift).
+    # Port check: run `nc -z` in a throwaway container of the
+    # pre-baked test server image (--network host), which is already
+    # local. History, v2.11.3 (#136): the check used to run in a
+    # separate alpine image (an older Alpine release than
+    # the FTPS server image, which forked the two). Using the
+    # pre-baked image's nc binary closed that drift.
     if ${RUNTIME} run --rm --network host "${FTP_TEST_SERVER_IMAGE:-${TEST_SERVER_IMAGE:-ftp-deployment-action-test-server:ci-integration}}" \
         nc -z "${_wfp_host}" "${_wfp_port}" >/dev/null 2>&1; then
       return 0
@@ -213,9 +210,9 @@ start_ftp_server() {
   _sfs_data_dir=$3
 
   # v2.11.11 (#166): see the matching guard in self-signed-cert.sh
-  # ::start_ftps_server for the rationale. The plain-FTP scenarios
-  # (01, 02, 05, 07, 08, 09, 10, 11, 12) reuse this helper, so the
-  # same defensive check belongs here. Defaults (2121, 31100, 31110)
+  # ::start_ftps_server for the rationale. Every plain-FTP scenario
+  # (all those that do not call start_ftps_server) uses this helper, so
+  # the same defensive check belongs here. Defaults (2121, 31100, 31110)
   # pass; only a misconfigured harness (or a future operator who
   # loads FTP_* from a config file with shell metacharacters) trips.
   case "${FTP_CONTROL_PORT}"   in ''|*[!0-9]*) log_fail "FTP_CONTROL_PORT is not numeric: ${FTP_CONTROL_PORT}"   ;; esac

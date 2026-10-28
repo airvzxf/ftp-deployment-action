@@ -938,10 +938,64 @@ default'
   [ -z "${OPENSSL_CONF+set}" ]
 }
 
+# FND-0072: the cap only works if OpenSSL can follow the whole chain
+# openssl_conf -> [X] ssl_conf -> [Y] system_default -> [Z] MaxProtocol.
+# _tls12_cnf_get FILE SECTION KEY prints the value of KEY in SECTION and
+# fails (exit 3: no such section, exit 4: no such key) otherwise. Lines
+# before the first header belong to section "default", as in OpenSSL.
+# Rules: "#" starts a comment, CR (CRLF files, which OpenSSL accepts)
+# counts as whitespace, whitespace around "=" and inside "[ ]" is
+# ignored, a later duplicate key wins. OpenSSL's real parser (conf_def.c)
+# also strips quotes, honours "\" escapes, expands $var and accepts
+# "section::key"; this file uses none of that, so the simple parser keeps
+# the same meaning for it. It also does not check that OpenSSL would
+# accept the file at all (a line without `=`, an unclosed `[`, `\`
+# continuation, `.include`); integration scenario 30 is the end-to-end
+# guard. TLS12_CNF overrides the file under test (used to prove the test
+# fails on a broken chain).
+_tls12_cnf_get() {
+  awk -v want_sec="$2" -v want_key="$3" '
+    BEGIN { sec = "default"; seen = (want_sec == "default"); found = 0 }
+    {
+      sub(/#.*/, "")
+      sub(/^[ \t\r]+/, ""); sub(/[ \t\r]+$/, "")
+    }
+    $0 == "" { next }
+    /^\[/ {
+      s = $0
+      sub(/^\[[ \t]*/, "", s); sub(/[ \t]*\].*$/, "", s)
+      sec = s
+      if (sec == want_sec) seen = 1
+      next
+    }
+    sec == want_sec {
+      i = index($0, "=")
+      if (i == 0) next
+      k = substr($0, 1, i - 1); v = substr($0, i + 1)
+      sub(/[ \t]+$/, "", k); sub(/^[ \t]+/, "", v)
+      if (k == want_key) { val = v; found = 1 }
+    }
+    END {
+      if (!seen) { print "tls12.cnf: no section [" want_sec "]" > "/dev/stderr"; exit 3 }
+      if (!found) { print "tls12.cnf: no key " want_key " in [" want_sec "]" > "/dev/stderr"; exit 4 }
+      print val
+    }
+  ' "$1"
+}
+
 @test "openssl-tls12.cnf caps the protocol at TLS 1.2" {
-  _cnf="${BATS_TEST_DIRNAME}/../../openssl-tls12.cnf"
+  _cnf="${TLS12_CNF:-${BATS_TEST_DIRNAME}/../../openssl-tls12.cnf}"
   [ -f "${_cnf}" ]
-  grep -qx 'MaxProtocol = TLSv1.2' "${_cnf}"
+  # Follow the names instead of hard-coding them: a renamed but
+  # consistent chain passes, a broken link fails.
+  _init="$(_tls12_cnf_get "${_cnf}" default openssl_conf)"
+  [ -n "${_init}" ]
+  _ssl="$(_tls12_cnf_get "${_cnf}" "${_init}" ssl_conf)"
+  [ -n "${_ssl}" ]
+  _sys="$(_tls12_cnf_get "${_cnf}" "${_ssl}" system_default)"
+  [ -n "${_sys}" ]
+  _max="$(_tls12_cnf_get "${_cnf}" "${_sys}" MaxProtocol)"
+  [ "${_max}" = "TLSv1.2" ]
 }
 
 # ----------------------------------------------------------------------------

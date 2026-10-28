@@ -567,18 +567,47 @@ FAKE
   [[ "$output" == *"Check credentials"* ]]
 }
 
-@test "print_failure_banner: documents the timeout exit code 124" {
-  run print_failure_banner "124" "" "/tmp/log" "5h" "30s"
+@test "print_failure_banner: lists the generic lftp exit code 1, aligned with the others" {
+  run print_failure_banner "1" "" "/tmp/log" "5h" "30s"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"124  timeout reached"* ]]
-  [[ "$output" == *"max wall-clock 5h"* ]]
+  [[ "$output" == *"  1    lftp generic error"* ]]
+}
+
+# FND-0051: the image runs busybox timeout, which leaves 128+signal
+# (measured in the image: 143 on expiry, 137 after -k), never GNU's 124.
+@test "print_failure_banner: documents the timeout exit code 143 (busybox timeout, SIGTERM)" {
+  run print_failure_banner "143" "" "/tmp/log" "5h" "30s"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Last lftp exit code: 143"* ]]
+  [[ "$output" == *"143  timeout reached (SIGTERM at max wall-clock 5h)"* ]]
+  [[ "$output" != *"124"* ]]
+}
+
+# FND-0051: lftp 4.9.3 never exits 4 on its own (mirror returns 0/1,
+# lftp.cc errors exit(1)), so the banner does not list it.
+@test "print_failure_banner: does not list an unsourced exit code 4" {
+  run print_failure_banner "1" "" "/tmp/log" "5h" "30s"
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"  4 "* ]]
+  [[ "$output" != *"Fatal error (e.g."* ]]
+}
+
+# FND-0051: the 143 and 137 lines interpolate their own value (timeout vs
+# kill-after); distinct values catch swapped arguments, and the full
+# "Common codes" list is pinned line by line.
+@test "print_failure_banner: FND-0051 143 line uses the timeout, 137 line the kill-after" {
+  run print_failure_banner "143" "" "/tmp/log" "7h" "45s"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *$'\n  143  timeout reached (SIGTERM at max wall-clock 7h)\n'* ]]
+  [[ "$output" == *$'\n  137  process killed (SIGKILL after 45s grace)\n'* ]]
+  [[ "$output" == *$'Common codes:\n  1    lftp generic error\n  143 '* ]]
+  [[ "$output" != *"124"* ]]
 }
 
 @test "print_failure_banner: documents the SIGKILL exit code 137" {
   run print_failure_banner "137" "" "/tmp/log" "5h" "30s"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"137  process killed"* ]]
-  [[ "$output" == *"SIGKILL after 30s grace"* ]]
+  [[ "$output" == *"137  process killed (SIGKILL after 30s grace)"* ]]
 }
 
 @test "print_failure_banner: bare 'max-retries exceeded' prints the no-reply hint (#342)" {

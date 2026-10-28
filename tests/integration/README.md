@@ -14,7 +14,7 @@ tests/integration/
 ├── README.md                     # this file
 ├── run-integration-tests.sh      # orchestrator (runs every scenario)
 ├── Dockerfile.test-server        # pre-baked FTPS test server image
-│                                 #   (vsftpd on alpine 3.24, digest-pinned);
+│                                 #   (vsftpd + lftp on the action's digest-pinned alpine);
 │                                 #   built by `make build-test-server-image`
 ├── lib/
 │   └── common.sh                 # shared helpers (runtime, FTP lifecycle,
@@ -34,7 +34,7 @@ tests/integration/
     ├── 09-concurrency-lock-e2e.sh            # concurrency_lock: true
     ├── 10-stale-lock-recovery.sh             # takeover of a sentinel older than 6 h
     ├── 12-acquire-vs-bare-host-url.sh        # lock with a bare-host URL (#132)
-    ├── 20-action-yml-defaults.sh             # only required inputs, action.yml defaults
+    ├── 20-action-yml-defaults.sh             # required inputs + local_dir/remote_dir, rest at action.yml defaults
     ├── 21-lftp-output-visible.sh             # lftp output in the step log, 530, masking
     ├── 22-dry-run-shows-plan.sh              # dry_run shows the plan, changes nothing
     ├── 23-exclude-glob-and-delete.sh         # exclude globs with upload and --delete
@@ -57,7 +57,12 @@ make integration IMAGE=ftp-deployment-action:ci-integration \
 ```
 
 `make build-test-server-image` builds the pre-baked FTPS test
-server image (used by scenarios 03 / 04). The build context is
+server image. It is the FTPS server of the scenarios that call
+`start_ftps_server`; the harness also runs its `nc` in
+`wait_for_port` (called by `start_ftp_server`, so every plain-FTP
+scenario) and its `lftp` in `lftp_run_script` (scenarios 01, 02, 05),
+both in `lib/common.sh`. `run-integration-tests.sh` exits 2 if
+the image is missing. The build context is
 `tests/integration` so only the Dockerfile and adjacent files
 are sent to the docker daemon.
 
@@ -103,12 +108,13 @@ run. In CI that occasionally:
   `--rm` container was garbage-collected and surfaced as "No
   such container" in the harness.
 
-The pre-baked image (alpine 3.24 base, digest-pinned to the same
-value the action Dockerfile uses, with `vsftpd` only — the
+The pre-baked image (alpine base, digest-pinned to the same
+value the action Dockerfile uses, with `vsftpd` and `lftp` — the
 per-run self-signed cert is generated on the host via
 `openssl req`, so the server image does not need the openssl CLI)
-plus the pre-created `/var/log/vsftpd`,
-`/etc/pam.d/vsftpd_virtual`, `/home/vsftpd` directories
+plus the pre-created `/var/log/vsftpd` directory and
+`/etc/pam.d/vsftpd_virtual` file (`/home/vsftpd` is the per-scenario
+bind mount)
 eliminates that race: `docker run` of an already-pulled image is
 a sub-second operation and never depends on the network.
 
@@ -122,8 +128,8 @@ vsftpd`. The image tag is controlled by `TEST_SERVER_IMAGE`
 
 ## Why variant B (lftp directly, not the action)
 
-Most scenarios run the action image end-to-end against vsftpd
-(variant C). Three scenarios (01, 02, 05) run lftp directly from the
+Every scenario except 01, 02 and 05 runs the action image end-to-end
+against vsftpd (variant C). Three scenarios (01, 02, 05) run lftp directly from the
 test server image, with `lftp_run_script`, because they check the
 lftp mirror primitive the action relies on (upload, `--delete`,
 `-X <glob>`); driving them through the action would only re-test the
@@ -207,8 +213,8 @@ container running into scenario N+1.
    inside the script).
 6. Invoke the lftp driver with `lftp_run_script`. The function
    bind-mounts your script and the fixtures directory, runs lftp
-   in a fresh alpine:3.23.3 with `apk add lftp`, and returns the
-   lftp exit code. **Do not** redirect the log to `/dev/null` —
+   in a fresh container of the pre-baked test server image (lftp is
+   already installed), and returns the lftp exit code. **Do not** redirect the log to `/dev/null` —
    on failure the orchestrator dumps the log to stderr (via
    `log_fail`) so the failure is debuggable from the runner log.
 7. On non-zero lftp exit, print the captured log to stderr
@@ -264,8 +270,9 @@ bind-mounted read-only into the alpine container.
   original "Why variant B" blocker was #124 (bare-host URL made
   lftp fall back to anonymous). v2.11.0 rewrites the bare-host
   URL with the embedded `user:pass@` form so lftp's `.netrc`
-  lookup fires, and scenarios 08 / 09 / 10 / 11 / 12 use that
-  path end-to-end. Scenarios 01 / 02 / 05 keep variant B (raw
+  lookup fires, and every scenario except 01, 02 and 05 (see
+  `scenarios/`) runs the action image and uses that path
+  end-to-end. Scenarios 01 / 02 / 05 keep variant B (raw
   lftp from alpine) by design — they exercise mirror-primitive
   behaviour, not the action image.
 
