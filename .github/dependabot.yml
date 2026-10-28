@@ -33,9 +33,15 @@
 #   still bumps them in ONE PR: #332 bumped only Dockerfile, and the
 #   test images drifted to an older OpenSSL.
 #   tests/acceptance/static.sh S13 fails if the tags or digests differ.
-# * For github-actions we take minor and patch; major bumps of
-#   `actions/checkout`, `actions/attest`, etc. are reviewed
+# * For github-actions every update type is proposed: no group sets
+#   `update-types` and there is no `ignore`, so a major bump can arrive
+#   in the same PR as minor/patch bumps of the same group. Grouping
+#   only splits PRs by action family (see the groups below); it does
+#   not hold majors back. Review every Dependabot PR; majors of
+#   `actions/checkout`, `actions/attest`, etc. deserve extra care
 #   because they often require runner version bumps.
+# * Nothing here auto-merges. No workflow in .github/workflows enables
+#   auto-merge for Dependabot PRs; the maintainer merges each one.
 
 version: 2
 updates:
@@ -49,16 +55,21 @@ updates:
       - "dependencies"
       - "docker"
     ignore:
-      # Only follow patch-level bumps of the lftp package; major and
-      # minor bumps have historically changed mirror semantics.
+      # Defensive; matches nothing today. These two rules name apk
+      # packages (`lftp~4.9.3`, `ca-certificates`), which the docker
+      # ecosystem does not see (it updates `FROM` images only), so
+      # they filter no PR. If Dependabot ever did report them, they
+      # would suppress major and minor bumps of lftp (those have
+      # historically changed mirror semantics) and major bumps of
+      # ca-certificates. Nothing is auto-merged either way.
       - dependency-name: "lftp"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      # ca-certificates follows Mozilla's NSS bug-fix cadence;
-      # patches are auto-merge, majors (a CA root change) are reviewed.
       - dependency-name: "ca-certificates"
         update-types: ["version-update:semver-major"]
     groups:
       # One PR per Alpine tag@digest bump, covering the three Dockerfiles.
+      # The exclude-patterns are defensive and match nothing today (same
+      # reason as the ignore rules above: apk packages are not seen).
       dockerfile-base:
         patterns: ["*"]
         exclude-patterns: ["lftp", "ca-certificates"]
@@ -73,20 +84,28 @@ updates:
       - "dependencies"
       - "github-actions"
     groups:
-      # One PR per action major. Keeps the surface of any single
-      # review manageable and the git log clean.
+      # One group (so one PR per run) per action family, not per major:
+      # no group sets `update-types`, so majors, minors and patches of
+      # a family share its PR. Families: actions/checkout, docker/*,
+      # actions/attest, sigstore/cosign-installer, and actions-others
+      # (every other action, in a single PR). This keeps the surface
+      # of any single review manageable and the git log clean.
       actions-checkout:
         patterns: ["actions/checkout"]
       actions-docker:
         patterns: ["docker/*"]
       actions-attest:
         patterns: ["actions/attest"]
-      # sigstore/cosign-installer is pinned to a specific version
-      # (v4.1.2) in release.yml because the upstream does not
-      # publish a floating `@v4` git ref; dependabot's default
-      # proposal of `@v4` would fail to resolve at job setup.
-      # Keep the group on a single track so the next bump is a
-      # conscious decision.
+      # sigstore/cosign-installer has its own group so its bumps never
+      # ride along with unrelated actions. History: the upstream does
+      # not publish a floating `@v4` git ref, and a Dependabot bump of
+      # the old tag-ref pin to `@v4` (#62) broke release v2.4.0 at job
+      # setup (CHANGELOG 2.4.1). release.yml now pins it by commit SHA
+      # (`@<sha> # v4.1.2`), as it does every action, and Dependabot
+      # moves SHA pins to a new SHA, so that failure mode no longer
+      # applies. The group does not restrict versions, only splits the
+      # PR, so each bump is still a separate review (and must be a
+      # real release that resolves).
       actions-cosign-installer:
         patterns: ["sigstore/cosign-installer"]
       actions-others:

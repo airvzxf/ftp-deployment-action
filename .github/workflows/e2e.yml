@@ -1,10 +1,12 @@
 name: E2E
 
-# Runs the action exactly the way a user does: `uses: ./` with only the
-# required inputs, so GitHub parses action.yml, builds the Dockerfile on
-# the runner and injects every action.yml default. This is the only test
-# that would have caught v2.11.14 (invalid action.yml, apk pins that no
-# longer resolve, net_max_retries=0 hang).
+# Runs the action exactly the way a user does: `uses: ./` with the
+# required inputs (server, user, password) plus local_dir and remote_dir
+# (the fixture to upload and the e2euser home on the server, instead of
+# their './' defaults), so GitHub parses action.yml, builds the Dockerfile
+# on the runner and injects the action.yml default of every other input.
+# This is the only test that would have caught v2.11.14 (invalid
+# action.yml, apk pins that no longer resolve, net_max_retries=0 hang).
 
 on:
   push:
@@ -41,7 +43,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Deploy with only the required inputs
+      - name: Deploy with required inputs and target paths
         timeout-minutes: 2
         uses: ./
         with:

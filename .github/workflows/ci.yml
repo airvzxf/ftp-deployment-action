@@ -12,9 +12,16 @@ permissions:
 # Serialize per-ref so a burst of pushes does not spawn N
 # parallel runs. cancel-in-progress is conditional on the
 # event type: PR runs cancel so a re-pushed branch never
-# queues a stale full-suite run; main / tag / manual runs do
-# NOT cancel so the Actions tab keeps the red run visible
-# while a fix lands.
+# queues a stale full-suite run; push-to-main and manual
+# (workflow_dispatch) runs do NOT cancel so the Actions tab
+# keeps the red run visible while a fix lands.
+#
+# Triggers (see `on:` above): push to main, any pull_request,
+# and workflow_dispatch. There are no paths filters and no tag
+# trigger: pushing a tag does not start this workflow (tag
+# pushes are handled by release.yml). Jobs below are all
+# independent: none declares `needs:`, so they run in parallel
+# and no job gates another.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -82,8 +89,9 @@ jobs:
       # (only v3.0.0, v3.1.0, ...). Using `@v3` makes the resolver fail.
       # hadolint/hadolint-action takes a single `dockerfile:` input
       # (no array support), so each of the three Dockerfiles gets its
-      # own step. All three steps fail with `error`-threshold rules;
-      # the integration job only kicks off once all three succeed.
+      # own step. All three steps fail with `error`-threshold rules.
+      # A hadolint failure fails this job only: no other job (the
+      # integration job included) has a `needs:` on it.
       - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
           dockerfile: Dockerfile
@@ -167,10 +175,16 @@ jobs:
 
   # Integration tests (issue #117): boot a real vsftpd container
   # (docker.io/fauria/vsftpd) and exercise the action against it.
-  # Scenarios 01/02/05 use fauria/vsftpd (plain FTP). Scenarios 03/04
-  # (FTPS explicit / implicit, added by #120 / PR #130) use a
-  # pre-baked vsftpd+openssl alpine image built from
-  # tests/integration/Dockerfile.test-server (closes #135): the
+  # `make integration` runs tests/integration/run-integration-tests.sh,
+  # which discovers and runs every tests/integration/scenarios/*.sh in
+  # lexical order (not enumerated here so this comment cannot go stale;
+  # list that directory for the current scenarios). The plain-FTP
+  # scenarios use fauria/vsftpd as the server; the FTPS scenarios
+  # (explicit / implicit from #120 / PR #130, and later ones such as
+  # 30) use a pre-baked vsftpd+openssl alpine image built from
+  # tests/integration/Dockerfile.test-server (closes #135). That image
+  # also provides the nc and lftp client the plain-FTP scenarios use,
+  # and the runner exits 2 if it is missing. The
   # previous inline-`apk add` shape raced the apk index download
   # against the 20s wait_for_port deadline in CI. Building the
   # FTPS test server image in this job (rather than per-scenario)
@@ -186,10 +200,10 @@ jobs:
           persist-credentials: false
       - name: Build the action image under test
         run: make build IMAGE=ftp-deployment-action:ci-integration
-      # Build the pre-baked FTPS test server image used by scenarios
-      # 03 / 04 (closes #135). Same `ci-integration` suffix as the
+      # Build the pre-baked FTPS test server image used by the FTPS
+      # scenarios (closes #135). Same `ci-integration` suffix as the
       # action image so both rebuild together on the same CI run;
-      # the Dockerfile.test-server is small (alpine base + 2 packages)
+      # the Dockerfile.test-server is small (alpine base + 3 packages)
       # and the build completes in <10s on the CI runner.
       - name: Build the FTPS test server image
         run: make build-test-server-image TEST_SERVER_IMAGE=ftp-deployment-action-test-server:ci-integration
