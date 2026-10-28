@@ -40,8 +40,11 @@ which backend a specific tag uses, run
 `scripts/verify-tag.sh <tag>` (it auto-detects and prints
 the key fingerprint). `git verify-tag` itself auto-detects
 the backend; the workflow's `verify-tag-signature` job
-imports the PGP keyring only when the tag is PGP-signed and
-the SSH allow-list only when the tag is SSH-signed. The
+always fetches the SSH allow-list from `origin/main` (and fails
+if it is empty) and points `gpg.ssh.allowedSignersFile` at it,
+and imports the PGP keyring only when the tag is PGP-signed (a
+line that is exactly `-----BEGIN PGP SIGNATURE-----` starts its
+signature block, detected as `scripts/verify-tag.sh` does). The
 `.asc` file is **not** optional — it is required to verify
 `v1.5.0`–`v2.10.0`, `v2.11.7`–`v2.11.8` and every tag since
 `v2.11.12`. Do not remove

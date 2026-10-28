@@ -209,8 +209,10 @@ hold.
    if `git verify-tag vX.Y.Z` succeeds against the allow-list
    fetched from `origin/main` (SSH backend via
    `.github/trusted-signers`, PGP backend via
-   `.github/trusted-signers.asc` — used by v2.10.0 and earlier
-   tags). Both jobs run in parallel and `Build · release image`
+   `.github/trusted-signers.asc` — the current format, used by
+   every tag since v2.11.12 and by v1.5.0-v2.10.0 and
+   v2.11.7-v2.11.8; SSH signed v2.11.0-v2.11.6 and
+   v2.11.9-v2.11.11). Both jobs run in parallel and `Build · release image`
    runs only after both pass; the build is pinned to the
    immutable tag commit SHA so a tag force-push mid-run
    cannot redirect it. `Publish · GitHub Release` creates
@@ -275,9 +277,10 @@ being verified.
   at least one minor version old (see "Removing a signer"
   below).
 
-`git verify-tag` auto-detects which backend the tag used, so
-both formats are supported without conditional logic in the
-workflow.
+`git verify-tag` auto-detects which backend the tag used, so the
+verification itself needs no branch; the workflow only imports
+`.github/trusted-signers.asc` into the keyring when the tag has a
+PGP signature.
 
 Local verification of any tag in the clone:
 

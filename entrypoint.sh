@@ -4,22 +4,38 @@
 # This file is the entrypoint of the Docker image. It does the
 # following, in order:
 #
-#   1. Source lib.sh (pure functions and IO helpers) and print the
-#      release version.
+#   1. Set errexit/nounset/pipefail, source lib.sh (pure functions and
+#      IO helpers) and print the release version.
 #   2. Apply effective defaults to every INPUT_* (B-07 / smoke-test
 #      safety: works with `set -u` and with direct `docker run`).
-#   3. Mask sensitive inputs in the runner log (::add-mask::).
-#   4. Print the "Inputs received" group.
-#   5. Validate integer and free-form inputs (exit 2 on failure).
-#   6. Build the FTP_SETTINGS and MIRROR_COMMAND strings.
-#   7. Normalize local_dir / remote_dir (trailing slash + path
-#      traversal guard).
-#   8. Print the "Resolved configuration" group.
-#   9. Write credentials to ~/.netrc with mode 0600 and install the
-#      EXIT trap that removes the file.
-#  10. Retry loop with exponential backoff + jitter, capturing
-#      lftp's combined stdout+stderr to a timestamped log file.
-#  11. Print the success or failure banner.
+#   3. Normalize the five gate booleans (delete, no_symlinks, dry_run,
+#      concurrency_lock, debug); a rejected value exits 2.
+#   4. Reject URL userinfo with an embedded password in server (exit 2).
+#   5. Mask sensitive inputs in the runner log (::add-mask::).
+#   6. Print the "Inputs received" group.
+#   7. Validate the inputs (exit 2 on failure): required values,
+#      credentials, integers, booleans and durations, the TLS version
+#      (and export the TLS cap for lftp), lftp_settings, server,
+#      exclude and, when concurrency_lock is on, its path (validated
+#      "unquoted") and its integer inputs.
+#   8. Build FTP_SETTINGS, normalize local_dir / remote_dir (trailing
+#      slash), validate both paths (remote_dir "unquoted") and check
+#      that local_dir is outside the .netrc home, then build
+#      MIRROR_COMMAND.
+#   9. Print the "Resolved configuration" group (only when debug=true).
+#  10. Write credentials to ~/.netrc with mode 0600 (write_netrc).
+#  11. Reset ACQUIRED_LOCK_SENTINEL and ACQUIRED_LOCK_SENTINEL_TRIED
+#      and install the EXIT trap that releases the lock (only when
+#      concurrency_lock is on) and removes the .netrc.
+#  12. Acquire the server-side concurrency lock (only when enabled;
+#      exit 1 if it cannot be acquired).
+#  13. Upload retry loop with exponential backoff + jitter, capturing
+#      lftp's combined stdout+stderr to a timestamped log file; each
+#      attempt is capped at 5 h, a permanent error (login or 550 access
+#      failure) stops the retries, and the lock sentinel is refreshed
+#      before every attempt.
+#  14. Print the failure banner (which exits 1) or the success banner.
+#      The script sets no step outputs.
 #
 # The split between this file and lib.sh is the only architectural
 # change vs. the pre-v2.5.0 single-file layout; the behaviour is
@@ -31,11 +47,18 @@
 # (FND-0013).
 set -eu
 
-# pipefail is busybox ash (the shell that actually runs in alpine);
-# it fails the script on the first command in a pipeline that
-# returns non-zero, instead of only the last one. POSIX sh does not
-# define it (shellcheck SC3040), but the runtime guarantees it is
-# available.
+# pipefail is supported by busybox ash (the shell that actually runs in alpine).
+# With it, a pipeline's exit status is that of the last (rightmost)
+# command that exited non-zero, or 0 if every command succeeded;
+# without it the status is always the last command's. Under `set -e`
+# a pipeline that then returns non-zero stops the script, unless it
+# is in a tested context (an if/while condition, a && or || list, or
+# after `!`). It matters for `lftp | tee` in run_lftp_once (lib.sh):
+# the function returns lftp's exit code instead of tee's, and if
+# both fail the status is tee's. run_lftp_once also sets pipefail
+# itself, so it does not depend on this line. POSIX sh does not
+# define pipefail (shellcheck SC3040), but the runtime guarantees it
+# is available.
 # shellcheck disable=SC3040
 set -o pipefail
 
@@ -54,7 +77,7 @@ printf 'ftp-deployment-action v%s\n' "$(cat /app/VERSION)"
 # defaults here. This block is FIRST in the user-input handling so
 # that every later reference is safe under `set -u`.
 #
-# Use POSIX parameter expansion (`:="${VAR:=default}"`) instead of
+# Use POSIX parameter expansion (`: "${VAR:=default}"`) instead of
 # `if [ -z "${VAR}" ] then VAR=default; fi` so this block is safe
 # under `set -u` even when the var is unset.
 # ------------------------------------------------------------------------------
@@ -111,7 +134,7 @@ INPUT_DEBUG=$(normalize_bool                   "debug"                 "${INPUT_
 # pattern used by tests/integration/scenarios/03-ftps-explicit-upload.sh
 # and 04-ftps-implicit-upload.sh, where the username is required to
 # live in the URL so lftp's netrc lookup fires (see rewrite_lftp_url
-# at lib.sh:~956). The detection pattern is the strict `:pw@` form:
+# in lib.sh). The detection pattern is the strict `:pw@` form:
 # a `:` between the `://` and the `@` in the userinfo segment.
 # FND-0006: a value without a scheme (a bare `host[:port]` means
 # ftp://) is checked too. A scheme counts only when letters come
@@ -143,8 +166,11 @@ esac
 add_masks
 
 # ------------------------------------------------------------------------------
-# B-10: By default, only show which inputs were received (no values).
-# Set INPUT_DEBUG=true to print resolved values for troubleshooting.
+# B-10: By default (debug=false), show only whether each input is
+# "(set)" or "(using default)" (no values); the defaults applied above
+# count as set. Set INPUT_DEBUG=true to print resolved values for
+# troubleshooting (the password is never printed). See
+# print_inputs_dump in lib.sh.
 # ------------------------------------------------------------------------------
 print_inputs_dump "${INPUT_DEBUG}"
 
@@ -193,8 +219,9 @@ apply_tls_max_version    "${INPUT_TLS_MAX_VERSION}"
 # the validate_lftp_settings header in lib.sh).
 validate_lftp_settings "${INPUT_LFTP_SETTINGS}"
 # v2.11.8 (#190): INPUT_SERVER flows verbatim into the lftp URL
-# argument (entrypoint.sh:223, 276, 334) and into extract_netrc_host
-# (line 223 above). validate_path's deny-list covers shell
+# argument (the EXIT trap's release_lock_safely, acquire_lock_with_recovery
+# and refresh_lock_sentinel, and run_lftp_once in the Upload loop) and
+# into extract_netrc_host (in the .netrc section below). validate_path's deny-list covers shell
 # metacharacters, ";", "&", "|", backtick, "$", "!", `"`, `..`,
 # leading dash, control characters, newlines (v2.11.3.1), and
 # (v2.11.8 #174) ASCII space. None of those are valid in an lftp
@@ -207,8 +234,9 @@ validate_glob_pattern "exclude" "${INPUT_EXCLUDE}"
 # to keep the validation surface tight for the common case
 # (concurrency_lock=false). validate_int already rejects negatives
 # and non-numeric values; the only extra check we need is
-# poll_interval > 0 (0 would be a division-by-zero in the count
-# computation).
+# poll_interval > 0 (the acquire loop sleeps poll_interval between
+# attempts and ends on a wall-clock deadline, #294; a poll of 0 would
+# make it spin with no pause).
 if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
   # FND-0100: "unquoted" — the lock path is pasted into the lftp lock
   # commands (mkdir/put/cls/mv/quote) without surrounding quotes.

@@ -17,11 +17,13 @@
 #
 # Tags signed with the GPG RSA key
 # (`82DE44111B30F91F55BCEB1F414687A3CD7E65B9`, long ID
-# `414687A3CD7E65B9`) — used for v2.10.0 and earlier — are
+# `414687A3CD7E65B9`) — the current format, used for every tag
+# since v2.11.12 and for v1.5.0-v2.10.0 and v2.11.7-v2.11.8 — are
 # verified via the GPG backend after
 # `.github/trusted-signers.asc` is imported into the runner keyring.
-# `git verify-tag` auto-detects which backend the tag used, so both
-# formats work without conditional logic in the workflow.
+# This file (SSH) covers v2.11.0-v2.11.6 and v2.11.9-v2.11.11.
+# `git verify-tag` auto-detects which backend the tag used; the
+# workflow only imports the .asc into the keyring for PGP tags.
 #
 # ED25519 fingerprint: SHA256:POu2Sr8ILb1IM05Vh1cGU3xivjx05QjWoWYhdLc6YHA
 # GPG long ID: 414687A3CD7E65B9 (primary fingerprint

@@ -370,7 +370,21 @@ jobs:
           TAG: ${{ needs.validate-tag-input.outputs.tag }}
         run: |
           set -euo pipefail
-          if git cat-file tag "$TAG" | grep -q 'BEGIN PGP SIGNATURE'; then
+          # Same detection as detect_signature in scripts/verify-tag.sh
+          # (FND-0019, FND-0102): like git, the signature starts at the
+          # LAST line that is exactly a BEGIN PGP/SSH SIGNATURE marker,
+          # so text in the tag message cannot pick the PGP branch. A
+          # lightweight tag takes the else branch; `git verify-tag`
+          # rejects it in the next step.
+          SIG=lightweight
+          if [ "$(git cat-file -t "refs/tags/$TAG" 2>/dev/null || true)" = tag ]; then
+            OBJ="$(git cat-file tag "refs/tags/$TAG")"
+            SIG="$(printf '%s\n' "$OBJ" | awk '
+              $0 == "-----BEGIN PGP SIGNATURE-----" { fmt = "pgp" }
+              $0 == "-----BEGIN SSH SIGNATURE-----" { fmt = "ssh" }
+              END { if (fmt == "") fmt = "unsigned"; print fmt }')"
+          fi
+          if [ "$SIG" = pgp ]; then
             test -f "$RUNNER_TEMP/trusted/allowed_signers.asc" \
               || { echo "ERROR: tag is PGP-signed but .github/trusted-signers.asc is missing on origin/main"; exit 1; }
             gpg --batch --import "$RUNNER_TEMP/trusted/allowed_signers.asc"
