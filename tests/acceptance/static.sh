@@ -674,6 +674,10 @@ def eq(label, got, want):
     if got != want:
         bad.append("%s is %r, expected %r" % (label, got, want))
 
+meta = one("meta", idx(lambda s: s.get("id") == "meta"))
+if meta is not None:
+    eq("meta env REPO_OWNER", (steps[meta].get("env") or {}).get("REPO_OWNER"),
+       "${{ github.repository_owner }}")
 if smoke is not None:
     eq("smoke env IMAGE", (steps[smoke].get("env") or {}).get("IMAGE"), IMG)
 if sbom is not None:
@@ -873,11 +877,10 @@ JEOF
 
   # (e) the meta step with a fake environment.
   if [ -s "${_tmp18}/meta.sh" ]; then
-    # shellcheck disable=SC2016
-    sed 's/\${{ github\.repository_owner }}/acme/' "${_tmp18}/meta.sh" > "${_tmp18}/meta_run.sh"
+    cp "${_tmp18}/meta.sh" "${_tmp18}/meta_run.sh"
     s18_meta() { # $1=label $2=tag $3=pre_release $4=expect :latest (yes|no)
       : > "${_tmp18}/mout"
-      GITHUB_EVENT_NAME=push GITHUB_REF_NAME="$2" INPUT_VERSION="" \
+      GITHUB_EVENT_NAME=push GITHUB_REF_NAME="$2" INPUT_VERSION="" REPO_OWNER=acme \
         DOCKERHUB_USERNAME=u DOCKERHUB_TOKEN=t AWS_ROLE_TO_ASSUME="" \
         GITHUB_OUTPUT="${_tmp18}/mout" \
         bash -c 'set -euo pipefail; . "$1"' _ "${_tmp18}/meta_run.sh" > "${_tmp18}/log" 2>&1 \
@@ -1168,6 +1171,50 @@ if [ -z "${_s23}" ]; then
   pass "S23 every file COPYed into /app has an explicit octal chmod in a RUN"
 else
   fail "S23 Dockerfile COPY vs chmod:${_s23}"
+fi
+
+# S24 — no workflow `run:` script contains a ${{ }} expression (FND-0035).
+#       Such a value must be passed through the step's env: and read as
+#       "${VAR}", so the runner never splices it into the shell text.
+#       `${{ }}` in if:, with:, env: values, concurrency: and outputs: is
+#       fine and ignored. Covers release.yml, ci.yml and e2e.yml.
+_s24=""
+if "${PY}" -c 'import yaml' >/dev/null 2>&1; then
+  _s24=$("${PY}" -I - "${_rel}" "${CI_YML:-.github/workflows/ci.yml}" \
+      "${E2E_YML:-.github/workflows/e2e.yml}" <<'PYEOF'
+import sys, yaml
+
+bad = []
+for path in sys.argv[1:]:
+    try:
+        doc = yaml.safe_load(open(path))
+        jobs = doc["jobs"]
+        if not isinstance(jobs, dict) or not jobs:
+            raise ValueError("no jobs")
+        for jname, job in jobs.items():
+            for i, step in enumerate(job.get("steps") or []):
+                run = step.get("run")
+                if run is None:
+                    continue
+                if not isinstance(run, str):
+                    raise ValueError("job %s step %d: run is not a string" % (jname, i))
+                for line in run.splitlines():
+                    if "${{" in line:
+                        bad.append("%s: job %s step %d (%s): %s" % (
+                            path, jname, i, step.get("name") or step.get("id") or "?",
+                            line.strip()))
+    except Exception as exc:
+        bad.append("%s: cannot be checked: %s" % (path, exc))
+print("; ".join(bad))
+PYEOF
+  ) || _s24="could not run the YAML walk"
+else
+  _s24="no YAML parser: install PyYAML or set PYTHON"
+fi
+if [ -z "${_s24}" ]; then
+  pass "S24 no workflow run: script contains a template expression"
+else
+  fail "S24 workflow run: scripts contain \${{ }} (move it to env:): ${_s24}"
 fi
 
 if [ "${_failed}" -ne 0 ]; then

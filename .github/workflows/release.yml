@@ -10,8 +10,10 @@ name: Release
 # * `push` on tags matching `v[0-9]+.[0-9]+.[0-9]+*` — the `*`
 #   suffix allows pre-release tags like `v2.12.0-rc.1` while
 #   keeping the strict version-root.
-# * `workflow_dispatch` with a strict `pattern:` that fails fast
-#   in `validate-tag-input` if the operator mistypes the tag.
+# * `workflow_dispatch` with a free-text `version` input (the
+#   schema has no `pattern:` field); the `validate-tag-input` job
+#   checks it against the tag regex and fails fast if the
+#   operator mistypes the tag.
 #
 # Why five jobs (not one)
 # -----------------------
@@ -289,8 +291,10 @@ jobs:
   # trust anchor is the same object being verified and
   # revocation is structurally impossible. The PGP `.asc`
   # allow-list is consulted only when the tag being verified
-  # is PGP-signed (v2.10.0 and earlier); v2.11.0+ SSH tags
-  # never import the GPG key. Mirrors moagan's
+  # is PGP-signed (v1.5.0-v2.10.0, v2.11.7-v2.11.8 and every
+  # tag since v2.11.12, i.e. the current ones); SSH-signed tags
+  # (v2.11.0-v2.11.6, v2.11.9-v2.11.11) never import the GPG
+  # key. See SECURITY.md and AGENTS.md. Mirrors moagan's
   # `verify-tag-signature` job, with the dual-backend
   # detection added.
   verify-tag-signature:
@@ -328,13 +332,14 @@ jobs:
           git show "origin/main:.github/trusted-signers" \
             > "$RUNNER_TEMP/trusted/allowed_signers"
           # `.asc` is optional: only imported when the tag is
-          # actually PGP-signed (v2.10.0 and earlier). v2.11.0+
-          # tags are SSH-signed and never consult this file.
+          # actually PGP-signed (every tag since v2.11.12, plus
+          # some older ones). SSH-signed tags never consult this
+          # file.
           if git show "origin/main:.github/trusted-signers.asc" \
               > "$RUNNER_TEMP/trusted/allowed_signers.asc" 2>/dev/null; then
             echo "PGP allow-list fetched"
           else
-            echo "PGP allow-list absent on origin/main (acceptable; SSH-only signers)"
+            echo "PGP allow-list absent on origin/main (acceptable only if the tag is not PGP-signed)"
             rm -f "$RUNNER_TEMP/trusted/allowed_signers.asc"
           fi
           test -s "$RUNNER_TEMP/trusted/allowed_signers" \
@@ -344,20 +349,23 @@ jobs:
         # `git verify-tag` consults `gpg.ssh.allowedsignersfile`
         # for SSH-signed tags and the GPG keyring for PGP-signed
         # tags. Both paths auto-detect from the tag's signature
-        # format, so the same verification works for v2.10.0
-        # (PGP) and v2.11.0+ (SSH) without conditional logic.
+        # format, so the same verification works for PGP tags
+        # (e.g. v2.10.0 and the current v2.11.12+) and SSH tags
+        # (e.g. v2.11.9) without a branch here; only the GPG key import
+        # in the next step depends on the tag's format.
         run: |
           set -euo pipefail
           git config gpg.format ssh
           git config gpg.ssh.allowedsignersfile "$RUNNER_TEMP/trusted/allowed_signers"
 
       - name: Import GPG allow-list if the tag is PGP-signed
-        # v2.10.0 and earlier were PGP-signed with the
-        # maintainer's RSA key. Importing into the runner's
-        # keyring only when needed avoids the `.asc` becoming
-        # a hard dependency for SSH-only releases (which would
-        # otherwise block the documented key-removal path in
-        # AGENTS.md).
+        # PGP is the current format: every tag since v2.11.12 is
+        # signed with the maintainer's RSA key (as are v1.5.0-
+        # v2.10.0 and v2.11.7-v2.11.8). Importing into the
+        # runner's keyring only when needed avoids the `.asc`
+        # becoming a hard dependency for SSH-signed tags (which
+        # would otherwise block the documented key-removal path
+        # in AGENTS.md).
         env:
           TAG: ${{ needs.validate-tag-input.outputs.tag }}
         run: |
@@ -367,7 +375,7 @@ jobs:
               || { echo "ERROR: tag is PGP-signed but .github/trusted-signers.asc is missing on origin/main"; exit 1; }
             gpg --batch --import "$RUNNER_TEMP/trusted/allowed_signers.asc"
           else
-            echo "Tag uses SSH signature — GPG keyring not required"
+            echo "Tag has no PGP signature block — GPG keyring not required"
           fi
 
       - name: Verify tag signature
@@ -377,7 +385,7 @@ jobs:
         run: |
           set -euo pipefail
           if git verify-tag "refs/tags/${TAG}"; then
-            echo "✓ ${TAG} is signed by a key in .github/trusted-signers"
+            echo "✓ ${TAG} is signed by a key in the trusted-signers allow-list from origin/main"
             # git verify-tag does not check that the signed object's
             # own `tag` header names this ref; without this, an old
             # signed tag object re-pushed as refs/tags/${TAG} passes.
@@ -396,7 +404,7 @@ jobs:
           fi
           {
             echo "ERROR: tag ${TAG} is NOT signed by a key in"
-            echo ".github/trusted-signers (fetched from origin/main)."
+            echo ".github/trusted-signers (SSH) or .github/trusted-signers.asc (PGP), fetched from origin/main."
             echo ""
             echo "Signer info for diagnosis:"
             git cat-file tag "${TAG}" \
@@ -415,7 +423,7 @@ jobs:
             echo "  git tag -s ${TAG} -m '${msg}'"
             echo "  git push origin ${TAG}"
             echo ""
-            echo "See .github/trusted-signers and AGENTS.md 'Tag signature guard'."
+            echo "See .github/trusted-signers, .github/trusted-signers.asc and AGENTS.md 'Tag signature guard'."
           } >&2
           exit 1
 
@@ -475,6 +483,7 @@ jobs:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          REPO_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
@@ -483,7 +492,7 @@ jobs:
             tag="${GITHUB_REF_NAME}"
           fi
           version="${tag#v}"
-          owner="${{ github.repository_owner }}"
+          owner="${REPO_OWNER}"
           image="ghcr.io/${owner}/ftp-deployment-action"
 
           {
@@ -793,14 +802,19 @@ jobs:
         env:
           COSIGN_EXPERIMENTAL: '1'
           DIGEST: ${{ steps.digest.outputs.digest }}
+          IMAGE: ${{ steps.meta.outputs.image }}
+          DOCKERHUB_ENABLED: ${{ steps.meta.outputs.dockerhub_enabled }}
+          DOCKERHUB_IMAGE: ${{ steps.meta.outputs.dockerhub_image }}
+          ECR_ENABLED: ${{ steps.meta.outputs.ecr_enabled }}
+          ECR_IMAGE: ${{ steps.meta.outputs.ecr_image }}
         run: |
           set -euo pipefail
-          cosign sign --yes "${{ steps.meta.outputs.image }}@${DIGEST}"
-          if [ "${{ steps.meta.outputs.dockerhub_enabled }}" = "true" ]; then
-            cosign sign --yes "${{ steps.meta.outputs.dockerhub_image }}@${DIGEST}"
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+          if [ "${DOCKERHUB_ENABLED}" = "true" ]; then
+            cosign sign --yes "${DOCKERHUB_IMAGE}@${DIGEST}"
           fi
-          if [ "${{ steps.meta.outputs.ecr_enabled }}" = "true" ]; then
-            cosign sign --yes "${{ steps.meta.outputs.ecr_image }}@${DIGEST}"
+          if [ "${ECR_ENABLED}" = "true" ]; then
+            cosign sign --yes "${ECR_IMAGE}@${DIGEST}"
           fi
 
       - name: Attach SBOM attestation to ghcr.io image
@@ -832,7 +846,7 @@ jobs:
       # works end-to-end without rewiring. Tracked under #212 (the
       # canonical re-enable runbook). Cosign-sign ECR branch (above
       # in the `Sign image with cosign` step) follows the same
-      # pattern: `if [ "${{ steps.meta.outputs.ecr_enabled }}" = "true" ]`
+      # pattern: `if [ "${ECR_ENABLED}" = "true" ]`
       # is dead until ECR is re-enabled; left in-tree for the same
       # one-step uncomment.
       #
@@ -856,9 +870,12 @@ jobs:
       # job can find it without re-running the awk.
       - name: Extract CHANGELOG notes for this version
         id: notes
+        env:
+          META_VERSION: ${{ steps.meta.outputs.version }}
+          TEMP_DIR: ${{ runner.temp }}
         run: |
           set -euo pipefail
-          version="${{ steps.meta.outputs.version }}"
+          version="${META_VERSION}"
           # A pre-release (X.Y.Z-rc.N) uses the final release's
           # CHANGELOG [X.Y.Z] section, as it uses its VERSION.
           version="${version%%-*}"
@@ -867,7 +884,7 @@ jobs:
             echo "::error::no non-empty CHANGELOG section found for ${version}. Add the release notes in the release PR (AGENTS.md 'Red / failed workflows' step 7) and re-tag."
             exit 1
           fi
-          ART_DIR="${{ runner.temp }}/release-artifacts"
+          ART_DIR="${TEMP_DIR}/release-artifacts"
           mkdir -p "${ART_DIR}"
           printf '%s\n' "${notes}" > "${ART_DIR}/CHANGELOG.body.md"
           echo "wrote $(wc -l < "${ART_DIR}/CHANGELOG.body.md") lines to CHANGELOG.body.md"
@@ -876,10 +893,12 @@ jobs:
       # them up without re-running the work. Mirrors moagan's
       # bundle step.
       - name: Bundle artefacts for the publisher job
+        env:
+          TEMP_DIR: ${{ runner.temp }}
         run: |
           set -euo pipefail
-          cp sbom.cyclonedx.json "${{ runner.temp }}/release-artifacts/"
-          ls -la "${{ runner.temp }}/release-artifacts/"
+          cp sbom.cyclonedx.json "${TEMP_DIR}/release-artifacts/"
+          ls -la "${TEMP_DIR}/release-artifacts/"
 
       - name: Upload bundle for the publisher job
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

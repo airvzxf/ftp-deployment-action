@@ -1,8 +1,12 @@
 # Makefile — ftp-deployment-action developer shortcuts.
 #
-# All targets are no-ops if the underlying tool is not installed
-# (the CI workflow is the source of truth, this Makefile is for
-# local iteration).
+# Some targets skip (exit 0) if the underlying tool is not installed;
+# others (shellcheck, actionlint, hadolint) exit 1. The Makefile is
+# the source of truth for the shellcheck file list and flags and for
+# the smoke / integration invocations, which .github/workflows/ci.yml
+# calls (`make shellcheck`, `make smoke`, `make integration`); other
+# CI jobs (actionlint, hadolint, contract, unit, acceptance) run their
+# tools directly, and this Makefile mirrors them for local iteration.
 
 SHELL := /bin/sh
 
