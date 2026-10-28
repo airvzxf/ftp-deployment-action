@@ -1650,3 +1650,57 @@ _fnd100_assert_rejected() {
   [[ "${output}" == *"PAST_FND100_GATE"* ]] || return 1
   [[ "${output}" != *"ERROR:"* ]] || return 1
 }
+
+# ------------------------------------------------------------------------------
+# FND-0009..0012 (doc reconciliation): behaviours that the rewritten action.yml
+# descriptions state and that no other test pinned.
+# ------------------------------------------------------------------------------
+
+@test "validate_lftp_settings: FND-0010: the limit counts ';' characters - 4 directives without a trailing ';' pass, '&&' and '||' are not counted" {
+  run validate_lftp_settings "set a:1; set b:2; set c:3; set d:4"
+  [ "$status" -eq 0 ]
+  run validate_lftp_settings "set a:1 && set b:2 && set c:3 && set d:4 || set e:5"
+  [ "$status" -eq 0 ]
+}
+
+# _lock_gate_case NAME=VALUE...: run a scratch entrypoint.sh up to the end of
+# the concurrency-lock validation block. build_ftp_settings (the first command
+# after the block) prints a marker to stderr and kills the script.
+_lock_gate_case() {
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local app="${BATS_TEST_TMPDIR}/app"
+  mkdir -p "${app}" "${BATS_TEST_TMPDIR}/home/lftp"
+  cp "${root}/lib.sh" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  printf '\nbuild_ftp_settings() { printf "PAST_LOCK_BLOCK\\n" >&2; kill -TERM $$; }\n' >> "${app}/lib.sh"
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${BATS_TEST_TMPDIR}/home/lftp#g" \
+    "${root}/entrypoint.sh" > "${app}/entrypoint.sh"
+  local out
+  out=$(env HOME="${BATS_TEST_TMPDIR}/home" INPUT_SERVER="ftp.example.com" INPUT_USER="ftptest" \
+    INPUT_PASSWORD="pw" "$@" bash "${app}/entrypoint.sh" 2>&1) && status=0 || status=$?
+  output="${out}"
+}
+
+@test "entrypoint: FND-0011: poll interval 0 and 05 exit 2 with the lock on; empty falls back to 5 and passes" {
+  _lock_gate_case INPUT_CONCURRENCY_LOCK=true INPUT_CONCURRENCY_LOCK_POLL_INTERVAL=0
+  [ "${status}" -eq 2 ]
+  [[ "${output}" == *"concurrency_lock_poll_interval must be > 0"* ]]
+  _lock_gate_case INPUT_CONCURRENCY_LOCK=true INPUT_CONCURRENCY_LOCK_POLL_INTERVAL=05
+  [ "${status}" -eq 2 ]
+  [[ "${output}" == *"without leading zeros"* ]]
+  _lock_gate_case INPUT_CONCURRENCY_LOCK=true INPUT_CONCURRENCY_LOCK_POLL_INTERVAL=
+  [[ "${output}" == *"PAST_LOCK_BLOCK"* ]]
+  [[ "${output}" != *"ERROR:"* ]]
+}
+
+@test "entrypoint: FND-0011: poll interval and timeout are validated only when concurrency_lock is true; timeout 0 is allowed, 00 is not" {
+  _lock_gate_case INPUT_CONCURRENCY_LOCK=false INPUT_CONCURRENCY_LOCK_POLL_INTERVAL=0 INPUT_CONCURRENCY_LOCK_TIMEOUT=00
+  [[ "${output}" == *"PAST_LOCK_BLOCK"* ]]
+  [[ "${output}" != *"ERROR:"* ]]
+  _lock_gate_case INPUT_CONCURRENCY_LOCK=true INPUT_CONCURRENCY_LOCK_TIMEOUT=0
+  [[ "${output}" == *"PAST_LOCK_BLOCK"* ]]
+  [[ "${output}" != *"ERROR:"* ]]
+  _lock_gate_case INPUT_CONCURRENCY_LOCK=true INPUT_CONCURRENCY_LOCK_TIMEOUT=00
+  [ "${status}" -eq 2 ]
+  [[ "${output}" == *"concurrency_lock_timeout must be a non-negative integer without leading zeros"* ]]
+}

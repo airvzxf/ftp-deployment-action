@@ -1217,6 +1217,142 @@ else
   fail "S24 workflow run: scripts contain \${{ }} (move it to env:): ${_s24}"
 fi
 
+# S25 — release.yml picks the PGP import branch with the same anchored
+#       detection as scripts/verify-tag.sh (FND-0102, the counterpart of
+#       FND-0019). The old `grep -q 'BEGIN PGP SIGNATURE'` matched the
+#       text anywhere in the tag object, so an SSH-signed tag whose
+#       message quoted it failed with a false ".asc is missing" error.
+#       (a) the verify-tag-signature "Import GPG allow-list ..." run
+#           block is extracted with PyYAML and run under bash in a
+#           throwaway git repo (no global/system git config) with
+#           crafted tag objects and a `gpg` shim on PATH: SSH-signed
+#           tags whose message has the text mid-line or as a whole
+#           armour line, an unsigned annotated tag quoting it and a
+#           lightweight tag take the "no PGP signature block" branch
+#           with no .asc present and never call gpg; a PGP-signed tag
+#           (also one whose message has a whole SSH armour line) exits
+#           1 with the ".asc is missing" error, and imports the .asc
+#           when it is present;
+#       (b) the step's awk program has the same three lines as
+#           detect_signature in scripts/verify-tag.sh (static match;
+#           the script itself is not run).
+#       RELEASE_YML overrides the file under test.
+_s25=""
+_tmp25=$(mktemp -d) || _tmp25=""
+if [ -z "${_tmp25}" ] || [ ! -r "${_rel}" ] || ! command -v bash >/dev/null 2>&1 \
+    || ! command -v git >/dev/null 2>&1; then
+  _s25="${_s25} setup(need mktemp, bash, git and a readable ${_rel})"
+elif ! "${PY}" -c 'import yaml' >/dev/null 2>&1; then
+  _s25="${_s25} no YAML parser: install PyYAML or set PYTHON"
+elif ! "${PY}" -I - "${_rel}" > "${_tmp25}/step.sh" 2> "${_tmp25}/pyerr" <<'PYEOF'
+import sys, yaml
+
+doc = yaml.safe_load(open(sys.argv[1]))
+steps = ((doc.get("jobs") or {}).get("verify-tag-signature") or {}).get("steps") or []
+runs = [s.get("run") for s in steps
+        if str(s.get("name") or "").startswith("Import GPG allow-list")]
+if len(runs) != 1 or not isinstance(runs[0], str) or not runs[0].strip():
+    sys.exit("expected 1 'Import GPG allow-list' step with a run block, found %d" % len(runs))
+sys.stdout.write(runs[0])
+PYEOF
+then
+  _s25="${_s25} (a)(cannot extract the import step: $(cat "${_tmp25}/pyerr"))"
+else
+  mkdir "${_tmp25}/bin" "${_tmp25}/repo"
+  cat > "${_tmp25}/bin/gpg" <<'GPGEOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${S25_GPG_LOG}"
+GPGEOF
+  chmod +x "${_tmp25}/bin/gpg"
+  _nl='
+'
+  _ssh="-----BEGIN SSH SIGNATURE-----${_nl}U1NIU0lHAAAAAQ==${_nl}-----END SSH SIGNATURE-----"
+  _pgp="-----BEGIN PGP SIGNATURE-----${_nl}${_nl}iQEzBAABCAAdFiEE${_nl}=AbCd${_nl}-----END PGP SIGNATURE-----"
+  # g25: git in the fixture repo, without the global or system config.
+  g25() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "${_tmp25}/repo" "$@"; }
+  # s25_tag NAME MESSAGE: write a tag object for HEAD named NAME.
+  s25_tag() {
+    printf 'object %s\ntype commit\ntag %s\ntagger t <t@example.invalid> 1 +0000\n\n%s\n' \
+      "${_c25}" "$1" "$2" > "${_tmp25}/obj"
+    _o=$(g25 hash-object -t tag -w "${_tmp25}/obj") \
+      && g25 update-ref "refs/tags/$1" "${_o}"
+  }
+  if ! {
+      g25 init -q . && echo x > "${_tmp25}/repo/f" && g25 add f \
+        && g25 -c user.email=t@example.invalid -c user.name=t \
+             -c commit.gpgsign=false commit -q -m c \
+        && g25 tag v0.0.1
+    } >/dev/null 2>&1; then
+    _s25="${_s25} (a)(fixture repo setup failed)"
+  else
+    _c25=$(g25 rev-parse HEAD)
+    {
+      s25_tag v0.0.2 "release, see BEGIN PGP SIGNATURE in the docs${_nl}${_ssh}" \
+        && s25_tag v0.0.3 "release${_nl}-----BEGIN PGP SIGNATURE-----${_nl}not a real block${_nl}${_ssh}" \
+        && s25_tag v0.0.4 "unsigned, quotes -----BEGIN PGP SIGNATURE----- mid-line" \
+        && s25_tag v0.0.5 "release${_nl}${_pgp}" \
+        && s25_tag v0.0.6 "release${_nl}-----BEGIN SSH SIGNATURE-----${_nl}not a real block${_nl}${_pgp}"
+    } >/dev/null 2>&1 || _s25="${_s25} (a)(tag object fixtures failed)"
+  fi
+  # s25_run LABEL TAG EXPECT(nopgp|missing|import) ; .asc only for import
+  s25_run() {
+    rm -rf "${_tmp25}/rt"; mkdir -p "${_tmp25}/rt/trusted"
+    [ "$3" != import ] || echo key > "${_tmp25}/rt/trusted/allowed_signers.asc"
+    : > "${_tmp25}/gpg.log"
+    (
+      cd "${_tmp25}/repo" || exit 99
+      GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null S25_GPG_LOG="${_tmp25}/gpg.log" \
+        TAG="$2" RUNNER_TEMP="${_tmp25}/rt" PATH="${_tmp25}/bin:${PATH}" \
+        bash --noprofile --norc "${_tmp25}/step.sh"
+    ) > "${_tmp25}/out" 2>&1
+    _rc=$?
+    case $3 in
+      nopgp)
+        if [ "${_rc}" -ne 0 ] || ! grep -qF 'Tag has no PGP signature block' "${_tmp25}/out"; then
+          _s25="${_s25} (a)($1: expected the no-PGP branch, rc=${_rc}: $(head -n 3 "${_tmp25}/out" | tr '\n' ' '))"
+        elif [ -s "${_tmp25}/gpg.log" ]; then
+          _s25="${_s25} (a)($1: gpg was called)"
+        fi
+        ;;
+      missing)
+        if [ "${_rc}" -ne 1 ] || ! grep -qF 'ERROR: tag is PGP-signed but .github/trusted-signers.asc is missing' "${_tmp25}/out"; then
+          _s25="${_s25} (a)($1: expected the .asc-missing error, rc=${_rc}: $(head -n 3 "${_tmp25}/out" | tr '\n' ' '))"
+        fi
+        ;;
+      import)
+        if [ "${_rc}" -ne 0 ] || ! grep -qF -- '--import' "${_tmp25}/gpg.log"; then
+          _s25="${_s25} (a)($1: expected gpg --import, rc=${_rc}: $(head -n 3 "${_tmp25}/out" | tr '\n' ' '))"
+        fi
+        ;;
+    esac
+  }
+  if [ -z "${_s25}" ]; then
+    s25_run "SSH tag, message has the text mid-line" v0.0.2 nopgp
+    s25_run "SSH tag, message has a whole PGP armour line" v0.0.3 nopgp
+    s25_run "unsigned annotated tag quoting the armour" v0.0.4 nopgp
+    s25_run "lightweight tag" v0.0.1 nopgp
+    s25_run "PGP tag, no .asc" v0.0.5 missing
+    s25_run "PGP tag, .asc present" v0.0.5 import
+    s25_run "PGP tag, message has a whole SSH armour line" v0.0.6 missing
+  fi
+  # (b) same awk lines as verify-tag.sh's detect_signature.
+  # shellcheck disable=SC2016
+  for _l25 in '$0 == "-----BEGIN PGP SIGNATURE-----" { fmt = "pgp" }' \
+      '$0 == "-----BEGIN SSH SIGNATURE-----" { fmt = "ssh" }' \
+      'END { if (fmt == "") fmt = "unsigned"; print fmt }'; do
+    grep -qF -- "${_l25}" "${_tmp25}/step.sh" \
+      || _s25="${_s25} (b)(import step lacks: ${_l25})"
+    grep -qF -- "${_l25}" scripts/verify-tag.sh \
+      || _s25="${_s25} (b)(scripts/verify-tag.sh lacks: ${_l25})"
+  done
+fi
+rm -rf "${_tmp25}"
+if [ -z "${_s25}" ]; then
+  pass "S25 release.yml imports the PGP allow-list only for a PGP armour line, as verify-tag.sh detects it"
+else
+  fail "S25 release.yml PGP detection:${_s25}"
+fi
+
 if [ "${_failed}" -ne 0 ]; then
   printf '\nRESULT: FAIL\n'
   exit 1
