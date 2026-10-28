@@ -78,8 +78,7 @@ start_ftps_server "${FTP_USER}" "${FTP_PASSWORD}" "${FTP_DATA_DIR}" "${_cert}" "
 #     image) sends AUTH TLS with ftp:ssl-allow alone, but if the
 #     server refuses it lftp continues in cleartext. ftp:ssl-force
 #     makes that refusal fatal, so this scenario sets it to
-#     guarantee the session really is TLS. See the spec for
-#     scenario 03 in tests/integration/README.md.
+#     guarantee the session really is TLS.
 #   * INPUT_SSL_VERIFY_CERTIFICATE=false / INPUT_SSL_CHECK_HOSTNAME=
 #     false: the cert is self-signed and says CN=localhost but the
 #     action connects to 127.0.0.1, so neither check can pass on

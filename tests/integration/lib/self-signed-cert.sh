@@ -1,10 +1,10 @@
 #!/bin/sh
 # tests/integration/lib/self-signed-cert.sh — FTPS test helpers.
 #
-# Sourced by scenarios 03 (FTPS explicit) and 04 (FTPS implicit)
-# AFTER tests/integration/lib/common.sh. Plain-FTP scenarios do
-# NOT source this file, so common.sh and the seven passing
-# scenarios stay bit-for-bit identical to v2.11.0.
+# Sourced by the FTPS scenarios (03 explicit, 04 implicit, and 30
+# TLS max version) AFTER tests/integration/lib/common.sh. Plain-FTP
+# scenarios do NOT source this file, so common.sh carries no FTPS
+# helpers.
 #
 # Public API:
 #
@@ -177,32 +177,26 @@ generate_self_signed_cert() {
 # ------------------------------------------------------------------------------
 # _write_ftps_vsftpd_conf OUT_FILE LISTEN_PORT PASV_MIN PASV_MAX IMPLICIT_BOOL
 #   Write a vsftpd.conf overlay that enables SSL on the cached cert,
-#   pins the listen port to LISTEN_PORT (21 for explicit FTPS, 2122
-#   for implicit FTPS), and configures the PASV range the action's
+#   pins the listen port to LISTEN_PORT (start_ftps_server passes the
+#   host port: FTP_CONTROL_PORT, 2121, for explicit FTPS and
+#   FTP_IMPLICIT_PORT, 2122, for implicit FTPS), and configures the PASV range the action's
 #   mirror data channel will need.
 #
-#   This file is bind-mounted OVER /etc/vsftpd/vsftpd.conf inside
-#   the fauria container. The mount MUST be writable (no `:ro`):
-#   the container entrypoint (run-vsftpd.sh) appends PASV_ADDRESS /
-#   PASV_ENABLE / LOCAL_UMASK / FILE_OPEN_MODE / REVERSE_LOOKUP_ENABLE
-#   / PASV_PROMISCUOUS / PORT_PROMISCUOUS lines AFTER our content
-#   (sourced from env vars), and `>>` on a read-only bind mount
-#   surfaces as "Read-only file system" inside run-vsftpd.sh.
-#   Mounting writable is safe: vsftpd only reads the file at
-#   startup (it does not rewrite it on the fly), and our SSL
-#   directives persist through the appends because we put them
-#   AFTER the base config lines that the script appends, in a
-#   separate block. (run-vsftpd.sh only appends its known set of
-#   env-var-derived lines; our SSL block is not in that set.)
+#   This file is bind-mounted read-only (`:ro`) at /etc/vsftpd.conf
+#   inside the test-server image (tests/integration/Dockerfile.
+#   test-server) by start_ftps_server, whose startup command copies
+#   it to /tmp/vsftpd.conf, renames two TLS directives with sed and
+#   runs vsftpd on the copy. Nothing appends to the mounted file.
 #
-#   `force_local_data_ssl=NO` keeps the data channel plaintext for
-#   explicit FTPS — that is the typical production configuration
-#   (encrypt the credentials on the control channel, leave bulk
-#   transfer on the data channel unencrypted) and it matches what
-#   the action's `set ftp:ssl-allow true` actually negotiates.
-#   For implicit FTPS the wire is TLS from byte 0 anyway, but we
-#   still keep `force_local_data_ssl=NO` so the lftp `set
-#   ftp:ssl-allow true` default does not silently re-negotiate.
+#   `force_local_data_ssl=NO` only means vsftpd does not REQUIRE TLS
+#   on the data channel; it does not make the data channel
+#   plaintext. The action's build_ftp_settings (lib.sh) sets
+#   `ftp:ssl-allow` but never `ftp:ssl-protect-data`, whose lftp
+#   4.9.3 default is yes, so after AUTH TLS lftp sends PROT P and
+#   the data channel is encrypted (README: "then PROT P for data").
+#   `force_local_logins_ssl=YES` does require TLS for the login on
+#   the control channel. For implicit FTPS the control channel is
+#   TLS from byte 0 anyway.
 #
 #   Private to this file. Called only by start_ftps_server.
 # ------------------------------------------------------------------------------
@@ -214,8 +208,11 @@ _write_ftps_vsftpd_conf() {
   _wfvc_implicit=${5:-no}
 
   {
-    # Base virtual-user config (mirrors fauria's default vsftpd.conf
-    # so that db_load + virtual_use_local_privs keeps working).
+    # Base user config (originally modelled on fauria's default
+    # vsftpd.conf, which these scenarios used before the alpine
+    # test-server image). Authentication is the pam_unix service
+    # vsftpd_virtual, backed by a real user that start_ftps_server
+    # creates; no db_load / virtual-user database is involved.
     printf 'background=NO\n'
     printf 'anonymous_enable=NO\n'
     printf 'local_enable=YES\n'
@@ -236,8 +233,9 @@ _write_ftps_vsftpd_conf() {
     printf 'seccomp_sandbox=NO\n'
 
     # Listen port + PASV range — the action's data channel uses
-    # the PASV range; the host/container port mapping is set on
-    # `docker run -p` by start_ftps_server.
+    # the PASV range. The container runs with --network host, so
+    # listen_port is the host port itself; the `-p` mappings on
+    # start_ftps_server's `docker run` are ignored.
     printf 'listen=YES\n'
     printf 'listen_port=%s\n' "${_wfvc_port}"
     printf 'pasv_min_port=%s\n' "${_wfvc_pmin}"
@@ -252,11 +250,11 @@ _write_ftps_vsftpd_conf() {
       printf 'implicit_ssl=YES\n'
     fi
     printf 'ssl_enable=YES\n'
-    # OpenSSL 1.0.2 (the version fauria's centos:7 base ships)
-    # supports TLS 1.0/1.1/1.2 only — explicitly disable 1.0 and
-    # 1.1 so the server does not offer them. lftp's OpenSSL 3.x
-    # does not propose them anyway, so the negotiation collapses
-    # to TLS 1.2 on both ends.
+    # Explicitly disable TLS 1.0 and 1.1 so the server does not offer
+    # them, and allow 1.2. TLS 1.3 is not switched off here (see the
+    # note above debug_ssl below). start_ftps_server renames the two
+    # version gates ssl_tlsv1_1 / ssl_tlsv1_2 to the names the
+    # test-server image's vsftpd uses (ssl_tlsv11 / ssl_tlsv12).
     printf 'ssl_tlsv1=NO\n'
     printf 'ssl_tlsv1_1=NO\n'
     printf 'ssl_tlsv1_2=YES\n'
@@ -264,10 +262,12 @@ _write_ftps_vsftpd_conf() {
     printf 'ssl_sslv3=NO\n'
     printf 'rsa_cert_file=/etc/vsftpd/vsftpd.pem\n'
     printf 'rsa_private_key_file=/etc/vsftpd/vsftpd.pem\n'
-    # fauria/vsftpd ships with vsftpd 3.0.2 (CentOS 7 OpenSSL
-    # 1.0.2) and no ssl_dh_file directive — its built-in DH params
-    # are 1024-bit, which OpenSSL 3.x (the action image's lftp)
-    # rejects as "dh key too small" under default security level.
+    # No ssl_dh_file is set, so vsftpd falls back to its built-in DH
+    # params. That fallback was a 1024-bit group on the fauria/vsftpd
+    # server these scenarios originally used, and lftp's OpenSSL 3.x
+    # rejects it as "dh key too small" under the default security
+    # level. The restriction below dates from that server and is
+    # kept as is.
     # Workaround: force ECDHE-only key exchange via ssl_ciphers so
     # the DH key size never enters the handshake. DHE-RSA ciphers
     # are excluded; the RSA key exchange path (no DH params) is
@@ -356,8 +356,9 @@ _write_ftps_vsftpd_conf() {
 #     * Bind-mounts $CERT_FILE at /etc/vsftpd/vsftpd.pem
 #       (read-only).
 #     * Bind-mounts the overlay vsftpd.conf written by
-#       _write_ftps_vsftpd_conf at /etc/vsftpd/vsftpd.conf
-#       (read-only).
+#       _write_ftps_vsftpd_conf at /etc/vsftpd.conf (read-only);
+#       the container's startup command copies it to
+#       /tmp/vsftpd.conf and runs vsftpd on the copy.
 #     * Sets FTP_CONTAINER_NAME and FTP_DATA_DIR globals so the
 #       existing stop_ftp_server (common.sh, installed as the
 #       EXIT trap by scenario_setup) cleans up.
@@ -432,15 +433,15 @@ start_ftps_server() {
   # mix so ${_sfs_user} and ${_sfs_pass} are expanded by the OUTER
   # shell (the harness) and not by the container's /bin/sh.
   #
-  # alpine's vsftpd 3.0.5 package names its TLS version gates without
-  # the underscore before the version digit: ssl_tlsv11 / ssl_tlsv12
-  # instead of the upstream ssl_tlsv1_1 / ssl_tlsv1_2 used by the
-  # _write_ftps_vsftpd_conf helper (which targets the upstream
-  # / CentOS 7 build fauria ships). Passing the upstream names to
-  # alpine's binary aborts startup with "500 OOPS: unrecognised
-  # variable in config file". To keep _write_ftps_vsftpd_conf
-  # untouched, we copy its bind-mounted output to a writable path
-  # and sed-rewrite the two lines in-place.
+  # _write_ftps_vsftpd_conf writes the TLS version gates as
+  # ssl_tlsv1_1 / ssl_tlsv1_2. The vsftpd build in the test-server
+  # image (the version pinned in Dockerfile.test-server) expects
+  # ssl_tlsv11 / ssl_tlsv12 instead, and would reject the underscore
+  # names as unrecognised config variables. So this payload copies
+  # the read-only bind-mounted conf to a writable path and
+  # sed-rewrites those two lines in the copy. (History: the helper
+  # used the underscore names because they were written for the
+  # fauria/vsftpd image these scenarios originally used.)
   #
   # Why the image is pre-baked (closes #135): the previous version
   # of this payload started with `apk add --no-cache vsftpd`,
