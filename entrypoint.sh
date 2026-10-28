@@ -376,11 +376,17 @@ if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
        "${INPUT_USER}" || LOCK_RC=$?
   if [ "${LOCK_RC}" -ne 0 ]; then
     printf '::endgroup::\n'
-    printf 'ERROR: could not acquire concurrency lock at %s within %s seconds\n' \
-      "${INPUT_CONCURRENCY_LOCK_PATH}" "${INPUT_CONCURRENCY_LOCK_TIMEOUT}" >&2
-    # FND-0043: status 2 = the sentinel upload failed (lib.sh printed
-    # why); the lock is not held by anyone else.
-    if [ "${LOCK_RC}" -ne 2 ]; then
+    if [ "${LOCK_RC}" -eq 4 ]; then
+      printf 'ERROR: could not acquire concurrency lock at %s: the lock mkdir could not log in to or connect to the server (see the error above)\n' \
+        "${INPUT_CONCURRENCY_LOCK_PATH}" >&2
+    else
+      printf 'ERROR: could not acquire concurrency lock at %s within %s seconds\n' \
+        "${INPUT_CONCURRENCY_LOCK_PATH}" "${INPUT_CONCURRENCY_LOCK_TIMEOUT}" >&2
+    fi
+    # FND-0043 / FND-0092: lib.sh printed why for status 2 (sentinel
+    # upload failed), 3 (sentinel-less lock dir it could not remove) and
+    # 4 (login or connection failure); only status 1 may be a held lock.
+    if [ "${LOCK_RC}" -eq 1 ]; then
       printf 'ERROR: another deployment is currently in progress, or the previous holder crashed mid-mirror.\n' >&2
     fi
     printf 'ERROR: see README "Concurrency / deployment lock" for manual recovery instructions.\n' >&2
@@ -393,9 +399,14 @@ fi
 # ------------------------------------------------------------------------------
 # Execute the LFTP actions.
 #
-# B-09: Wrap with a hard global timeout (5h) so a hung lftp cannot
-# run past the GH Actions job limit. busybox `timeout` supports -k
-# for SIGKILL after a grace period.
+# B-09: Wrap each lftp attempt in a timeout (5h, LFTP_TIMEOUT) so one
+# hung lftp is killed instead of blocking forever. The cap is per
+# attempt, not for the whole run: a timed-out attempt (exit 143, or
+# 137 after the kill) is not a permanent error, so the loop below
+# retries it up to max_retries tries (0 = until stopped). On GitHub-
+# hosted runners the job's timeout-minutes (360 by default) usually
+# ends the run first when several attempts hang. busybox `timeout`
+# supports -k for SIGKILL after a grace period.
 #
 # B-05: Capture lftp's exit code explicitly. With `set -e` and `&&`,
 # a non-zero lftp exit was causing the script to abort via the

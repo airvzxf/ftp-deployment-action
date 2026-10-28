@@ -46,10 +46,10 @@ the action does not set it.
   `ftps://ftp.example.com` or `ftps://ftp.example.com:990`.
   Leave `ftp_ssl_allow` at its default.
 - **No TLS at all** (in-house FTP, an old NAS): use
-  `ftp://host` **and** set `ftp_ssl_allow: "false"`. You must
-  also set `ssl_verify_certificate: "false"` (it has no effect
-  on a plain FTP connection but the action's `validate_int` will
-  still require the value to be parseable).
+  `ftp://host` **and** set `ftp_ssl_allow: "false"`. You do not
+  need to touch `ssl_verify_certificate`: it is a boolean that
+  defaults to `true`, and it has no effect on a plain FTP
+  connection.
 
 > **Troubleshooting hand-off**: if the runner reports
 > `getpeername: Connection refused` on `ftps://host:990`, the
@@ -568,14 +568,16 @@ signal), the action issues `quote RMD <path>` to release
 the lock, both in the mirror invocation and via the EXIT
 trap as a fallback.
 
-**A wrong password or an unreachable server looks like a held
-lock.** The action only checks whether `mkdir` failed and discards
-lftp's output, so a login or connection error is treated like
-"directory exists": it waits the full `concurrency_lock_timeout`
-and then reports that another deployment is in progress. If that
-happens while no other job is running, check the credentials and
-the server first. A fresh run with `concurrency_lock: "false"`
-shows the real lftp error.
+**A wrong password or an unreachable server fails at once.** The
+action reads lftp's `mkdir` output. A login failure
+(`mkdir: Login failed: 530 ...`) or a connection failure
+(`Connection refused`, an unknown host, a connect timeout) is not a
+held lock: the action exits 1 right away with
+`ERROR: concurrency lock: lftp could not log in to <server>` (or
+`could not connect to <server>`), followed by lftp's error line,
+without polling. Any other `mkdir` failure, including a `421` or
+`530` connection limit that lftp gave up retrying, counts as "lock
+held" and is polled as before.
 
 **Why MKD/RMD and not a "lock" command.** lftp does not
 ship a server-side `lock` primitive — it only has
@@ -636,6 +638,20 @@ attempt failed this way, the action exits 1 with
 <path>/<sentinel> failed; check write permission and quota under
 concurrency_lock_path` instead of saying that another deployment is
 in progress.
+
+**A lock dir that cannot be removed.** On a server that allows
+`mkdir` but refuses `RMD` (or when the `RMD` fails for another
+reason), the cleanup after a failed sentinel upload, or the takeover
+of a lock dir without a sentinel, leaves the dir in place. The
+runner then exits 1 with `ERROR: lock dir <path> exists without a
+sentinel and could not be removed (RMD refused or failed). Remove
+<path> on the server by hand, or check the server's delete
+permission under concurrency_lock_path`. The run whose upload failed
+adds `the lock dir <path> could not be removed either` to its upload
+error. A later run only tries the takeover after 120 seconds, so it
+needs a `concurrency_lock_timeout` longer than that to report this;
+with a shorter timeout (or `"0"`) it reports another deployment in
+progress.
 
 If a holder died less than 6 hours ago, the next deploys fail
 with that error until you clear the lock. Delete the two entries
@@ -796,7 +812,8 @@ and got SIGKILL; it is never GNU `timeout`'s `124`.
 | `Fatal error: certificate verify failed` (TLS) | The server uses a self-signed certificate, the cert is expired, or you are connecting to a bare IP. | `ssl_verify_certificate` is `true` by default since v2.0.0. If you trust the server, set `ssl_verify_certificate: "false"` explicitly. For a bare IP you cannot validate a hostname — use a hostname with a real cert or opt out. |
 | `Connection refused` / hangs on connect | Wrong host/port, firewall blocking outbound 21/990, or the FTP server is down. | Verify `server` (`ftp://host:21` or `ftps://host:990`). From the runner, `nc -vz host 21` should succeed. Some shared hosters block the runner's IP range — ask them to allow-list it. |
 | `Fatal error: max-retries exceeded` with no reason in parentheses, and the banner says `lftp got no reply from the server` | The connection never got an FTP greeting: a firewall drops the packets, the host or port is wrong, or the server closes the connection before replying. Each try waits for `net_timeout`, so the step looks like a slow loop of the same message. | Same checks as `Connection refused`. GitHub-hosted runners connect from Azure IP ranges: hosters and VPS firewalls often block them, so allow-list the range or use a self-hosted runner. To see each connect attempt and its timeout, add `lftp_settings: "debug 3;"` for one run. |
-| `another deployment is currently in progress` after waiting `concurrency_lock_timeout`, while no other job is running | With `concurrency_lock: "true"`, any failure of the lock `mkdir` is treated as the lock being held, including a login or connection error (lftp's output is discarded, so the real error is not shown). | Check `user`, `password` and `server` first. Run once with `concurrency_lock: "false"` to see the real lftp error. If the credentials are fine, see [Concurrency / deployment lock](#concurrency--deployment-lock) for clearing a stale lock. |
+| `another deployment is currently in progress` after waiting `concurrency_lock_timeout`, while no other job is running | With `concurrency_lock: "true"`, a lock `mkdir` failure other than a login or connection error (those fail at once with `could not log in to` / `could not connect to`) is treated as the lock being held: a live holder's sentinel, a lock dir left without a sentinel that this run did not try to remove (it waits 120 seconds first), or an unrecognised server reply. | See [Concurrency / deployment lock](#concurrency--deployment-lock) for clearing a stale lock. A lock dir without a sentinel is removed only after 120 seconds, so use a `concurrency_lock_timeout` above that. |
+| `lock dir <path> exists without a sentinel and could not be removed` | The server refused (or failed) the `RMD` of the lock dir, after a failed sentinel upload or during a takeover. | Remove the dir by hand (`quote RMD <path>`) and give the FTP user delete permission under `concurrency_lock_path`. |
 | `mirror: Access failed: 550 ... No such file or directory` | The remote path does not exist or the FTP user has no permission to create it. | Create the `remote_dir` manually (or set `delete: false` and accept a partial mirror) and confirm the FTP user owns it. |
 | `mirror: <path>: Permission denied` or `mirror: Access failed: <path>: Permission denied`, with no `550` | The `<path>` is a **local** path under `local_dir`, unlike the remote `550` rows above. The action runs as the unprivileged `lftp` user and cannot read a file or directory that is not world-readable (for example after `umask 077`, files written `0600` by a root step, or a `mktemp -d` directory). lftp uploads the other files, then exits 1. The action does not treat this as permanent, so it retries until `max_retries` runs out. | Add a step before the action: `chmod -R a+rX <local_dir>` (files `o+r`, directories `o+rx`). See [Self-hosted runners](#self-hosted-runners). |
 | `getpeername: Connection refused` on `ftps://host:990` | The server is **not** speaking implicit FTPS — it is almost certainly explicit FTPS on port 21. The `ftps://` URL forces TLS from byte 0, which the server rejects. | Switch `server` to `ftp://host:21` and keep `ftp_ssl_allow: "true"`. See the "Plain FTP vs FTPS" table in [Security and SSL](#security-and-ssl). |

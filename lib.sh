@@ -1267,11 +1267,12 @@ rewrite_lftp_url() {
 #   Run a single lftp invocation with the given parameters, capturing
 #   combined stdout+stderr to LOG_FILE. The function returns lftp's
 #   exit code via the function-return convention. The caller is
-#   responsible for the retry loop, the timeout wrapper, and the
-#   backoff between attempts.
+#   responsible for the retry loop and the backoff between
+#   attempts; this function applies the `timeout` wrapper itself.
 #
-#   This is the B-09 + B-05 plumbing: a hard global timeout around
-#   lftp, and an explicit exit-code capture so the caller's
+#   This is the B-09 + B-05 plumbing: a per-attempt timeout around
+#   lftp (not a global cap: the caller retries a timed-out attempt),
+#   and an explicit exit-code capture so the caller's
 #   `set -e` does not short-circuit the failure banner.
 #
 #   v2.11.8 (#259): removed the LOCK_ACQUIRE / LOCK_RELEASE positional
@@ -1359,7 +1360,14 @@ LOCK_EMPTY_GRACE=120
 #   (refresh_lock_sentinel, FND-0003), so its age is the time since
 #   the holder's last attempt started, not since the acquire.
 #
-#   Stale-lock recovery: on every MKD failure (550, lock held), the
+#   MKD failure classification (FND-0092): the `mkdir` output is
+#   captured. A login failure ("mkdir: Login failed: ...") or a
+#   connection failure (refused, connect timeout, unknown host) is not
+#   a held lock: the function prints that lftp line and returns 4 at
+#   once, without polling. Every other MKD failure (normally
+#   "mkdir: Access failed: 550 ...", the dir exists) counts as held.
+#
+#   Stale-lock recovery: on every MKD failure counted as held, the
 #   function does a `cls -la LOCK_PATH` (lftp's high-level ls) to look
 #   for sentinel files inside the lock dir. If the OLDEST sentinel exists
 #   and its embedded timestamp is older than LOCK_STALE_AFTER, the
@@ -1403,6 +1411,16 @@ LOCK_EMPTY_GRACE=120
 #   the sentinel PUT after a successful MKD; it then prints that the
 #   lock dir was created but the sentinel upload failed, not that
 #   the lock is held.
+#   Returns 3 (FND-0092) when it gives up on a lock dir that has no
+#   sentinel and that it could not remove: the RMD of its own cleanup
+#   after a failed sentinel PUT, or of its takeover, failed, and the
+#   last listing showed no sentinel. It then prints the path and says
+#   to remove it by hand or check the delete permission. Both RMDs use
+#   lftp's `rmdir`, which (unlike `quote RMD`) exits non-zero on a 5xx
+#   reply. A takeover runs only after LOCK_EMPTY_GRACE, so a waiter
+#   whose timeout is shorter (or "0") cannot detect this and returns 1.
+#   Returns 4 (FND-0092) on a login or connection failure of the MKD
+#   (see above), with or without a timeout.
 #   The caller MUST
 #   have a readable ${NETRC} at $HOME and MUST have `set -e`
 #   disabled around the call to this function (or check the
@@ -1434,6 +1452,11 @@ acquire_lock_with_recovery() {
   # FND-0043: why the last attempt failed. "put" = MKD ok but the
   # sentinel PUT failed; "held" = MKD failed. Picks the final error.
   _alwr_last_fail=""
+  # FND-0092: 1 when our last RMD of the lock dir (PUT-failure cleanup
+  # or takeover) failed; _alwr_list_empty: 1 when the last successful
+  # listing of the lock dir showed no sentinel.
+  _alwr_rmd_failed=0
+  _alwr_list_empty=0
 
   # v2.11.x (#132): rewrite the URL when it has a scheme but no
   # embedded user. Without this, lftp 4.9.3 falls back to USER
@@ -1518,11 +1541,49 @@ acquire_lock_with_recovery() {
     # `set +e` because MKD on a held lock returns 550, which is
     # the common case (not an error).
     set +e
-    timeout 30s lftp "${_alwr_server_eff}" \
-      -e "${_alwr_preamble} mkdir ${_alwr_path}; quit;" \
-      >/dev/null 2>&1
+    _alwr_mkd_out=$(timeout 30s lftp "${_alwr_server_eff}" \
+      -e "${_alwr_preamble} mkdir ${_alwr_path}; quit;" 2>&1)
     _alwr_mkd_rc=$?
     set -e
+
+    # FND-0092: a login or connection failure is not a held lock; fail
+    # fast with lftp's line. Lines as printed by lftp 4.9.3 (checked
+    # against vsftpd): "mkdir: Login failed: 530 Login incorrect.",
+    # "mkdir: Fatal error: max-retries exceeded (Connection refused)",
+    # "mkdir: Fatal error: max-retries exceeded" (connect timeout),
+    # "open: <host>: Name does not resolve" (musl; glibc: "Name or
+    # service not known"). "max-retries exceeded (<reply>)", e.g. a 421
+    # or 530 connection limit, is transient and stays "held", as in
+    # classify_permanent_error; so does anything unrecognised, and an
+    # expired `timeout` wrapper (124 GNU, 143 busybox, 137 KILL), which
+    # is inconclusive (lftp's own net:timeout normally ends first).
+    _alwr_mkd_fail=""
+    _alwr_mkd_line=""
+    case "${_alwr_mkd_rc}" in
+      0|124|137|143) ;;
+      *)
+        while IFS= read -r _alwr_line; do
+          case "${_alwr_line}" in
+            "mkdir: Login failed: "*)
+              _alwr_mkd_fail="log in to" ;;
+            "mkdir: Fatal error: max-retries exceeded (Connection refused)" \
+              | "mkdir: Fatal error: max-retries exceeded" \
+              | *": Name does not resolve" | *": Name or service not known")
+              _alwr_mkd_fail="connect to" ;;
+            *) continue ;;
+          esac
+          _alwr_mkd_line=${_alwr_line}
+          break
+        done <<EOF
+${_alwr_mkd_out}
+EOF
+        ;;
+    esac
+    if [ -n "${_alwr_mkd_fail}" ]; then
+      printf 'ERROR: concurrency lock: lftp could not %s %s, so the lock was not tried (this is not a held lock): %s\n' \
+        "${_alwr_mkd_fail}" "${_alwr_server}" "${_alwr_mkd_line}" >&2
+      return 4
+    fi
 
     if [ "${_alwr_mkd_rc}" -eq 0 ]; then
       # Got the lock. Write the sentinel so the next runner can
@@ -1570,15 +1631,19 @@ acquire_lock_with_recovery() {
       # partial sentinel inside it, then RMD, best-effort before
       # retrying so the next iteration either wins
       # MKD against a clean tree or hands off to stale-recovery.
-      # Mirrors the recovery branch's set +e / set -e / >/dev/null
-      # swallow semantics (transient RMD failures are not actionable).
+      # FND-0092: `rmdir` (not `quote RMD`) is the last command, so
+      # lftp's exit code says whether the RMD failed; it is remembered
+      # for the final error (a sentinel-less dir nobody can remove).
       if [ "${_alwr_put_rc}" -ne 0 ]; then
         _alwr_last_fail="put"
         set +e
         timeout 10s lftp "${_alwr_server_eff}" \
-          -e "${_alwr_preamble} quote DELE ${_alwr_path}/${_alwr_sentinel}; quote RMD ${_alwr_path}; quit;" \
+          -e "${_alwr_preamble} quote DELE ${_alwr_path}/${_alwr_sentinel}; rmdir ${_alwr_path}; quit;" \
           >/dev/null 2>&1
+        _alwr_rmd_rc=$?
         set -e
+        _alwr_rmd_failed=0
+        [ "${_alwr_rmd_rc}" -eq 0 ] || _alwr_rmd_failed=1
         # FND-0043: a persistent PUT failure (quota, permissions, a
         # refused name) must neither loop forever with timeout=0 nor
         # spin MKD/PUT/RMD without a pause until the deadline.
@@ -1594,7 +1659,8 @@ acquire_lock_with_recovery() {
       return 0
     fi
 
-    # Step 2: MKD failed (550 = held, or connection refused).
+    # Step 2: MKD failed and counts as held (normally a 550, the dir
+    # exists; login and connection failures returned 4 above).
     _alwr_last_fail="held"
     # F2 audit (#251): when timeout=0 the caller has explicitly
     # opted out of lock-orchestration ("fail immediately when
@@ -1633,6 +1699,8 @@ acquire_lock_with_recovery() {
     fi
 
     _alwr_stale_files=$(_lock_parse_sentinel_listing "${_alwr_listing}") || _alwr_stale_files=""
+    _alwr_list_empty=0
+    [ -n "${_alwr_stale_files}" ] || _alwr_list_empty=1
     _alwr_took_over=1
     if [ -z "${_alwr_stale_files}" ]; then
       # FND-0042: no sentinel may mean a live holder between MKD and
@@ -1699,12 +1767,17 @@ acquire_lock_with_recovery() {
 ${_alwr_stale_files}
 EOF
       fi
-      _alwr_recover_script="${_alwr_recover_script} quote RMD ${_alwr_path}; quit;"
+      # FND-0092: `rmdir`, not `quote RMD`, so a refused RMD shows in
+      # the exit code (it sends the same single RMD command).
+      _alwr_recover_script="${_alwr_recover_script} rmdir ${_alwr_path}; quit;"
       set +e
       timeout 10s lftp "${_alwr_server_eff}" \
         -e "${_alwr_recover_script}" \
         >/dev/null 2>&1
+      _alwr_rmd_rc=$?
       set -e
+      _alwr_rmd_failed=0
+      [ "${_alwr_rmd_rc}" -eq 0 ] || _alwr_rmd_failed=1
       # FND-0083: whatever dir we see next is a new incarnation (or
       # ours failed to go); time its sentinel-less period from scratch.
       _alwr_empty_since=""
@@ -1722,7 +1795,18 @@ EOF
   if [ "${_alwr_last_fail}" = "put" ]; then
     printf 'ERROR: lock dir %s was created but the sentinel upload to %s/%s failed; check write permission and quota under concurrency_lock_path\n' \
       "${_alwr_path}" "${_alwr_path}" "${_alwr_sentinel}" >&2
+    if [ "${_alwr_rmd_failed}" = 1 ]; then
+      printf 'ERROR: the lock dir %s could not be removed either (RMD refused or failed); remove it on the server by hand, or check the delete permission under concurrency_lock_path\n' \
+        "${_alwr_path}" >&2
+    fi
     return 2
+  fi
+  # FND-0092: a sentinel-less lock dir that our RMD could not remove.
+  if [ "${_alwr_last_fail}" = "held" ] && [ "${_alwr_rmd_failed}" = 1 ] \
+      && [ "${_alwr_list_empty}" = 1 ]; then
+    printf 'ERROR: lock dir %s exists without a sentinel and could not be removed (RMD refused or failed). Remove %s on the server by hand, or check the server'"'"'s delete permission under concurrency_lock_path\n' \
+      "${_alwr_path}" "${_alwr_path}" >&2
+    return 3
   fi
   if [ -n "${_alwr_holder}" ]; then
     printf 'ERROR: lock %s is held by %s (age %s s); if that run is gone, delete %s/%s and then %s on the server\n' \
