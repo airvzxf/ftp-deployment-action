@@ -24,11 +24,16 @@ COPY entrypoint.sh lib.sh openssl-tls12.cnf VERSION /app/
 RUN chmod 0644 /app/VERSION /app/openssl-tls12.cnf /app/lib.sh \
  && chmod 0755 /app/entrypoint.sh
 
-# B-03 / B-14: the script writes the .netrc file at $HOME/.netrc, so
-# HOME must point at the lftp user's writable home. Without this ENV
-# HOME is inherited as /root from the base image; USER lftp is set
-# further down and at that point the lftp user has no write access to
-# /root, which would make the .netrc write fail.
+# B-03 / B-14: default HOME for the image: pins HOME to the lftp user's
+# home for a `docker run` debugging session or a shell in the container
+# (running as the lftp user, set further down), whatever the runtime
+# would otherwise derive (podman/runc take it from /etc/passwd when it
+# is unset). This ENV does not decide where the .netrc goes:
+# entrypoint.sh pins NETRC="/home/lftp/.netrc" and exports
+# HOME="/home/lftp" itself, unconditionally, before write_netrc (#111),
+# because a runner can pass its own HOME (e.g. -e HOME=/github/home),
+# which overrides this ENV. Do not treat this ENV as the safeguard for
+# the .netrc path; the pin in entrypoint.sh is.
 ENV HOME=/home/lftp
 
 # B-14: drop root. From here on, every process in the container runs as

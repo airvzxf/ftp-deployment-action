@@ -881,3 +881,58 @@ RUN
   [ -z "$(ls -A "${FIX}/sigtmp")" ]
   [[ "$output" != *"OK: v99.0.1"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# FND-0023: the script is NOT cwd-independent. Only the fetch and the
+# allow-list reads use REPO_ROOT; tag lookup and `git verify-tag` run in
+# the caller's cwd. Pinned so the header comment stays true.
+# ---------------------------------------------------------------------------
+
+@test "FND-0023: run from outside any repo, the tag is 'not found locally' (exit 1)" {
+  need_ssh
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  ssh_tag v99.0.1 keyA
+  mkdir -p "${FIX}/norepo"
+  export GIT_CEILING_DIRECTORIES="${FIX}"
+
+  cd "${FIX}/norepo"
+  run "${FIX}/work/scripts/verify-tag.sh" v99.0.1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"tag v99.0.1 not found locally"* ]]
+}
+
+@test "FND-0023: run from another repo, that repo's tag is verified against this repo's origin/main" {
+  need_ssh
+  new_key keyA
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  # The tag exists only in 'other', not in work/.
+  git init -q -b main "${FIX}/other"
+  git -C "${FIX}/other" commit -q --allow-empty -m other
+  git -C "${FIX}/other" -c gpg.format=ssh -c user.signingkey="${FIX}/keyA" \
+    tag -s -m v99.0.3 v99.0.3 2>"${FIX}/tag.err" \
+    || skip "cannot create SSH-signed tags here: $(cat "${FIX}/tag.err")"
+
+  cd "${FIX}/other"
+  run "${FIX}/work/scripts/verify-tag.sh" v99.0.3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK: v99.0.3 is signed by a key in .github/trusted-signers"* ]]
+}
+
+@test "FND-0023: a failed verification exits 1 and .git/config is left unchanged" {
+  need_ssh
+  new_key keyA; new_key keyB
+  make_fixture
+  publish_allowlist keyA
+  make_work
+  ssh_tag v99.0.2 keyB
+  cp "${FIX}/work/.git/config" "${FIX}/config.before"
+
+  verify v99.0.2
+  [ "$status" -eq 1 ]
+  cmp "${FIX}/config.before" "${FIX}/work/.git/config"
+}

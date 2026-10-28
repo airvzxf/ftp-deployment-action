@@ -779,9 +779,13 @@ non-buildable image) **before** a tag is pushed.
 lftp's own output (transferred files, the `dry_run` plan, server errors) is
 printed in the step log; there is nothing else to download.
 
-When the global 5-hour timeout is reached the lftp process is killed and the
-action exits with `1` (the most recent lftp exit code is also printed to the
-log for debugging).
+Each lftp attempt is capped at 5 hours. When an attempt hits the cap, the lftp
+process is killed and the attempt counts as one of the `max_retries` tries like
+any other failure (it is not a permanent error; with `max_retries: "0"` it is
+retried until the job is stopped). After the last try the action exits with
+`1` and prints the most recent lftp exit code for debugging. The image uses busybox `timeout`, so that lftp exit code is
+`143` (SIGTERM at the 5-hour cap), or `137` if lftp was still running 30 s later
+and got SIGKILL; it is never GNU `timeout`'s `124`.
 
 ## Troubleshooting
 
@@ -802,8 +806,11 @@ log for debugging).
 
 > **The job is still running for hours**: `lftp` is probably waiting on a
 > half-open TCP connection. Since v1.5.0 the action wraps every
-> invocation in a hard 5-hour `timeout`; the job will be killed (exit
-> `1`) at that point. If you want to fail faster, set `net_timeout` /
+> lftp attempt in a hard 5-hour `timeout`; a stuck attempt is killed at
+> that point and counts as one of the `max_retries` tries, and the action
+> exits `1` after the last one. The job's `timeout-minutes` (360 by default
+> on GitHub-hosted runners) usually ends the run first when several
+> attempts hang. If you want to fail faster, set `net_timeout` /
 > `dns_fatal_timeout` lower than the defaults (`15s` / `10s`).
 
 ## Self-hosted runners

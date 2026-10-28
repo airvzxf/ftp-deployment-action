@@ -7,7 +7,8 @@
 #
 # Requirements:
 #   - docker or podman on PATH
-#   - network access to pull alpine:3.23.3 (first run only)
+#   - the pre-built smoke image (SMOKE_IMAGE; `make build-smoke-image`).
+#     The suite pulls nothing: it fails fast if the image is missing.
 #
 # Skip (exit 0) if no container runtime is available.
 
@@ -583,8 +584,9 @@ pass "concurrency_lock_path with '..' is rejected with exit 2"
 
 # ----------------------------------------------------------------------------
 # Test 33: INPUT_CONCURRENCY_LOCK=true with poll_interval=0 → exit 2
-# (we explicitly reject 0 because it would cause a division-by-zero
-# in the iteration-count computation).
+# (we explicitly reject 0 because the acquire loop sleeps the poll
+# interval between attempts under a wall-clock deadline, so 0 would
+# spin MKD/PUT/RMD with no pause until the deadline).
 # ----------------------------------------------------------------------------
 out=$(run_init "INPUT_CONCURRENCY_LOCK=true" "INPUT_CONCURRENCY_LOCK_POLL_INTERVAL=0" 10)
 echo "${out}" | grep -q "concurrency_lock_poll_interval must be > 0" \

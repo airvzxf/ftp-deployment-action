@@ -1,10 +1,12 @@
 #!/bin/sh
 # 20-action-yml-defaults.sh — frozen acceptance scenario.
 #
-# Business rule: a user who sets ONLY the required inputs gets a working
-# deployment. GitHub injects every action.yml default as INPUT_*; this
-# scenario does the same (instead of the hand-picked env the other
-# scenarios use), uploads to remote_dir "/" and must finish quickly.
+# Business rule: a user who sets the required inputs (server, user,
+# password) plus local_dir and remote_dir and leaves everything else at
+# its action.yml default gets a working deployment. GitHub injects every
+# action.yml default as INPUT_*; this scenario does the same (instead of
+# the hand-picked env the other scenarios use), then sets INPUT_LOCAL_DIR=/data
+# and INPUT_REMOTE_DIR=/ (it uploads to remote_dir "/") and must finish quickly.
 #
 # Expected:   exit 0, "FTP UPLOADED FINISHED" banner, fixtures on the
 #             server, wall-clock < 60 s.

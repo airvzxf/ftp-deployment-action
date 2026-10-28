@@ -47,8 +47,8 @@
 # (FND-0013).
 set -eu
 
-# pipefail is supported by busybox ash (the shell that actually runs in alpine).
-# With it, a pipeline's exit status is that of the last (rightmost)
+# pipefail: busybox ash, the shell that actually runs in alpine,
+# supports it. With it, a pipeline's exit status is that of the last (rightmost)
 # command that exited non-zero, or 0 if every command succeeded;
 # without it the status is always the last command's. Under `set -e`
 # a pipeline that then returns non-zero stops the script, unless it
@@ -56,9 +56,9 @@ set -eu
 # after `!`). It matters for `lftp | tee` in run_lftp_once (lib.sh):
 # the function returns lftp's exit code instead of tee's, and if
 # both fail the status is tee's. run_lftp_once also sets pipefail
-# itself, so it does not depend on this line. POSIX sh does not
-# define pipefail (shellcheck SC3040), but the runtime guarantees it
-# is available.
+# itself, so it does not depend on this line. pipefail was only added
+# to POSIX in POSIX.1-2024 (Issue 8), so shellcheck still flags it
+# (SC3040).
 # shellcheck disable=SC3040
 set -o pipefail
 
@@ -298,9 +298,10 @@ fi
 #
 # v2.11.0: pin NETRC and HOME to the path the Dockerfile guarantees to be
 # writable for the `lftp` user. Self-hosted runners that forward
-# HOME=/github/home (or any other host path) into the container would
-# otherwise make the fallback `: "${HOME:=/home/lftp}"` a no-op, and the
-# `lftp` user could not create /github/home/.netrc. This closes #111.
+# HOME=/github/home (or any other host path) into the container made
+# the pre-v2.11.0 fallback `: "${HOME:=/home/lftp}"` a no-op (it only
+# sets HOME when unset), and the `lftp` user could not create
+# /github/home/.netrc. This closes #111.
 # See tests/integration/scenarios/07-self-hosted-home.sh for the
 # regression test that pinned this fix.
 # ------------------------------------------------------------------------------

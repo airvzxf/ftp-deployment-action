@@ -64,10 +64,12 @@ if ! ${RUNTIME} image inspect "${IMAGE}" >/dev/null 2>&1; then
 fi
 
 # Same fail-fast for the pre-baked FTPS test server image (closes
-# #135). Scenarios 03 / 04 will surface a confusing
-# `vsftpd: not found` (or, post-pre-bake, a wait_for_port timeout)
-# if this image is missing; checking up-front makes the failure
-# mode obvious. Mirror the IMAGE block above: re-default from
+# #135). Without this check a missing image would surface late and
+# confusingly: every start_ftp_server scenario would time out in
+# wait_for_port after 20s (it runs nc from this image), and the FTPS
+# scenarios would fail at `docker run -d` (`vsftpd: not found` was the
+# pre-#135 symptom). The check below makes that hypothetical: the
+# runner exits 2 up front. Mirror the IMAGE block above: re-default from
 # TEST_SERVER_IMAGE for callers that set the make variable but not
 # the orchestrator's FTPS-specific name.
 : "${FTP_TEST_SERVER_IMAGE:=${TEST_SERVER_IMAGE:-ftp-deployment-action-test-server:ci-integration}}"

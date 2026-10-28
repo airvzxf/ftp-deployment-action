@@ -28,35 +28,44 @@
 #     TERM) so the PGP keyring import never lands in permanent
 #     `~/.gnupg`, and `git verify-tag` never consults it, whatever the
 #     tag's format.
-#   * Git config is passed via per-invocation `git -c` overrides (or
-#     `--local` config in a temp repo, see below) — never written to
-#     the developer's `.git/config`.
+#   * Git config is passed only via per-invocation `git -c` overrides
+#     (see `vgit` below); there is no temp repo and nothing is ever
+#     written to the developer's `.git/config`.
 #   * The allow-lists are copied out of `origin/main` into a
 #     `mktemp -d` (cleaned by the same trap). The only change to the
-#     repository is the fetch refreshing `refs/remotes/origin/main`
-#     (and FETCH_HEAD); it never makes the clone shallow.
+#     repository that holds this script is the fetch, which refreshes
+#     `refs/remotes/origin/main` (and FETCH_HEAD, and may add objects);
+#     it never makes the clone shallow.
 #
 # Usage
 # -----
 #   scripts/verify-tag.sh <tag>
 #
-# Where <tag> is a tag present in the current working tree (e.g.
-# `v2.11.0`).
+# Where <tag> is a tag (e.g. `v2.11.0`) that exists as `refs/tags/<tag>`
+# in the git repository of the caller's current directory. Run it from
+# inside the clone (see the note on the working directory below).
 #
 # Exit codes
 # ----------
 #   0  tag is signed by a key in .github/trusted-signers (SSH) or
 #      .github/trusted-signers.asc (PGP), or is one of the legacy
-#      lightweight tags listed in SECURITY.md (v1.0-alpha.1 … v1.3.3;
-#      informational).
+#      tags listed in SECURITY.md ("Legacy lightweight tags":
+#      v1.0-alpha.1, v1.0-alpha.2, v1.1, v1.2.0, v1.3.0 … v1.3.3) and
+#      is lightweight or an unsigned annotated tag (informational: an
+#      INFO line, no fetch, no signature check). The list is hard-coded
+#      in `is_legacy_unsigned`; it is not read from SECURITY.md.
 #   1  tag is not found locally, or it is lightweight / unsigned and
 #      not a listed legacy tag (release.yml would reject it), or its
 #      signature could not be verified against the origin/main
-#      allow-lists, or its tag header does not name <tag>, or
+#      allow-lists (including a PGP-signed tag when gpg is not
+#      installed or origin/main has no .asc), or its tag header does
+#      not name <tag>, or the tag object cannot be read, or
 #      origin/main (and so its allow-list) could not be fetched or has
 #      no trusted-signers, or origin/main's trusted-signers.asc could
 #      not be imported into the temp keyring (this affects SSH-signed
-#      tags too).
+#      tags too), or a mktemp fails. When `git verify-tag` itself
+#      fails, the script exits with that command's status (errexit),
+#      which is 1 for a failed verification.
 #   2  usage error.
 #   130 interrupted (SIGINT), after removing the temp dirs.
 #   143 terminated (SIGTERM), after removing the temp dirs.
@@ -64,6 +73,10 @@
 # Dependencies
 # ------------
 #   * git (always present in the maintainer's environment).
+#   * ssh-keygen (vgit pins gpg.ssh.program to it; needed to verify
+#     an SSH-signed tag).
+#   * mktemp, awk, sed and grep (POSIX tools; awk detects the format,
+#     sed reads the tag header).
 #   * gpg (used for any signed tag when origin/main has a
 #     trusted-signers.asc, to import it into the temp keyring; a
 #     PGP-signed tag fails without it, an SSH-signed one does not
@@ -72,9 +85,14 @@
 
 set -eu
 
-# Resolve repo root from the script's own location so the script
-# works regardless of the caller's cwd. `CDPATH=` and >/dev/null keep
-# an exported CDPATH from sending cd elsewhere and printing (FND-0022).
+# Resolve repo root from the script's own location. Only the fetch and
+# the allow-list reads (`git -C "${REPO_ROOT}"`) use it; the tag
+# lookups and `git verify-tag` (rev-parse, cat-file, vgit) run in the
+# caller's cwd, so the script is NOT cwd-independent: outside a repo it
+# reports "tag not found locally", and in another repo it verifies that
+# repo's tag against this repo's origin/main allow-lists. `CDPATH=` and
+# >/dev/null keep an exported CDPATH from sending cd elsewhere and
+# printing (FND-0022).
 # shellcheck disable=SC1007
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" >/dev/null && pwd)
 # shellcheck disable=SC1007
@@ -146,14 +164,19 @@ fetch_allowlists() {
   fi
 }
 
-# Detect the tag's signature format, for the messages only: the
-# verification itself does not depend on it (see verify_signature).
+# Detect the tag's signature format. It decides whether verification
+# runs at all ('unsigned' and 'lightweight' skip the fetch and
+# `git verify-tag`: legacy tags exit 0, others exit 1) and whether
+# the PGP keyring is imported; for 'ssh' and 'pgp', `git verify-tag`
+# itself picks the backend (see verify_signature).
 # Output: 'ssh', 'pgp', 'unsigned' (an annotated tag without a
-# signature block) or 'lightweight' (not a tag object). Like git, it
-# takes the signature to start at the LAST line that is exactly a
-# BEGIN PGP/SSH SIGNATURE marker, so text in the message body cannot
-# change the result. The object is captured first (POSIX sh has no
-# pipefail).
+# signature block) or 'lightweight' (not a tag object). It takes the
+# signature to start at the LAST line that is exactly a BEGIN PGP/SSH
+# SIGNATURE marker, so text in the message body cannot change the
+# result. git matches markers more loosely (by prefix, and it also
+# knows PGP MESSAGE / x509 blocks); such tags come out 'unsigned'
+# here and fail closed. The object is captured first (POSIX sh has
+# no pipefail).
 detect_signature() {
   _tag=$1
   if ! git cat-file -t "refs/tags/${_tag}" 2>/dev/null \

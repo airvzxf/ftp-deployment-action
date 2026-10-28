@@ -45,10 +45,12 @@ _indirection() {
 #   v2.11.3.1 (post-release F2 audit): the previous implementation
 #   piped through `grep -qE '^[0-9]+$'`, which matches per LINE —
 #   a value like `"2\n!cmd"` satisfied `^[0-9]+$` on the first line
-#   and slipped past validation. Since every validate_int input
-#   flows verbatim into the `lftp -e` script body (via
+#   and slipped past validation. Since most validate_int inputs
+#   flow verbatim into the `lftp -e` script body (via
 #   build_ftp_settings' `set <key> <value>;` and build_mirror_command's
-#   `--verbose=`), a newline would start a new lftp command line and
+#   `--verbose=`; max_retries and the two concurrency_lock integers
+#   are used only by the shell), a newline would start a new lftp
+#   command line and
 #   `!` would invoke the lftp shell-escape. Same RCE class as
 #   #171 / #172. Use a POSIX case-pattern instead so the entire
 #   string is checked, including any embedded newlines.
@@ -68,9 +70,10 @@ validate_int() {
 # ------------------------------------------------------------------------------
 # validate_bool NAME VALUE
 #   Exit 2 if VALUE is not a recognised boolean. v2.11.3 (#171):
-#   the 7 boolean inputs (`ftp_ssl_allow`, `ssl_verify_certificate`,
-#   `ssl_check_hostname`, `ftp_passive_mode`, `ftp_use_feat`,
-#   plus the two duration inputs handled by validate_duration)
+#   the five boolean inputs that entrypoint.sh checks with this
+#   function directly (`ftp_ssl_allow`, `ssl_verify_certificate`,
+#   `ssl_check_hostname`, `ftp_passive_mode`, `ftp_use_feat`),
+#   plus the two duration inputs handled by validate_duration,
 #   flow verbatim into `build_ftp_settings` -> `lftp -e "set <key>
 #   <value>;"`. A malicious value containing `;` or `!` would let
 #   the workflow author escape into lftp's command parser and
@@ -173,11 +176,17 @@ normalize_bool() {
 #     * empty string — the action.yml default applies
 #     * "never"      — lftp's documented sentinel that disables
 #                       the timeout (see action.yml::dns_fatal_timeout)
-#     * a positive integer optionally followed by one of
+#     * one or more digits, optionally followed by exactly one of
 #       s|m|h|d|S|M|H|D (seconds, minutes, hours, days; case-
 #       insensitive to match lftp's own parser)
 #
-#   Examples accepted: 15, 15s, 5m, 1h, 2d, 30S, 5M, never
+#   Zero is accepted (`0`, `0s`). A leading zero followed by another
+#   digit (`00`, `01`, `05s`) is rejected. The unit is optional, so a
+#   bare number is accepted and lftp reads it as seconds. Signs,
+#   decimals, a second unit (`5s5m`) and a unit with no digits (`s`)
+#   are rejected.
+#
+#   Examples accepted: 0, 0s, 15, 15s, 5m, 1h, 2d, 30S, 5M, never
 #   Examples rejected: 15; !cmd, 1abc, 1.5, -1, true, 15s!cmd
 # ------------------------------------------------------------------------------
 validate_duration() {
@@ -396,12 +405,13 @@ validate_path() {
   esac
   # v2.11.8 (#174): reject ASCII space. Must come AFTER the `!`
   # check so a combined input like `foo!cat /etc/passwd` surfaces
-  # the more-precise "!" lftp-shell-escape error first. server-dir
-  # / remote_dir / local_dir values are interpolated into the
-  # `lftp -e` script body (see run_lftp_once at lib.sh:~1031) where
-  # lftp 4.9.3 tokenises on whitespace; a value like "/my
-  # data/site/" splits into `cd /my` + leftover `data/site/`,
-  # silently breaking the action. Tests in tests/integration/ all
+  # the more-precise "!" lftp-shell-escape error first. remote_dir
+  # and concurrency_lock_path are interpolated unquoted into
+  # `lftp -e` scripts (see run_lftp_once and the lock functions),
+  # where lftp 4.9.3 tokenises on whitespace; a value like "/my
+  # data/site/" splits into two words, silently breaking the action.
+  # local_dir is double-quoted there since FND-0015 and server is an
+  # argv URL, so for those two the rejection is kept for consistency. Tests in tests/integration/ all
   # use space-free paths, so this is a strict-improvement error
   # class (loud failure beats silent breakage).
   case "${_vp_value}" in
@@ -669,8 +679,8 @@ _add_mask_lines() {
 #   Defence-in-depth: ask the runner to mask sensitive values in the
 #   log even if they ever leak outside the .netrc plumbing. GitHub
 #   already auto-masks inputs named *password* / *token* / *secret*,
-#   but `user` and `server` are not in that list. The init.sh script
-#   emits `::add-mask::` for the three values; the function reads
+#   but `user` and `server` are not in that list. This function
+#   (called from entrypoint.sh) emits `::add-mask::` for the three values; the function reads
 #   them via _indirection so we don't repeat the eval pattern.
 #
 #   The ::add-mask:: directive is a SINGLE-LINE workflow command, and
@@ -841,8 +851,9 @@ build_ftp_settings() {
   # appends `set ... ;`); the leading character is `s`, never
   # whitespace. When _bfs_settings is empty, the [ -n ... ] guard
   # skipped the strip too. So the strip never had anything to
-  # remove. tests/unit/parse.bats:119-131 asserts the first
-  # character is `s`, which mechanically proves this.
+  # remove. The parse.bats test "build_ftp_settings: lftp_settings is
+  # appended without leading space" asserts the first character is
+  # `s`, which mechanically proves this.
   printf '%s' "${_bfs_settings}"
 }
 
@@ -932,8 +943,13 @@ _lock_sentinel_name() {
 # _lock_age_seconds STAMP_NOW STAMP_THEN
 #   Return the age in seconds between STAMP_NOW and STAMP_THEN.
 #   Both stamps must be YYYYMMDDTHHMMSSZ (the format from
-#   `_lock_sentinel_name`). Uses POSIX awk `mktime`, which busybox
-#   awk supports.
+#   `_lock_sentinel_name`). Uses awk `mktime`, which is NOT in the
+#   POSIX awk specification: it is an extension of gawk, busybox awk
+#   and mawk 1.3.4. The action image (Alpine) has only busybox awk.
+#   The CI unit-test job installs no awk, so it uses the awk of the
+#   ubuntu-latest runner image (mawk 1.3.4 on ubuntu 24.04, which has
+#   `mktime`). An awk without `mktime` makes this
+#   function fail.
 #
 #   Pure: no IO, no side effects. Echoes an integer (possibly
 #   negative if STAMP_THEN is in the future, which the caller
@@ -950,11 +966,14 @@ _lock_age_seconds() {
       t_h = substr(then, 10, 2); t_mn = substr(then, 12, 2); t_s  = substr(then, 14, 2)
       n = mktime(n_y " " n_m " " n_d " " n_h " " n_mn " " n_s)
       t = mktime(t_y " " t_m " " t_d " " t_h " " t_mn " " t_s)
-      # POSIX mawk/gawk mktime returns -1 on parse failure (e.g.
-      # sentinel file with a syntactically-valid but calendrically-
-      # invalid timestamp like month=13). Without this check, the
-      # caller would see `int(n - t) = -1` and treat the sentinel
-      # as "infinitely old" -> take over the lock on stale data.
+      # mktime (a gawk/busybox/mawk extension, not POSIX) returns -1
+      # when it cannot convert the fields (e.g. a corrupted sentinel
+      # stamp with non-numeric components). Per the comment in
+      # tests/unit/lock.bats, out-of-range but numeric fields such as
+      # month=13 are normalised (rolled over), not -1. Without this
+      # check, t == -1 would give an age of n + 1 (huge), so the caller
+      # would treat the sentinel as "infinitely old" and take over the
+      # lock on stale data.
       # Exit 1 lets the caller classify the age as "indeterminate"
       # and treat the lock as held (F2 audit, NEW).
       if (n == -1 || t == -1) {
@@ -969,12 +988,20 @@ _lock_age_seconds() {
 # _lock_parse_sentinel_listing LISTING_TEXT
 #   Given the captured stdout of `lftp ... -e 'cls -la LOCK_PATH; quit;'`,
 #   extract every filename matching the sentinel pattern
-#   `.lftp-deployment.lock.<digits>.info`. Echoes one name per
-#   line on stdout, sorted ascending by stamp (so the OLDEST
-#   sentinel is the first line), or empty if no sentinel exists.
+#   `.lftp-deployment.lock.<YYYYMMDD>T<HHMMSS>Z.<digits>.info`.
+#   Echoes one name per line on stdout, sorted as strings ascending
+#   (the stamp comes first, so the OLDEST sentinel is the first
+#   line), or empty if no sentinel exists.
 #
-#   Uses grep -E anchored to the line end so unrelated files (the
-#   lock dir itself, user files) are ignored. F2 audit (#173):
+#   The `grep -oE` pattern is NOT anchored (no `^`, no `$`, no word
+#   boundary) and `-o` prints only the matched text, so any listing
+#   line that CONTAINS a sentinel-shaped substring yields a name,
+#   whatever surrounds it: `x.lftp-deployment.lock.20200101T000000Z.1.info.bak`
+#   yields `.lftp-deployment.lock.20200101T000000Z.1.info`. A line
+#   with several matches yields each of them. Lines with no such
+#   substring are ignored. The listing is `cls -la <lock path>`
+#   (FND-0004), so only entries inside the lock dir are seen, not
+#   the lock dir itself or files elsewhere on the server. F2 audit (#173):
 #   the previous `head -1` discarded every orphan past the first
 #   and let stale sentinels accumulate on the FTP server. The
 #   recovery branch in acquire_lock_with_recovery now iterates
@@ -1136,14 +1163,15 @@ classify_permanent_error() {
 #     counter=5: 8
 #     counter=6: 16
 #     counter>=7: 30 (capped)
-#   With ±50% jitter for counter>=2 (so the actual sleep is in
+#   With ±50% jitter for counter>=3, i.e. every delay above 1 (so the actual sleep is in
 #   [delay - delay/2, delay + delay/2], floor at 1).
 #
 #   v2.11.8 (#179): jitter uses POSIX `awk` rather than the
 #   busybox-ash `$RANDOM` extension. On a strict POSIX /bin/sh
 #   (e.g. dash on Debian), `$RANDOM` is unset and the jitter
-#   collapses to zero, defeating the backoff. busybox awk is on
-#   the alpine runtime and on every CI test runner; the same
+#   collapses to zero, defeating the backoff. busybox awk is the
+#   awk of the alpine runtime; the CI unit-test job runs on
+#   ubuntu-latest and uses that image's awk. The same
 #   pattern is already idiomatic in tests/integration/lib/common.sh
 #   for synthetic-port generation.
 #
@@ -1376,7 +1404,7 @@ LOCK_EMPTY_GRACE=120
 #   lock dir was created but the sentinel upload failed, not that
 #   the lock is held.
 #   The caller MUST
-#   have a writable ${NETRC} at $HOME and MUST have `set -e`
+#   have a readable ${NETRC} at $HOME and MUST have `set -e`
 #   disabled around the call to this function (or check the
 #   return value explicitly), because intermediate lftp calls may
 #   legitimately fail (timeout=0 fast path, transient network
@@ -1388,8 +1416,11 @@ LOCK_EMPTY_GRACE=120
 #   #132). When USER is empty or the URL already carries a user,
 #   the URL is passed to lftp unchanged.
 #
-#   Reads: nothing. Reads $HOME for netrc discovery.
-#   Writes: ACQUIRED_LOCK_SENTINEL global (on success).
+#   Reads: the globals LOCK_STALE_AFTER and LOCK_EMPTY_GRACE;
+#   $HOME/.netrc (via lftp, for the password); the clock (`date`).
+#   Writes: ACQUIRED_LOCK_SENTINEL global (on success). Also talks to
+#   the FTP server (MKD, PUT, LIST, DELE, RMD) and uses a temporary
+#   file for the sentinel body, which it removes.
 # ------------------------------------------------------------------------------
 acquire_lock_with_recovery() {
   _alwr_server=$1
@@ -1469,9 +1500,9 @@ acquire_lock_with_recovery() {
     # after a failed MKD and after a failed sentinel PUT). For
     # positive timeouts, the MKD+LIST+recovery
     # sequence on the previous iteration may have eaten into the
-    # budget, so we check before doing any more work. POSIX
-    # `date +%s` is portable to busybox ash (the action runtime)
-    # and every CI runner.
+    # budget, so we check before doing any more work. `date +%s`
+    # is not in POSIX, but busybox date (the action runtime) and
+    # GNU date (the CI runners) both support it.
     if [ "${_alwr_timeout}" != "0" ] \
         && [ "$(date +%s)" -ge "${_alwr_deadline}" ]; then
       break
@@ -1822,7 +1853,9 @@ release_lock_safely() {
   fi
 
   # v2.11.3 (#188): if no sentinel is available (neither the explicit
-  # arg nor $ACQUIRED_LOCK_SENTINEL is set), this process never
+  # arg nor $ACQUIRED_LOCK_SENTINEL is set; _rls_sentinel above
+  # already falls back to the global, so one test covers both and
+  # there is no RMD-only path below), this process never
   # acquired the lock — the EXIT trap fired BEFORE acquire_lock_with_recovery
   # set ACQUIRED_LOCK_SENTINEL, or during its polling loop. Issuing
   # `quote RMD <lock_path>` in this state races a parallel runner
@@ -1835,7 +1868,7 @@ release_lock_safely() {
   # kept leaking into subsequent versions; #188 surfaced it via the
   # audit (the v2.11.2 issue body described the mechanism imprecisely
   # — the actual harm is `quote RMD`, not sentinel DELE).
-  if [ -z "${_rls_sentinel}" ] && [ -z "${ACQUIRED_LOCK_SENTINEL:-}" ]; then
+  if [ -z "${_rls_sentinel}" ]; then
     return 0
   fi
 
@@ -1850,21 +1883,15 @@ release_lock_safely() {
   _rls_preamble="set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5;"
 
   set +e
-  if [ -n "${_rls_sentinel}" ]; then
-    # FND-0003: an unconfirmed refresh may have renamed the sentinel to
-    # one of these names; the RMD fails on a non-empty dir otherwise.
-    _rls_dele="quote DELE ${_rls_path}/${_rls_sentinel};"
-    for _rls_tried in ${ACQUIRED_LOCK_SENTINEL_TRIED:-}; do
-      _rls_dele="${_rls_dele} quote DELE ${_rls_path}/${_rls_tried};"
-    done
-    timeout 30s lftp "${_rls_server_eff}" \
-      -e "${_rls_preamble} ${_rls_dele} quote RMD ${_rls_path}; quit;" \
-      >/dev/null 2>&1
-  else
-    timeout 30s lftp "${_rls_server_eff}" \
-      -e "${_rls_preamble} quote RMD ${_rls_path}; quit;" \
-      >/dev/null 2>&1
-  fi
+  # FND-0003: an unconfirmed refresh may have renamed the sentinel to
+  # one of these names; the RMD fails on a non-empty dir otherwise.
+  _rls_dele="quote DELE ${_rls_path}/${_rls_sentinel};"
+  for _rls_tried in ${ACQUIRED_LOCK_SENTINEL_TRIED:-}; do
+    _rls_dele="${_rls_dele} quote DELE ${_rls_path}/${_rls_tried};"
+  done
+  timeout 30s lftp "${_rls_server_eff}" \
+    -e "${_rls_preamble} ${_rls_dele} quote RMD ${_rls_path}; quit;" \
+    >/dev/null 2>&1
   set -e
   return 0
 }
@@ -1930,10 +1957,11 @@ print_failure_banner() {
   fi
   if [ -n "${_pfb_rc}" ]; then
     echo "Last lftp exit code: ${_pfb_rc}"
+    # busybox `timeout` (the image has no GNU coreutils, so no 124) execs
+    # lftp and kills it, so the shell sees 128+signal (FND-0051).
     echo "Common codes:"
-    echo "  1   lftp generic error"
-    echo "  4    Fatal error (e.g. command-line usage, configuration)"
-    echo "  124  timeout reached (max wall-clock ${_pfb_timeout})"
+    echo "  1    lftp generic error"
+    echo "  143  timeout reached (SIGTERM at max wall-clock ${_pfb_timeout})"
     echo "  137  process killed (SIGKILL after ${_pfb_kill_after} grace)"
   fi
   # lftp appends the cause in parentheses ("(Connection refused)") when
