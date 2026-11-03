@@ -1745,6 +1745,58 @@ LIST
   grep -qF "(this is not a held lock): mkdir: Fatal error: max-retries exceeded" "${LOCK_ERR}"
 }
 
+@test "acquire_lock_with_recovery: TLS certificate rejected on MKD -> rc 4 after one lftp call, no polling" {
+  _install_put_fakes
+  export FAKE_MKD_OK_UNTIL=0 FAKE_MKD_MSG="mkdir: Fatal error: Certificate verification: self-signed certificate (83:F9:01:B5)"
+  _run_lock 300 5
+  _dump_lock_debug
+  [ "${LOCK_RC}" -eq 4 ]
+  [ "$(wc -l < "${FAKE_LFTP_LOG}")" -eq 1 ]
+  [ "$(_count_events ' sleep ')" -eq 0 ]
+  grep -qF "ERROR: concurrency lock: lftp could not verify the TLS certificate of ftp://example.test, so the lock was not tried (this is not a held lock): mkdir: Fatal error: Certificate verification: self-signed certificate (83:F9:01:B5)" "${LOCK_ERR}"
+  if grep -qE "is held by|another deployment" "${LOCK_ERR}"; then
+    echo "a rejected certificate is not a held lock"; exit 1
+  fi
+}
+
+# The lock's lftp calls connect with the run's own settings: an FTPS server
+# with a self-signed certificate and ssl_verify_certificate "false" failed
+# every lock mkdir on "Certificate verification" (seen against vsftpd with
+# v4.0.0). The lock's tight net settings come after them, so they still win.
+@test "acquire_lock_with_recovery: the lock MKD and PUT carry the run's ssl settings and lftp_settings before the lock's net settings" {
+  _install_put_fakes
+  export INPUT_SSL_VERIFY_CERTIFICATE=false INPUT_SSL_CHECK_HOSTNAME=false INPUT_FTP_SSL_ALLOW=true \
+    INPUT_LFTP_SETTINGS="set ssl:ca-file /etc/custom-ca.pem"
+  _run_lock 0 5
+  _dump_lock_debug
+  [ "${LOCK_RC}" -eq 0 ]
+  for verb in "mkdir .lftp-deployment.lock" "put "; do
+    line=$(grep -F "${verb}" "${FAKE_LFTP_LOG}" | head -1)
+    [ -n "${line}" ] || { echo "no lftp call with ${verb}"; exit 1; }
+    case "${line}" in
+      *"set ftp:ssl-allow true;set ssl:verify-certificate false;set ssl:check-hostname false;"*"set ssl:ca-file /etc/custom-ca.pem;"*"set net:max-retries 1; set net:reconnect-interval-base 1;"*) ;;
+      *) echo "missing or misordered settings: ${line}"; exit 1 ;;
+    esac
+  done
+}
+
+@test "release_lock_safely and refresh_lock_sentinel carry the run's ssl settings" {
+  export INPUT_SSL_VERIFY_CERTIFICATE=false
+  rm -f "${FAKE_LFTP_LOG}"
+  run release_lock_safely \
+    "ftp://example.test" ".lftp-deployment.lock" \
+    ".lftp-deployment.lock.20260707T080000Z.1234.info" \
+    "ftptest"
+  [ "$status" -eq 0 ]
+  grep -F "; rmdir .lftp-deployment.lock; quit;" "${FAKE_LFTP_LOG}" | grep -qF "set ssl:verify-certificate false;"
+  _install_fake_date "20260601T120000Z"
+  export FAKE_LFTP_RC=0
+  rm -f "${FAKE_LFTP_LOG}"
+  ACQUIRED_LOCK_SENTINEL="${FND3_OLD}"
+  refresh_lock_sentinel "ftp://example.test" "${FND3_LOCK}" "ftptest" > "${BATS_TEST_TMPDIR}/out" || exit 1
+  grep -F "mv ${FND3_LOCK}/${FND3_OLD} " "${FAKE_LFTP_LOG}" | grep -qF "set ssl:verify-certificate false;"
+}
+
 @test "acquire_lock_with_recovery: FND-0092: login failure with timeout 0 -> rc 4, not the held rc 1" {
   _install_put_fakes
   export FAKE_MKD_OK_UNTIL=0 FAKE_MKD_MSG="mkdir: Login failed: 530 Login incorrect."

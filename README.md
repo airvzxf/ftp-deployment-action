@@ -619,9 +619,18 @@ action reads lftp's `mkdir` output. A login failure
 held lock: the action exits 1 right away with
 `ERROR: concurrency lock: lftp could not log in to <server>` (or
 `could not connect to <server>`), followed by lftp's error line,
-without polling. Any other `mkdir` failure, including a `421` or
-`530` connection limit that lftp gave up retrying, counts as "lock
-held" and is polled as before.
+without polling. A rejected TLS certificate
+(`mkdir: Fatal error: Certificate verification: ...`) fails the same
+way, with `could not verify the TLS certificate of <server>`. Any
+other `mkdir` failure, including a `421` or `530` connection limit
+that lftp gave up retrying, counts as "lock held" and is polled as
+before.
+
+The lock's lftp calls (`mkdir`, the sentinel upload and refresh, the
+release) connect with the same `ftp_ssl_allow`,
+`ssl_verify_certificate`, `ssl_check_hostname`, passive-mode and
+`lftp_settings` values as the mirror; only their retry and timeout
+settings are shorter.
 
 **Why MKD/RMD and not a "lock" command.** lftp does not
 ship a server-side `lock` primitive — it only has
