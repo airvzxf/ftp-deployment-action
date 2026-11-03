@@ -1109,12 +1109,16 @@ extract_netrc_host() {
 #   `timeout 30s` or `timeout 10s`), at most 45 s for the retry backoff
 #   sleep (compute_backoff_seconds: 30 s ± 15 s jitter), at most
 #   concurrency_lock_poll_interval seconds for the lock poll sleep.
-#   A signal during the lock acquire can leave the lock to the
-#   stale-lock recovery: during the MKD, a dir without a sentinel
-#   (taken over after LOCK_EMPTY_GRACE, 120 s); during the sentinel
-#   PUT, a fresh sentinel that ACQUIRED_LOCK_SENTINEL does not name
-#   yet, so the release skips it and later runs wait until it is older
-#   than LOCK_STALE_AFTER (6 h) (FND-0108).
+#   A signal during the lock MKD is handled when it returns, before its
+#   exit code is read, so ACQUIRED_LOCK_SENTINEL is still empty and the
+#   release makes no lftp call: if that MKD created the dir, the dir
+#   stays without a sentinel and is taken over after LOCK_EMPTY_GRACE
+#   (120 s). From a successful MKD until a failed sentinel PUT clears
+#   it, ACQUIRED_LOCK_SENTINEL names the sentinel, so a signal during
+#   the sentinel PUT releases the lock (DELE, then RMD) when the PUT
+#   returns (FND-0108). A signal during the acquire's own PUT-failure
+#   cleanup or the poll sleep after it releases nothing: the dir is
+#   removed, or its RMD failed.
 # ------------------------------------------------------------------------------
 exit_on_signal() {
   if [ -n "${RUN_LFTP_ACTIVE:-}" ]; then
@@ -1266,9 +1270,13 @@ compute_backoff_seconds() {
 # rewrite_lftp_url SERVER USER
 #   Echo SERVER with USER embedded if SERVER has a scheme but no embedded
 #   user. v2.11.0 fix for the lftp 4.9.3 .netrc quirk (closes #124):
-#   lftp only consults ~/.netrc when the URL carries an explicit user, so
-#   a bare `ftp://host:port` falls back to `USER anonymous` and the FTP
-#   server rejects with 530. Used by run_lftp_once (the mirror),
+#   for a URL with a scheme, lftp only consults ~/.netrc when the URL
+#   carries an explicit user, so a bare `ftp://host:port` falls back to
+#   `USER anonymous` and the FTP server rejects with 530. A value
+#   without a scheme (`host[:port]`) is passed unchanged: lftp reads
+#   ~/.netrc for it without a user in the URL
+#   (tests/integration/scenarios/31-scheme-less-server.sh).
+#   Used by run_lftp_once (the mirror),
 #   acquire_lock_with_recovery (the server-side concurrency lock
 #   acquire path), and release_lock_safely (the EXIT trap lock release
 #   path) so all three lftp invocations share the same URL semantics
@@ -1283,7 +1291,7 @@ compute_backoff_seconds() {
 #     ftp://host:21           + user -> ftp://user@host:21
 #     ftp://user@host:21      + user -> ftp://user@host:21    (no-op)
 #     ftp://user:pw@host:21   + user -> ftp://user:pw@host:21 (no-op; B-03)
-#     host:21                 + user -> host:21                (no scheme)
+#     host:21                 + user -> host:21                (no scheme; lftp reads .netrc itself)
 #     ftp://host:21           + ""   -> ftp://host:21          (no-op)
 #     ftp://host:21           + a@b  -> ftp://a%40b@host:21
 #
@@ -1485,15 +1493,16 @@ LOCK_EMPTY_GRACE=120
 #   legitimately fail (timeout=0 fast path, transient network
 #   errors).
 #
-#   USER: optional. When non-empty AND the URL has no embedded user,
-#   it is embedded into the URL via rewrite_lftp_url so lftp's
-#   .netrc lookup fires (same v2.11.0 fix as run_lftp_once, closes
-#   #132). When USER is empty or the URL already carries a user,
-#   the URL is passed to lftp unchanged.
+#   USER: optional. When non-empty AND the URL has a scheme but no
+#   embedded user, it is embedded into the URL via rewrite_lftp_url
+#   so lftp's .netrc lookup fires (same v2.11.0 fix as run_lftp_once,
+#   closes #132). When USER is empty, the URL has no scheme, or the
+#   URL already carries a user, the URL is passed to lftp unchanged.
 #
 #   Reads: the globals LOCK_STALE_AFTER and LOCK_EMPTY_GRACE;
 #   $HOME/.netrc (via lftp, for the password); the clock (`date`).
-#   Writes: ACQUIRED_LOCK_SENTINEL global (on success). Also talks to
+#   Writes: ACQUIRED_LOCK_SENTINEL global (set once the MKD succeeds,
+#   cleared again if the sentinel PUT fails; FND-0108). Also talks to
 #   the FTP server (MKD, PUT, LIST, DELE, RMD) and uses a temporary
 #   file for the sentinel body, which it removes.
 # ------------------------------------------------------------------------------
@@ -1643,6 +1652,12 @@ EOF
     fi
 
     if [ "${_alwr_mkd_rc}" -eq 0 ]; then
+      # FND-0108: this run created the lock dir, so name the sentinel
+      # for release_lock_safely before the PUT: a signal during the PUT
+      # is handled when it returns, and the EXIT trap then DELEs the
+      # sentinel (harmless if it never landed) and RMDs the dir. Cleared
+      # below when the PUT fails, before this run's own cleanup.
+      ACQUIRED_LOCK_SENTINEL=${_alwr_sentinel}
       # Got the lock. Write the sentinel so the next runner can
       # tell whether we died mid-mirror. The sentinel content is
       # not parsed (we use the FILENAME timestamp); we keep the
@@ -1683,8 +1698,8 @@ EOF
       #
       # v2.11.8 (#254): MKD succeeded (this process owns the lock
       # dir) but the sentinel PUT failed — ACQUIRED_LOCK_SENTINEL is
-      # never set, so release_lock_safely's post-#188 no-sentinel
-      # guard will short-circuit, leaving the dir behind. DELE any
+      # cleared (FND-0108), so release_lock_safely's post-#188
+      # no-sentinel guard will short-circuit, leaving the dir behind. DELE any
       # partial sentinel inside it, then RMD, best-effort before
       # retrying so the next iteration either wins
       # MKD against a clean tree or hands off to stale-recovery.
@@ -1692,6 +1707,9 @@ EOF
       # lftp's exit code says whether the RMD failed; it is remembered
       # for the final error (a sentinel-less dir nobody can remove).
       if [ "${_alwr_put_rc}" -ne 0 ]; then
+        # FND-0108: cleared before the cleanup RMD; once that has run,
+        # the dir may be another run's, and the release must not touch it.
+        ACQUIRED_LOCK_SENTINEL=""
         _alwr_last_fail="put"
         set +e
         timeout 10s lftp "${_alwr_server_eff}" \
@@ -1711,8 +1729,6 @@ EOF
         continue
       fi
 
-      # Publish sentinel name for release_lock_safely.
-      ACQUIRED_LOCK_SENTINEL=${_alwr_sentinel}
       return 0
     fi
 

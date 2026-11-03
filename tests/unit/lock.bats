@@ -2401,3 +2401,265 @@ _sig_report() {
   [ "$(grep -c '^LFTP release \.' "${CALL_LOG}")" -eq 1 ]
   [ "$(grep -c '^LFTP release done' "${CALL_LOG}")" -eq 1 ]
 }
+
+# ----------------------------------------------------------------------------
+# FND-0108: a signal during the lock acquire. The shell runs the trap when the
+# foreground lftp call returns. ACQUIRED_LOCK_SENTINEL is set as soon as the
+# MKD has succeeded, so a signal during the sentinel PUT (which then succeeds
+# or fails) is handled by an EXIT trap that DELEs the sentinel and RMDs the
+# dir. A signal during the MKD is handled before its exit code is read, so
+# the release makes no lftp call (#188), whether the MKD failed (another run's
+# lock) or created the dir. A PUT failure without a signal clears the name
+# before acquire's own DELE + rmdir cleanup, so the release does not RMD again.
+# Same scratch entrypoint as _run_entrypoint_signal, but with the REAL
+# acquire_lock_with_recovery. The fake lftp blocks the step named by
+# FAKE_BLOCK (mkdir or put) until the test has sent the signal and created
+# GO_FILE, so the signal always arrives during that call (no timing). Its
+# "cleanup" is the acquire's DELE + rmdir (acquire preamble, with
+# `ftp:list-options`), "release" the EXIT trap's. bash, not sh, as above.
+# ----------------------------------------------------------------------------
+
+_run_entrypoint_acquire_signal() {
+  local sig=$1
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local src="${ENTRYPOINT_SRC:-${root}/entrypoint.sh}"
+  local app="${BATS_TEST_TMPDIR}/app"
+  if ! env --default-signal=INT true 2>/dev/null; then
+    echo "env --default-signal is unsupported here (GNU coreutils >= 8.31 needed): the signal tests cannot run" >&2
+    return 1
+  fi
+  SIG_HOME="${BATS_TEST_TMPDIR}/home/lftp"
+  mkdir -p "${app}" "${SIG_HOME}" "${BATS_TEST_TMPDIR}/site"
+  cp "${LIB}" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${SIG_HOME}#g" \
+    "${src}" > "${app}/entrypoint.sh"
+
+  export CALL_LOG="${BATS_TEST_TMPDIR}/calls.log"
+  export GO_FILE="${BATS_TEST_TMPDIR}/go"
+  : > "${CALL_LOG}"
+  rm -f "${GO_FILE}"
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/bash
+all="$*"
+block() {
+  local i
+  [ "${FAKE_BLOCK:-}" = "$1" ] || return 0
+  for i in $(seq 200); do
+    [ -e "${GO_FILE}" ] && return 0
+    sleep 0.05
+  done
+}
+case "${all}" in
+  *"quote DELE"*)
+    case "${all}" in
+      *"list-options"*) kind=cleanup ;;
+      *) kind=release ;;
+    esac
+    printf 'LFTP %s %s\n' "${kind}" "${all#*; quote DELE }" >> "${CALL_LOG}" ;;
+  *"; mkdir "*)
+    printf 'MKD start\n' >> "${CALL_LOG}"
+    block mkdir
+    printf 'MKD end %s\n' "${FAKE_MKD_RC:-0}" >> "${CALL_LOG}"
+    if [ "${FAKE_MKD_RC:-0}" -ne 0 ]; then
+      echo "mkdir: Access failed: 550 Create directory operation failed." >&2
+      exit "${FAKE_MKD_RC}"
+    fi ;;
+  *"; put "*)
+    t=${all#* -o }
+    printf 'PUT start %s\n' "${t%%;*}" >> "${CALL_LOG}"
+    block put
+    printf 'PUT end %s\n' "${FAKE_PUT_RC:-0}" >> "${CALL_LOG}"
+    exit "${FAKE_PUT_RC:-0}" ;;
+  *" mv "*) printf 'LFTP mv\n' >> "${CALL_LOG}" ;;
+  *mirror*) printf 'MIRROR\n' >> "${CALL_LOG}" ;;
+  *) printf 'LFTP other %s\n' "${all}" >> "${CALL_LOG}" ;;
+esac
+exit 0
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/lftp"
+
+  HOME="${BATS_TEST_TMPDIR}/home" \
+  INPUT_SERVER="ftp://example.test" INPUT_USER="ftptest" INPUT_PASSWORD="pw" \
+  INPUT_LOCAL_DIR="${BATS_TEST_TMPDIR}/site/" INPUT_REMOTE_DIR="./" \
+  INPUT_CONCURRENCY_LOCK="true" INPUT_CONCURRENCY_LOCK_TIMEOUT="0" \
+  INPUT_MAX_RETRIES="1" \
+    env --default-signal=INT bash -eu "${app}/entrypoint.sh" > "${BATS_TEST_TMPDIR}/out" 2>&1 3>&- &
+  local pid=$! i
+  if [ -n "${sig}" ]; then
+    local mark="MKD start"
+    [ "${FAKE_BLOCK:-}" = put ] && mark="PUT start"
+    for i in $(seq 100); do
+      grep -q "^${mark}" "${CALL_LOG}" && break
+      sleep 0.1
+    done
+    kill -s "${sig}" "${pid}"
+  fi
+  : > "${GO_FILE}"
+  HUNG=""
+  for i in $(seq 150); do
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "${pid}" 2>/dev/null; then
+    HUNG=1
+    kill -s KILL "${pid}" 2>/dev/null || :
+  fi
+  status=0
+  wait "${pid}" || status=$?
+  output=$(cat "${BATS_TEST_TMPDIR}/out")
+  ACQ_KINDS=$(sed -e 's/^\(PUT start\|LFTP release\|LFTP cleanup\) .*/\1/' "${CALL_LOG}" | tr '\n' ',')
+}
+
+_acq_sig_report() {
+  echo "status=${status} hung=${HUNG}"
+  echo "${output}"
+  echo "--- calls"; cat "${CALL_LOG}"
+  echo "--- kinds: ${ACQ_KINDS}"
+}
+
+@test "entrypoint: FND-0108: SIGTERM during a sentinel PUT that succeeds -> the release DELEs that sentinel and RMDs the dir, exit 143" {
+  FAKE_BLOCK=put _run_entrypoint_acquire_signal TERM
+  _acq_sig_report
+  [ -z "${HUNG}" ]
+  [ "${status}" -eq 143 ]
+  [ "${ACQ_KINDS}" = "MKD start,MKD end 0,PUT start,PUT end 0,LFTP release," ]
+  p=".lftp-deployment.lock"
+  put=$(sed -n 's/^PUT start //p' "${CALL_LOG}")
+  [[ "${put}" == "${p}/.lftp-deployment.lock.2"*".info" ]] || { echo "put: ${put}"; exit 1; }
+  rel=$(sed -n 's/^LFTP release //p' "${CALL_LOG}")
+  [ "${rel}" = "${put}; rmdir ${p}; quit;" ] || { echo "release: ${rel}"; exit 1; }
+  [ ! -e "${SIG_HOME}/.netrc" ]
+}
+
+@test "entrypoint: FND-0108: SIGINT during a sentinel PUT that fails -> one DELE + RMD by the release, no second cleanup, exit 130" {
+  FAKE_BLOCK=put FAKE_PUT_RC=1 _run_entrypoint_acquire_signal INT
+  _acq_sig_report
+  [ -z "${HUNG}" ]
+  [ "${status}" -eq 130 ]
+  [ "${ACQ_KINDS}" = "MKD start,MKD end 0,PUT start,PUT end 1,LFTP release," ]
+  p=".lftp-deployment.lock"
+  rel=$(sed -n 's/^LFTP release //p' "${CALL_LOG}")
+  [[ "${rel}" == "${p}/.lftp-deployment.lock.2"*".info; rmdir ${p}; quit;" ]] || { echo "release: ${rel}"; exit 1; }
+}
+
+@test "entrypoint: FND-0108: SIGTERM during a MKD that fails (another run's lock) -> no release lftp call (#188), exit 143" {
+  FAKE_BLOCK=mkdir FAKE_MKD_RC=1 _run_entrypoint_acquire_signal TERM
+  _acq_sig_report
+  [ -z "${HUNG}" ]
+  [ "${status}" -eq 143 ]
+  [ "${ACQ_KINDS}" = "MKD start,MKD end 1," ]
+  [ ! -e "${SIG_HOME}/.netrc" ]
+}
+
+@test "entrypoint: FND-0108: SIGTERM during a MKD that succeeds -> no PUT and no release lftp call (dir left for the 120 s empty-dir recovery), exit 143" {
+  FAKE_BLOCK=mkdir FAKE_MKD_RC=0 _run_entrypoint_acquire_signal TERM
+  _acq_sig_report
+  [ -z "${HUNG}" ]
+  [ "${status}" -eq 143 ]
+  [ "${ACQ_KINDS}" = "MKD start,MKD end 0," ]
+}
+
+@test "entrypoint: FND-0108: a failed sentinel PUT without a signal -> acquire's own DELE + rmdir only, no release call, exit 1" {
+  FAKE_PUT_RC=1 _run_entrypoint_acquire_signal ""
+  _acq_sig_report
+  [ -z "${HUNG}" ]
+  [ "${status}" -eq 1 ]
+  [ "${ACQ_KINDS}" = "MKD start,MKD end 0,PUT start,PUT end 1,LFTP cleanup," ]
+  [[ "${output}" == *"the sentinel upload to .lftp-deployment.lock/"* ]]
+}
+
+@test "acquire_lock_with_recovery: FND-0108: ACQUIRED_LOCK_SENTINEL names the sentinel during the PUT and is empty after a failed PUT's cleanup" {
+  local log="${BATS_TEST_TMPDIR}/seen"
+  : > "${log}"
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/sh
+case "$*" in
+  *"; put "*) printf 'put %s\n' "$*" >> "${SEEN_LOG}"; exit "${FAKE_PUT_RC}" ;;
+esac
+exit 0
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/lftp"
+  # The fake cannot see the shell variable, so wrap timeout to record it.
+  timeout() { printf 'var=%s\n' "${ACQUIRED_LOCK_SENTINEL:-}" >> "${SEEN_LOG}"; command timeout "$@"; }
+  export SEEN_LOG="${log}"
+  ACQUIRED_LOCK_SENTINEL=""
+  FAKE_PUT_RC=0 acquire_lock_with_recovery "ftp://example.test" ".lftp-deployment.lock" 0 1 "ftptest"
+  cat "${log}"
+  # Second call (the PUT) already sees the name; it is the -o target.
+  name=$(sed -n '2s/^var=//p' "${log}")
+  [ -n "${name}" ] && [ "${name}" = "${ACQUIRED_LOCK_SENTINEL}" ]
+  grep -qF -- "-o .lftp-deployment.lock/${name}; quit;" "${log}"
+  : > "${log}"
+  ACQUIRED_LOCK_SENTINEL=""
+  rc=0
+  FAKE_PUT_RC=1 acquire_lock_with_recovery "ftp://example.test" ".lftp-deployment.lock" 0 1 "ftptest" 2>/dev/null || rc=$?
+  cat "${log}"
+  [ "${rc}" -eq 2 ]
+  [ -n "$(sed -n '2s/^var=//p' "${log}")" ]
+  # Third call (the cleanup DELE + rmdir) runs with the name cleared.
+  [ "$(sed -n '4p' "${log}")" = "var=" ]
+  [ -z "${ACQUIRED_LOCK_SENTINEL}" ]
+  unset -f timeout
+}
+
+# ----------------------------------------------------------------------------
+# FND-0108 (test-engineer pass): the loop goes on after a failed sentinel PUT.
+# The name cleared for the cleanup must not stay stale, and a later MKD that
+# wins sets it again; a later return that is not a success (login error)
+# leaves it empty. `sleep` is a no-op function, so there is no wait.
+# ----------------------------------------------------------------------------
+
+_fnd0108_loop_fake() {
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/sh
+n=$(cat "${SEQ_FILE}" 2>/dev/null || echo 0)
+case "$*" in
+  *"; mkdir "*)
+    n=$((n + 1)); echo "${n}" > "${SEQ_FILE}"
+    if [ "${n}" -ge 2 ] && [ -n "${SECOND_MKD_OUT:-}" ]; then
+      printf '%s\n' "${SECOND_MKD_OUT}"; exit 1
+    fi
+    printf 'mkdir %s\n' "${n}" >> "${SEEN_LOG}"; exit 0 ;;
+  *"; put "*)
+    n=$(cat "${PUT_FILE}" 2>/dev/null || echo 0); n=$((n + 1)); echo "${n}" > "${PUT_FILE}"
+    printf 'put %s\n' "${n}" >> "${SEEN_LOG}"
+    [ "${n}" -ge 2 ] && exit 0
+    exit 1 ;;
+  *"quote DELE"*) printf 'cleanup\n' >> "${SEEN_LOG}" ;;
+esac
+exit 0
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/lftp"
+  export SEEN_LOG="${BATS_TEST_TMPDIR}/seen" SEQ_FILE="${BATS_TEST_TMPDIR}/seq" PUT_FILE="${BATS_TEST_TMPDIR}/putn"
+  : > "${SEEN_LOG}"; rm -f "${SEQ_FILE}" "${PUT_FILE}"
+  sleep() { :; }
+  # Record the global at every lftp call.
+  timeout() { printf 'var=%s\n' "${ACQUIRED_LOCK_SENTINEL:-}" >> "${SEEN_LOG}"; command timeout "$@"; }
+}
+
+@test "acquire_lock_with_recovery: FND-0108: failed PUT, then the next MKD wins and its PUT succeeds -> name empty in the cleanup, set again on return 0" {
+  _fnd0108_loop_fake
+  ACQUIRED_LOCK_SENTINEL=""
+  rc=0
+  acquire_lock_with_recovery "ftp://example.test" ".lftp-deployment.lock" 300 1 "ftptest" 2>/dev/null || rc=$?
+  unset -f sleep timeout
+  cat "${SEEN_LOG}"
+  [ "${rc}" -eq 0 ]
+  [ -n "${ACQUIRED_LOCK_SENTINEL}" ]
+  # var= line right before "cleanup" is the empty one.
+  [ "$(grep -B1 '^cleanup$' "${SEEN_LOG}" | head -n 1)" = "var=" ]
+  grep -q '^put 2$' "${SEEN_LOG}"
+}
+
+@test "acquire_lock_with_recovery: FND-0108: failed PUT, then a login error on the next MKD -> return 4 with the name empty" {
+  _fnd0108_loop_fake
+  ACQUIRED_LOCK_SENTINEL=""
+  rc=0
+  SECOND_MKD_OUT="mkdir: Login failed: 530 Login incorrect." \
+    acquire_lock_with_recovery "ftp://example.test" ".lftp-deployment.lock" 300 1 "ftptest" 2>/dev/null || rc=$?
+  unset -f sleep timeout
+  cat "${SEEN_LOG}"
+  [ "${rc}" -eq 4 ]
+  [ -z "${ACQUIRED_LOCK_SENTINEL}" ]
+}

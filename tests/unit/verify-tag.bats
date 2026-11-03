@@ -105,6 +105,23 @@ verify() {
   run scripts/verify-tag.sh "$1"
 }
 
+# refute_line_prefix PREFIX: fail if any line of $output starts with
+# PREFIX. Use it, not `[[ "$output" != *"OK"* ]]`, to check that the
+# success line ("OK: ...") or the legacy line ("INFO: ...") was not
+# printed: the output also holds the SSH key fingerprint (43 random
+# base64 characters), which contains "OK" for about 1 key in 100
+# (FND-0111). A line that starts with the prefix cannot come from the
+# fingerprint.
+refute_line_prefix() {
+  local _l
+  for _l in "${lines[@]}"; do
+    if [[ "${_l}" == "$1"* ]]; then
+      printf 'unexpected line: %s\n--- output ---\n%s\n' "${_l}" "${output}" >&2
+      return 1
+    fi
+  done
+}
+
 # ---------------------------------------------------------------------------
 # FND-0018: SSH allow-list comes from origin/main
 # ---------------------------------------------------------------------------
@@ -390,7 +407,7 @@ rename_tag() {
   verify v99.1.1
   [ "$status" -eq 1 ]
   [[ "$output" == *"ERROR: tag object is named 'v99.1.0' but is stored as refs/tags/v99.1.1"* ]]
-  [[ "$output" != *"OK"* ]]
+  refute_line_prefix "OK: "
 }
 
 @test "FND-0087: control: SSH-signed tag whose header matches the ref name verifies" {
@@ -429,7 +446,7 @@ rename_tag() {
   verify v99.1.3
   [ "$status" -eq 1 ]
   [[ "$output" == *"ERROR: tag object is named 'v99.1.2' but is stored as refs/tags/v99.1.3"* ]]
-  [[ "$output" != *"OK"* ]]
+  refute_line_prefix "OK: "
 }
 
 # ---------------------------------------------------------------------------
@@ -476,7 +493,7 @@ publish_asc() {
   [[ "$output" == *"signature format: lightweight"* ]]
   [[ "$output" == *"ERROR"* ]]
   [[ "$output" == *"release.yml"* ]]
-  [[ "$output" != *"INFO"* ]]
+  refute_line_prefix "INFO: "
 }
 
 @test "FND-0017: an unsigned annotated non-legacy tag v3.2.0 exits 1 and says unsigned" {
@@ -490,7 +507,7 @@ publish_asc() {
   [[ "$output" == *"signature format: unsigned"* ]]
   [[ "$output" == *"unsigned annotated tag"* ]]
   [[ "$output" == *"release.yml"* ]]
-  [[ "$output" != *"INFO"* ]]
+  refute_line_prefix "INFO: "
 }
 
 @test "FND-0017: a name that only resembles a legacy tag (v1.3.4) is not exempt" {
@@ -618,7 +635,7 @@ publish_asc() {
   verify v3.1.2
   [ "$status" -eq 1 ]
   [[ "$output" == *"signature format: pgp"* ]]
-  [[ "$output" != *"OK"* ]]
+  refute_line_prefix "OK: "
 }
 
 @test "FND-0019: same attack with no .asc on origin/main is rejected too" {
@@ -633,7 +650,7 @@ publish_asc() {
 
   verify v3.1.3
   [ "$status" -eq 1 ]
-  [[ "$output" != *"OK"* ]]
+  refute_line_prefix "OK: "
 }
 
 @test "FND-0017: a branch named like a signed tag does not change the result" {
@@ -697,7 +714,7 @@ publish_asc() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"signature format: lightweight"* ]]
   [[ "$output" == *"release.yml"* ]]
-  [[ "$output" != *"OK"* ]]
+  refute_line_prefix "OK: "
 }
 
 # ---------------------------------------------------------------------------

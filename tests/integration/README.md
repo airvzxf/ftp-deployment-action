@@ -44,7 +44,8 @@ tests/integration/
     ├── 27-no-reply-hint.sh                   # silent server gets the no-reply hint (#342)
     ├── 28-lock-live-holder-kept.sh           # a live holder keeps the lock (#250)
     ├── 29-version-line.sh                    # first log line names the release
-    └── 30-tls-max-version.sh                 # TLS 1.2 by default, 1.3 on request (#361)
+    ├── 30-tls-max-version.sh                 # TLS 1.2 by default, 1.3 on request (#361)
+    └── 31-scheme-less-server.sh              # server without a scheme logs in as the user
 ```
 
 ## Running locally

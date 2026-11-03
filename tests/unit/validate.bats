@@ -1758,3 +1758,59 @@ _lock_gate_case() {
   [ "${status}" -eq 2 ]
   [[ "${output}" == *"concurrency_lock_timeout must be a non-negative integer without leading zeros"* ]]
 }
+
+# ----------------------------------------------------------------------------
+# FND-0047: boundary of the lftp -e script characters. Probed with lftp 4.9.3
+# (echo + a second command in `lftp -c`, and a server command log): `#` `<` `(`
+# `{` `~` and `$(` are single literal words inside an argument; `#` `(` `!` are
+# special only at the start of a command, which needs a preceding `;` `&` `|`
+# `>` or newline, and every one of those is rejected. Pin both sides.
+# ----------------------------------------------------------------------------
+
+@test "validate_glob_pattern: FND-0047: lftp-special characters that stay literal inside an argument are accepted" {
+  local hi
+  hi=$(printf 'a\351b')
+  for v in '#x' 'a#b' '#*#' '<x' 'a<<b' '$(id)' '`id`' '!id' '(a)' '{a,b}' '~' '[a]' "${hi}" '*.map,#a,(,<'; do
+    run validate_glob_pattern "exclude" "${v}"
+    if [ "${status}" -ne 0 ] || [ -n "${output}" ]; then
+      printf 'CASE value=[%s] status=%s output=[%s]\n' "${v}" "${status}" "${output}"
+      return 1
+    fi
+  done
+}
+
+@test "validate_glob_pattern: FND-0047: every character that can start a new lftp command is rejected, in any position and list item" {
+  for v in 'a;b' ';a' 'a;' 'a&b' 'a&&b' 'a|b' 'a||b' 'a>b' 'a>>b' 'ok,a;b' 'ok, a&b' 'x|' $'a\nb' $'a\tb'; do
+    run validate_glob_pattern "exclude" "${v}"
+    if [ "${status}" -ne 2 ]; then
+      printf 'CASE value=[%s] status=%s output=[%s]\n' "${v}" "${status}" "${output}"
+      return 1
+    fi
+  done
+}
+
+@test "validate_path: FND-0047: with \"unquoted\", lftp-special characters that stay literal in an argument are accepted for remote_dir and concurrency_lock_path" {
+  local hi
+  hi=$(printf 'a\351b')
+  for n in remote_dir concurrency_lock_path; do
+    for v in '#x' 'a#b' '<x' 'a<<b' '(a)' '{a,b}' '~' '[a]' '*' '?' "${hi}"; do
+      run validate_path "${n}" "${v}" "unquoted"
+      if [ "${status}" -ne 0 ] || [ -n "${output}" ]; then
+        printf 'CASE name=%s value=[%s] status=%s output=[%s]\n' "${n}" "${v}" "${status}" "${output}"
+        return 1
+      fi
+    done
+  done
+}
+
+@test "validate_path: FND-0047: with \"unquoted\", every character that can start a new lftp command or open an lftp parse mode is rejected" {
+  for n in remote_dir concurrency_lock_path; do
+    for v in 'a;b' 'a&b' 'a&&b' 'a|b' 'a||b' 'a>b' 'a>>b' "a'b" 'a\b' 'a"b' '$(id)' '`id`' '!id' 'a b' $'a\nb'; do
+      run validate_path "${n}" "${v}" "unquoted"
+      if [ "${status}" -ne 2 ]; then
+        printf 'CASE name=%s value=[%s] status=%s output=[%s]\n' "${n}" "${v}" "${status}" "${output}"
+        return 1
+      fi
+    done
+  done
+}
