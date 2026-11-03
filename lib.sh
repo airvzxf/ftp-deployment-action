@@ -1592,7 +1592,13 @@ acquire_lock_with_recovery() {
   # issues).
   # `ftp:list-options -a` makes `cls` send `LIST -a`: the sentinel is a
   # dot-file, and vsftpd hides dot-files from a plain LIST.
-  _alwr_preamble="set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5; set ftp:list-options -a;"
+  # The run's own settings (build_ftp_settings: ftp_ssl_allow,
+  # ssl_verify_certificate, ssl_check_hostname, passive mode,
+  # lftp_settings) come first, so the lock connects the way the mirror
+  # does (a self-signed FTPS certificate with ssl_verify_certificate
+  # "false" failed every lock mkdir); the tight net/dns settings after
+  # them override the mirror's retry values.
+  _alwr_preamble="$(build_ftp_settings) set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5; set ftp:list-options -a;"
 
   while :; do
 
@@ -1646,6 +1652,8 @@ acquire_lock_with_recovery() {
           case "${_alwr_line}" in
             "mkdir: Login failed: "*)
               _alwr_mkd_fail="log in to" ;;
+            "mkdir: Fatal error: Certificate verification: "*)
+              _alwr_mkd_fail="verify the TLS certificate of" ;;
             "mkdir: Fatal error: max-retries exceeded (Connection refused)" \
               | "mkdir: Fatal error: max-retries exceeded" \
               | *": Name does not resolve" | *": Name or service not known")
@@ -1954,7 +1962,8 @@ refresh_lock_sentinel() {
   # Same URL rewrite (#132) and tightened reconnect preamble as
   # acquire_lock_with_recovery / release_lock_safely.
   _rfs_server_eff=$(rewrite_lftp_url "${_rfs_server}" "${_rfs_user}")
-  _rfs_preamble="set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5;"
+  # The run's own settings first, as in acquire_lock_with_recovery.
+  _rfs_preamble="$(build_ftp_settings) set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5;"
 
   # Recorded before the call, so the EXIT trap also DELEs the new name
   # if this run dies while the rename is in flight.
@@ -2053,7 +2062,8 @@ release_lock_safely() {
   # Same tightened reconnect preamble as acquire_lock_with_recovery:
   # a misconfigured server should not stall the EXIT trap for
   # 15s-5min of reconnect attempts.
-  _rls_preamble="set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5;"
+  # The run's own settings first, as in acquire_lock_with_recovery.
+  _rls_preamble="$(build_ftp_settings) set net:max-retries 1; set net:reconnect-interval-base 1; set net:reconnect-interval-max 1; set net:timeout 5; set dns:max-retries 1; set dns:fatal-timeout 5;"
 
   set +e
   # FND-0003: an unconfirmed refresh may have renamed the sentinel to

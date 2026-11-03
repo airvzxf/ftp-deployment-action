@@ -45,7 +45,8 @@ tests/integration/
     ├── 28-lock-live-holder-kept.sh           # a live holder keeps the lock (#250)
     ├── 29-version-line.sh                    # first log line names the release
     ├── 30-tls-max-version.sh                 # TLS 1.2 by default, 1.3 on request (#361)
-    └── 31-scheme-less-server.sh              # server without a scheme logs in as the user
+    ├── 31-scheme-less-server.sh              # server without a scheme logs in as the user
+    └── 32-ftps-lock-self-signed.sh           # concurrency_lock over FTPS with a self-signed cert
 ```
 
 ## Running locally

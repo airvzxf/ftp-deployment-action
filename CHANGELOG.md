@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`concurrency_lock` over FTPS with a self-signed certificate never got the lock.** The lock's lftp calls (`mkdir`, the sentinel upload and refresh, the release) used fixed retry settings and none of the run's own: `ftp_ssl_allow`, `ssl_verify_certificate`, `ssl_check_hostname`, the passive mode and `lftp_settings` did not reach them. With `ssl_verify_certificate: "false"` against a server with a self-signed certificate, every lock `mkdir` failed with `Certificate verification: self-signed certificate`, which counted as "lock held": the run waited the full `concurrency_lock_timeout` and then reported another deployment in progress (seen with v4.0.0 against vsftpd; no earlier release passed these settings to the lock either). The lock calls now start with the same settings as the mirror, followed by their own shorter retry and timeout values, and a rejected certificate fails the lock at once with `could not verify the TLS certificate of <server>` instead of being polled. Integration scenario 32 covers FTPS with a self-signed certificate and the lock on.
+
 ## [4.0.0] - 2026-11-03
 
 ### Changed
