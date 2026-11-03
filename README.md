@@ -573,11 +573,20 @@ when that step ends: after at most 30 seconds for an
 lftp call of the lock code (lock acquire, sentinel
 refresh), at most 45 seconds for the retry backoff, or
 one `concurrency_lock_poll_interval` while waiting for
-the lock. A signal during the lock acquire (the `mkdir`
-or the sentinel upload) can leave the lock to the
-stale-lock recovery below: a lock dir without a sentinel
-is taken over after 120 seconds, but a fresh sentinel
-blocks later runs for up to 6 hours. SIGKILL runs no
+the lock. A signal during the lock `mkdir` is handled
+when the `mkdir` returns, before the action knows whether
+it created the dir, so nothing is released: a lock dir
+created by that `mkdir` stays without a sentinel and is
+taken over by the stale-lock recovery below after 120
+seconds. A signal after a successful `mkdir`, the
+sentinel upload included, releases the lock (`DELE` of
+the sentinel, then `rmdir`) once that step ends. If the
+sentinel upload fails, the action removes the dir itself
+(`DELE`, then `rmdir`) before it polls again, and a
+signal from then on until its next successful `mkdir`
+releases nothing: the dir is already gone or, if that
+`rmdir` was refused, stays without a sentinel (see the
+stale-lock recovery below). SIGKILL runs no
 cleanup, so if the runtime kills the container first
 (`docker stop` sends SIGKILL 10 seconds after SIGTERM)
 the lock is left to the stale-lock recovery below. Which
@@ -602,8 +611,27 @@ ship a server-side `lock` primitive — it only has
 basics and are implemented by every FTP server
 (vsftpd, proftpd, Pure-FTPd, SFTP-via-FTP-gateways, etc.).
 `mkdir` is atomic on virtually every UNIX-like filesystem
-(returning `EEXIST` if the dir already exists), so the
-race window between two clients is microseconds.
+(returning `EEXIST` if the dir already exists), so two clients
+cannot both create the lock dir.
+
+**Taking over an orphaned lock is not atomic.** When a lock is
+orphaned (a sentinel older than 6 hours, or a lock dir that a
+waiting run has seen without a sentinel for 120 seconds), two
+waiting runs can both try to recover it: one run's recovery
+`rmdir` can remove the other's new lock dir in the short gap
+between that run's `mkdir` and its sentinel upload. Usually that
+run's sentinel upload then fails and it waits again. If its
+upload is delayed until the other run has waited one
+`concurrency_lock_poll_interval` and created its own lock dir,
+the upload lands there and both runs hold the lock. The
+120-second wait is timed per run; it restarts when the run sees
+a sentinel or after its own takeover attempt, but not when the
+dir is re-created by someone else. This needs an orphaned lock
+plus a waiter whose poll lands in another run's
+`mkdir`-to-upload gap, so it is rare. The action does not
+close it, because an atomic way to publish the lock would differ
+per FTP server. For guaranteed serialization use Option A
+above (the `concurrency:` block).
 
 **A live holder keeps the lock; a dead one is recovered after
 6 hours.** When the action acquires the lock it also writes a

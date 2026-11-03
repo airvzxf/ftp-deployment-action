@@ -462,11 +462,16 @@ _rlo_run() {
   printf '#!/bin/bash\nsleep 20\n' > "${fb}/lftp"
   chmod +x "${fb}/lftp"
   local t0=${SECONDS}
+  # FND-0110: the killer is double-forked, so it is not a job of this shell.
+  # As a job it ends right after its kill, and the trap's bare `wait` (which
+  # waits for every job) could race its reaping under CPU load: bash then
+  # printed "wait: pid N is not a child of this shell" for the killer's pid.
+  # Now the pipeline is the only job, as in entrypoint.sh.
   run timeout 60 bash -c '
     . "$1"
     PATH="$2:${PATH}"
     trap '"'"'echo "trap active=${RUN_LFTP_ACTIVE:-}"; kill -TERM %% 2>/dev/null; wait; exit 143'"'"' TERM
-    ( sleep 1; kill -TERM $$ ) &
+    ( ( sleep 1; kill -TERM $$ ) & )
     run_lftp_once "ftp://h" "" "mirror -R" "./" "./" "$3" 30s 1s ""
     echo "not reached"
   ' _ "${LIB}" "${fb}" "${BATS_TEST_TMPDIR}/rlo.log"
