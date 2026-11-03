@@ -495,6 +495,20 @@ validate_path() {
         exit 2
         ;;
     esac
+    # FND-0113: lftp 4.9.3 expands a path argument that is `~` or starts
+    # with `~/` to the FTP login directory, after parsing (probed against
+    # vsftpd: `mkdir ~` sends `MKD <login dir>`, which always fails, so
+    # the lock can never be taken; `mkdir ~/x` and `mirror ... ~/m/` send
+    # paths under the login directory). `~name` is sent literally
+    # (`MKD ~name`), and so is a `~` later in the path (`a~b`, `x/~`), so
+    # those stay accepted.
+    case "${_vp_value}" in
+      '~'|'~'/*)
+        printf 'ERROR: %s starts with "~": %s; lftp expands a leading ~ to the FTP login directory. Give the path without "~/" (a relative path already starts at the login directory).\n' \
+          "${_vp_name}" "${_vp_value}" >&2
+        exit 2
+        ;;
+    esac
   fi
 }
 

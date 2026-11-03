@@ -396,7 +396,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | user                   | FTP Username.                                                                         | Yes      | N/A     | myself@rovisoft.net                                                                               |
 | password               | FTP Password.                                                                         | Yes      | N/A     | ExampleOnlyAlphabets                                                                              |
 | local_dir              | Local directory. Must not be, contain or lie inside `/home/lftp` (see [Security](#security)). | No       | "./"    | "./public_html"                                                                                   |
-| remote_dir             | Remote directory.                                                                     | No       | "./"    | "/www/user/home"                                                                                  |
+| remote_dir             | Remote directory. Must not be `~` or start with `~/` (lftp expands a leading `~` to the FTP login directory; exit 2). | No       | "./"    | "/www/user/home"                                                                                  |
 | max_retries            | Number of tries on error; `1` = no retries. `0` = retry until success, a permanent error, or the job is stopped (set `timeout-minutes`). Each attempt is limited to 5 h. | No       | 10      | N/A                                                                                               |
 | delete                 | Delete remote files that do not exist locally (files matching `exclude` are kept).   | No       | false   | N/A                                                                                               |
 | no_symlinks            | Do not create symbolic links.                                                         | No       | true    | N/A                                                                                               |
@@ -418,7 +418,7 @@ Usually the zero values mean unlimited or infinite. This table is based on the d
 | debug                  | If "true", print the resolved value of every input to the log. With "false" the dump prints only "(set)" (non-empty value, defaults included) or "(using default)" (empty) per input. The password is never printed, even with debug. | No       | false   | N/A                                                                                               |
 | dry_run                | If "true", compute the mirror plan but do not transfer or delete any file. It still connects and logs in, so an unreachable server or a wrong password fails. | No       | false   | N/A                                                                                               |
 | concurrency_lock       | If "true", serialize concurrent deployments to the same FTP server by acquiring a server-side sentinel directory. See "Concurrency / deployment lock" below. | No       | false   | N/A                                                                                               |
-| concurrency_lock_path  | Path of the sentinel directory used by `concurrency_lock`. Must be a valid FTP path (no `..`, no shell metacharacters, no leading dash, no `!`, no `"`, no space, no `>`, `'`, or `\`). | No       | .lftp-deployment.lock | N/A                                                                                |
+| concurrency_lock_path  | Path of the sentinel directory used by `concurrency_lock`. Must be a valid FTP path (no `..`, no shell metacharacters, no leading dash, no `!`, no `"`, no space, no `>`, `'`, or `\`, and not `~` or a path that starts with `~/`). | No       | .lftp-deployment.lock | N/A                                                                                |
 | concurrency_lock_timeout | Maximum seconds to wait for the lock when `concurrency_lock` is "true" and another run is currently holding it. `0` means fail immediately when held or when the sentinel upload fails. | No | 300  | N/A                                                                                               |
 | concurrency_lock_poll_interval | Seconds between lock acquisition attempts; must be greater than 0 (empty means 5). The number of attempts depends on `concurrency_lock_timeout`, which is wall-clock time. | No       | 5       | N/A                                                                                               |
 
@@ -843,7 +843,7 @@ non-buildable image) **before** a tag is pushed.
 |------|---------|
 | `0`  | Upload finished successfully. |
 | `1`  | Upload failed after all retries; the last lftp error is printed above. |
-| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` or `user:pass@host` — the userinfo password is rejected); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a `remote_dir` or `concurrency_lock_path` that contains `>`, `\` or `'` (they are pasted unquoted into lftp commands); a `local_dir` that is, contains, or lies inside `/home/lftp`, or that contains `\` or starts with `~` or `file:`; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;` characters (a trailing `;` counts); a `concurrency_lock_poll_interval` of `0` when `concurrency_lock` is `true`; an `exclude` value rejected by `validate_glob_pattern` (control chars, `;`, `&`, `|`, `"`, or an item that starts with a dash or contains a space, `\`, `'` or `>`). |
+| `2`  | Invalid input. This includes: a `server` URL that fails the path / metacharacter guard, or that embeds a password in the userinfo (`ftp://user:pass@host` or `user:pass@host` — the userinfo password is rejected); a `local_dir` / `remote_dir` / `concurrency_lock_path` that fails the path-traversal, shell-metacharacter, or ASCII-space guard; a `remote_dir` or `concurrency_lock_path` that contains `>`, `\` or `'` (they are pasted unquoted into lftp commands), or that is `~` or starts with `~/`; a `local_dir` that is, contains, or lies inside `/home/lftp`, or that contains `\` or starts with `~` or `file:`; a non-integer numeric option or one with a leading zero (e.g. `max_retries: "00"`); a boolean option outside the canonical set (see the [Settings](#settings) preamble); an `lftp_settings` value that contains control characters, a backtick, a dollar sign, the literal `!` character, an embedded newline, or more than three `;` characters (a trailing `;` counts); a `concurrency_lock_poll_interval` of `0` when `concurrency_lock` is `true`; an `exclude` value rejected by `validate_glob_pattern` (control chars, `;`, `&`, `|`, `"`, or an item that starts with a dash or contains a space, `\`, `'` or `>`). |
 
 lftp's own output (transferred files, the `dry_run` plan, server errors) is
 printed in the step log; there is nothing else to download.
@@ -969,7 +969,13 @@ lftp commands without surrounding quotes, so they additionally
 reject `>`, `\` and `'`: lftp 4.9.3 reads `>` as an output
 redirection (even mid-token, so `a>x` uploads to `a` and drops
 the rest), `\` as an escape and `'` as a quote, each of which
-changes which directory the command uses (FND-0100). The
+changes which directory the command uses (FND-0100). They
+also exit `2` when the value is `~` or starts with `~/`: lftp
+4.9.3 expands a leading `~` in these commands to the FTP login
+directory (`mkdir ~` sends `MKD` for the login directory itself,
+so the lock could never be taken). Use a relative path instead,
+which already starts at the login directory. `~name`, `a~b` and
+`x/~` reach the server as written and are accepted. The
 `server` input additionally rejects URL userinfo that embeds a
 password (the `ftp://user:pass@host` form — lftp would otherwise
 authenticate with the embedded credentials and silently bypass

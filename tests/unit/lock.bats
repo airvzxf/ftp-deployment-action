@@ -2222,8 +2222,9 @@ FAKE
 # release), INT and the second signal are what fail without the fix. The test
 # signals the shell (only its PID, as the runtime does with PID 1) once the
 # mirror runs, and kills it after 15 s so a hang fails instead of blocking.
-# SECOND_SIG is sent while the release runs (FAKE_RELEASE_SLEEP keeps it
-# busy). ENTRYPOINT_SRC / LIB_SRC select the files under test (the tests were
+# SECOND_SIG is sent while the release runs (the fake release waits for the
+# harness's RELEASE_GO file, created after SECOND_SIG is sent).
+# ENTRYPOINT_SRC / LIB_SRC select the files under test (the tests were
 # proven to fail on the HEAD files).
 # ----------------------------------------------------------------------------
 
@@ -2262,11 +2263,21 @@ case "${all}" in
   *" mv "*) printf 'LFTP mv\n' >> "${CALL_LOG}" ;;
   *"quote DELE"*)
     printf 'LFTP release %s\n' "${all#*; quote DELE }" >> "${CALL_LOG}"
-    sleep "${FAKE_RELEASE_SLEEP:-0}"
+    # FND-0114: with RELEASE_GO set, the release blocks until the harness
+    # has sent SECOND_SIG and created RELEASE_GO (a handshake, not a sleep),
+    # so the second signal always arrives while the release runs.
+    if [ -n "${RELEASE_GO:-}" ]; then
+      for _i in $(seq 600); do [ -e "${RELEASE_GO}" ] && break; sleep 0.1; done
+    fi
     printf 'LFTP release done\n' >> "${CALL_LOG}"
     [ -z "${FAKE_RMD_FAIL:-}" ] || exit 1 ;;
   *mirror*)
-    trap 'printf "MIRROR got TERM\n" >> "${CALL_LOG}"; kill "${sp}" 2>/dev/null; exit 143' TERM
+    # FND-0114: GNU timeout passes a TERM on to lftp twice (to the child,
+    # then to its own process group), and under CPU load the second one can
+    # arrive while this trap runs and run it again. The trap ignores TERM
+    # before it logs: a TERM handled before that starts a fresh run, which
+    # logs once and exits; a later one is ignored. So the line is logged once.
+    trap 'trap "" TERM; printf "MIRROR got TERM\n" >> "${CALL_LOG}"; kill "${sp}" 2>/dev/null; exit 143' TERM
     printf 'MIRROR start\n' >> "${CALL_LOG}"
     sleep 30 & sp=$!
     wait "${sp}"
@@ -2282,26 +2293,40 @@ FAKE
   # shell without job control starts with SIGINT ignored, and a signal
   # ignored on entry cannot be trapped, so env (GNU coreutils) resets it;
   # the runtime starts the container's PID 1 with default dispositions.
+  # FND-0114: HUP and TERM are reset too. bats started under nohup (or any
+  # parent that ignores HUP) passes HUP on as ignored, bash then drops the
+  # HUP trap without a word, and the SIGHUP test hung until the KILL (137).
+  local release_go=""
+  [ -z "${SECOND_SIG:-}" ] || release_go="${BATS_TEST_TMPDIR}/release.go"
   HOME="${BATS_TEST_TMPDIR}/home" \
   INPUT_SERVER="ftp://example.test" INPUT_USER="ftptest" INPUT_PASSWORD="pw" \
   INPUT_LOCAL_DIR="${BATS_TEST_TMPDIR}/site/" INPUT_REMOTE_DIR="./" \
   INPUT_CONCURRENCY_LOCK="${lock}" INPUT_MAX_RETRIES="1" \
-    env --default-signal=INT bash -eu "${app}/entrypoint.sh" > "${BATS_TEST_TMPDIR}/out" 2>&1 3>&- &
+  RELEASE_GO="${release_go}" \
+    env --default-signal=HUP,INT,TERM bash -eu "${app}/entrypoint.sh" > "${BATS_TEST_TMPDIR}/out" 2>&1 3>&- &
   local pid=$! i
-  for i in $(seq 100); do
-    grep -q '^MIRROR start' "${CALL_LOG}" && break
+  # FND-0114: wait for the mirror itself (handshake), not a fixed time; the
+  # 60 s bound only keeps a broken run from blocking. MIRROR_STARTED and
+  # RELEASE_SEEN are asserted by the tests.
+  MIRROR_STARTED=""
+  for i in $(seq 600); do
+    grep -q '^MIRROR start' "${CALL_LOG}" && { MIRROR_STARTED=1; break; }
+    kill -0 "${pid}" 2>/dev/null || break
     sleep 0.1
   done
   NETRC_DURING=absent
   [ -f "${SIG_HOME}/.netrc" ] && NETRC_DURING=present
   local t0=${SECONDS}
   kill -s "${sig}" "${pid}"
+  RELEASE_SEEN=""
   if [ -n "${SECOND_SIG:-}" ]; then
-    for i in $(seq 100); do
-      grep -q '^LFTP release ' "${CALL_LOG}" && break
+    for i in $(seq 600); do
+      grep -q '^LFTP release ' "${CALL_LOG}" && { RELEASE_SEEN=1; break; }
+      kill -0 "${pid}" 2>/dev/null || break
       sleep 0.1
     done
     kill -s "${SECOND_SIG}" "${pid}" 2>/dev/null || :
+    : > "${release_go}"
   fi
   HUNG=""
   for i in $(seq 150); do
@@ -2319,7 +2344,7 @@ FAKE
 }
 
 _sig_report() {
-  echo "status=${status} elapsed=${ELAPSED}s hung=${HUNG} netrc_during=${NETRC_DURING}"
+  echo "status=${status} elapsed=${ELAPSED}s hung=${HUNG} netrc_during=${NETRC_DURING} mirror_started=${MIRROR_STARTED} release_seen=${RELEASE_SEEN}"
   echo "${output}"
   echo "--- calls"; cat "${CALL_LOG}"
 }
@@ -2327,6 +2352,7 @@ _sig_report() {
 @test "entrypoint: FND-0097/FND-0002: SIGTERM mid-mirror stops lftp, releases the lock (DELE + RMD), removes the .netrc and exits 143 at once" {
   _run_entrypoint_signal TERM true
   _sig_report
+  [ -n "${MIRROR_STARTED}" ]
   [ -z "${HUNG}" ]
   [ "${NETRC_DURING}" = present ]
   [ "${status}" -eq 143 ]
@@ -2346,6 +2372,7 @@ _sig_report() {
 @test "entrypoint: FND-0105: SIGTERM mid-mirror with the release RMD refused still exits 143 and warns" {
   FAKE_RMD_FAIL=1 _run_entrypoint_signal TERM true
   _sig_report
+  [ -n "${MIRROR_STARTED}" ]
   [ -z "${HUNG}" ]
   [ "${status}" -eq 143 ]
   [ "${ELAPSED}" -lt 10 ]
@@ -2357,6 +2384,7 @@ _sig_report() {
 @test "entrypoint: FND-0097/FND-0002: SIGINT mid-mirror stops lftp, releases the lock, removes the .netrc and exits 130 at once" {
   _run_entrypoint_signal INT true
   _sig_report
+  [ -n "${MIRROR_STARTED}" ]
   [ -z "${HUNG}" ]
   [ "${NETRC_DURING}" = present ]
   [ "${status}" -eq 130 ]
@@ -2369,6 +2397,7 @@ _sig_report() {
 @test "entrypoint: FND-0097/FND-0002: SIGHUP mid-mirror releases the lock, removes the .netrc and exits 129" {
   _run_entrypoint_signal HUP true
   _sig_report
+  [ -n "${MIRROR_STARTED}" ]
   [ -z "${HUNG}" ]
   [ "${status}" -eq 129 ]
   [ "${ELAPSED}" -lt 10 ]
@@ -2383,6 +2412,7 @@ _sig_report() {
 @test "entrypoint: FND-0097: concurrency_lock=false: SIGTERM mid-mirror removes the .netrc and exits 143, no release call" {
   _run_entrypoint_signal TERM false
   _sig_report
+  [ -n "${MIRROR_STARTED}" ]
   [ -z "${HUNG}" ]
   [ "${NETRC_DURING}" = present ]
   [ "${status}" -eq 143 ]
@@ -2393,8 +2423,10 @@ _sig_report() {
 }
 
 @test "entrypoint: FND-0097/FND-0002: a second signal during the release does not cut it short or run the cleanup twice; exit status stays the first signal's" {
-  FAKE_RELEASE_SLEEP=2 SECOND_SIG=TERM _run_entrypoint_signal INT true
+  SECOND_SIG=TERM _run_entrypoint_signal INT true
   _sig_report
+  [ -n "${MIRROR_STARTED}" ]
+  [ -n "${RELEASE_SEEN}" ]
   [ -z "${HUNG}" ]
   [ "${status}" -eq 130 ]
   [ ! -e "${SIG_HOME}/.netrc" ]
@@ -2484,7 +2516,7 @@ FAKE
   INPUT_LOCAL_DIR="${BATS_TEST_TMPDIR}/site/" INPUT_REMOTE_DIR="./" \
   INPUT_CONCURRENCY_LOCK="true" INPUT_CONCURRENCY_LOCK_TIMEOUT="0" \
   INPUT_MAX_RETRIES="1" \
-    env --default-signal=INT bash -eu "${app}/entrypoint.sh" > "${BATS_TEST_TMPDIR}/out" 2>&1 3>&- &
+    env --default-signal=HUP,INT,TERM bash -eu "${app}/entrypoint.sh" > "${BATS_TEST_TMPDIR}/out" 2>&1 3>&- &
   local pid=$! i
   if [ -n "${sig}" ]; then
     local mark="MKD start"

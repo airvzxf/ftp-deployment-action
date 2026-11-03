@@ -47,20 +47,6 @@ dump_and_fail() {
   log_fail "$1"
 }
 
-# assert_run_ok — the action run in _log exited 0 and printed the
-# upload banner. Not assert_action_success: on a non-zero exit it calls
-# dump_ftp_server_diagnostics, which hangs on `tail` of vsftpd.log for a
-# start_ftp_server container (FND-0112), so a broken login would hang
-# the scenario instead of failing it.
-assert_run_ok() {
-  if [ "${_rc}" -ne 0 ]; then
-    dump_and_fail "action exited with code ${_rc}"
-  fi
-  if ! grep -q 'FTP UPLOADED FINISHED' "${_log}"; then
-    dump_and_fail "action exited 0 but did not print the FTP UPLOADED FINISHED banner"
-  fi
-}
-
 # --- 1. anonymous is refused ---------------------------------------------
 {
   printf '%s\n' "set net:max-retries 1"
@@ -112,7 +98,7 @@ run_scheme_less() {
 # --- 2. scheme-less host:port, no lock -------------------------------------
 log_info "invoking action with INPUT_SERVER=${_server} (no scheme)"
 run_scheme_less /
-assert_run_ok
+assert_action_success "${_log}" "${_rc}"
 assert_present "${_ftp_home}" "index.html"
 assert_present "${_ftp_home}" "about.html"
 assert_present "${_ftp_home}" "assets"
@@ -124,7 +110,7 @@ run_scheme_less /locked \
   "INPUT_CONCURRENCY_LOCK=true" \
   "INPUT_CONCURRENCY_LOCK_TIMEOUT=20" \
   "INPUT_CONCURRENCY_LOCK_POLL_INTERVAL=1"
-assert_run_ok
+assert_action_success "${_log}" "${_rc}"
 if ! grep -q 'Acquired concurrency lock' "${_log}"; then
   dump_and_fail "action did not print 'Acquired concurrency lock'"
 fi
