@@ -362,10 +362,10 @@ lftp_run_script() {
 #   separate line so shell metacharacters in the caller's command stay
 #   literal (no eval).
 #
-#   v2.11.7 (#265): the open line contains the FTP_PASSWORD. Apply
-#   chmod 0600 to the output script so a busybox mktemp that defaults
-#   to 0644 does not leak the synthetic credential to any other host
-#   process running as the same UID. Mirrors the chmod applied by
+#   v2.11.7 (#265): the open line contains the FTP_PASSWORD. The
+#   output script is chmod 0600'd. mktemp already creates 0600 files
+#   (GNU coreutils and busybox), but the caller may pass any path, so
+#   the chmod keeps the mode explicit. Mirrors the chmod applied by
 #   build_action_env_file (parity with the #133 / #158 fixes).
 # ------------------------------------------------------------------------------
 lftp_build_open_script() {
@@ -422,8 +422,9 @@ lftp_build_open_script() {
 #
 #   The output file is chmod 0600'd before this function returns so
 #   INPUT_PASSWORD is not world-readable between the write and the
-#   podman/docker invocation (closes #133; the previous mktemp-derived
-#   mode was not portable — alpine busybox mktemp -t produces 0644).
+#   podman/docker invocation (closes #133). mktemp already creates
+#   0600 files (GNU coreutils and busybox); the chmod keeps the mode
+#   explicit, whatever created the file.
 #
 #   NOTE: as of the variant B fallback (see README "Why variant B"),
 #   this helper is no longer the primary driver of scenarios 01/02/05.
@@ -460,12 +461,10 @@ build_action_env_file() {
   } > "${_baef_out}"
 
   # The env-file carries INPUT_PASSWORD in plain text (the same secret
-  # the .netrc file inside the action carries). Lock it down to the
-  # runner's umask-derived permissions: without this chmod, the file
-  # mode would depend on the host mktemp flavour (0600 on GNU coreutils,
-  # 0644 on alpine busybox) and INPUT_PASSWORD would be readable to any
-  # other process on the host between the write and the runtime
-  # invocation. Closes #133.
+  # the .netrc file inside the action carries). GNU coreutils and
+  # busybox mktemp both create 0600 files; the chmod keeps the mode
+  # explicit, so INPUT_PASSWORD stays unreadable to other users even
+  # if the caller created the file another way. Closes #133.
   chmod 0600 "${_baef_out}"
 }
 
@@ -556,6 +555,13 @@ assert_server_alive() {
 #   listen on the server port. Added for the FTPS 03/04 flake (#138),
 #   where the action gets "Connection refused" although the harness
 #   saw the port open. Best effort: never fails the caller.
+#
+#   The transfer log is read only if it is a regular file. The
+#   fauria/vsftpd server of start_ftp_server runs with LOG_STDOUT=true,
+#   which makes vsftpd.log a symlink to /dev/stdout. `tail` on it in an
+#   exec opens the exec's own stdout pipe for reading and blocks forever,
+#   so a failing plain-FTP scenario hung. The exec is also capped with
+#   `timeout 15`.
 # ------------------------------------------------------------------------------
 dump_ftp_server_diagnostics() {
   [ -n "${FTP_CONTAINER_NAME:-}" ] || return 0
@@ -567,7 +573,16 @@ dump_ftp_server_diagnostics() {
     printf '%s\n' '-- container output --'
     ${RUNTIME} logs --tail 50 "${FTP_CONTAINER_NAME}" 2>&1
     printf '%s\n' '-- /var/log/vsftpd/vsftpd.log (tail) --'
-    ${RUNTIME} exec "${FTP_CONTAINER_NAME}" tail -n 20 /var/log/vsftpd/vsftpd.log 2>&1
+    # shellcheck disable=SC2016 # $f is expanded by the container's sh
+    timeout 15 ${RUNTIME} exec "${FTP_CONTAINER_NAME}" sh -c '
+      f=/var/log/vsftpd/vsftpd.log
+      if [ -f "$f" ]; then
+        tail -n 20 "$f"
+      elif [ -e "$f" ] || [ -L "$f" ]; then
+        printf "(not a regular file, not read: %s)\n" "$(ls -l "$f")"
+      else
+        printf "(%s does not exist)\n" "$f"
+      fi' </dev/null 2>&1
     printf '%s\n' "-- listeners on port ${FTP_SERVER_PORT:-?} --"
     if command -v ss >/dev/null 2>&1; then
       ss -ltnp 2>&1 | grep -E "^State|:${FTP_SERVER_PORT:-x}[[:space:]]"

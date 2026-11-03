@@ -1793,7 +1793,7 @@ _lock_gate_case() {
   local hi
   hi=$(printf 'a\351b')
   for n in remote_dir concurrency_lock_path; do
-    for v in '#x' 'a#b' '<x' 'a<<b' '(a)' '{a,b}' '~' '[a]' '*' '?' "${hi}"; do
+    for v in '#x' 'a#b' '<x' 'a<<b' '(a)' '{a,b}' 'a~b' '[a]' '*' '?' "${hi}"; do
       run validate_path "${n}" "${v}" "unquoted"
       if [ "${status}" -ne 0 ] || [ -n "${output}" ]; then
         printf 'CASE name=%s value=[%s] status=%s output=[%s]\n' "${n}" "${v}" "${status}" "${output}"
@@ -1813,4 +1813,103 @@ _lock_gate_case() {
       fi
     done
   done
+}
+
+# ----------------------------------------------------------------------------
+# FND-0113: lftp 4.9.3 expands a remote path argument that is `~` or starts
+# with `~/` to the FTP login directory (probed against vsftpd: `mkdir ~` sends
+# `MKD /`, `mkdir ~/x` sends `MKD x`, `mirror -R ... ~/m/` sends `MKD /m`).
+# `~name`, `a~b` and `x/~` reach the server literally (`MKD ~name`, ...).
+# remote_dir and concurrency_lock_path reject the expanded forms with exit 2.
+# ----------------------------------------------------------------------------
+
+@test "validate_path: FND-0113: with \"unquoted\", ~ and ~/... are rejected for remote_dir and concurrency_lock_path with the tilde reason" {
+  for n in remote_dir concurrency_lock_path; do
+    for v in '~' '~/' '~/x' '~/x/' '~//' '~/a~b/'; do
+      run validate_path "${n}" "${v}" "unquoted"
+      if [ "${status}" -ne 2 ] || [[ "${output}" != "ERROR: ${n} starts with \"~\": ${v}; lftp expands a leading ~ to the FTP login directory."* ]]; then
+        printf 'CASE name=%s value=[%s] status=%s output=[%s]\n' "${n}" "${v}" "${status}" "${output}"
+        return 1
+      fi
+    done
+  done
+}
+
+@test "validate_path: FND-0113: with \"unquoted\", a ~ that lftp sends literally (~name, a~b, x/~) is accepted" {
+  for n in remote_dir concurrency_lock_path; do
+    for v in '~u' '~lftp/' '~x/y' 'a~b' 'a~b/' 'x/~' 'x/~/' '/x/~/y/' '.~lock' 'lock~'; do
+      run validate_path "${n}" "${v}" "unquoted"
+      if [ "${status}" -ne 0 ] || [ -n "${output}" ]; then
+        printf 'CASE name=%s value=[%s] status=%s output=[%s]\n' "${n}" "${v}" "${status}" "${output}"
+        return 1
+      fi
+    done
+  done
+}
+
+@test "validate_path: FND-0113: without \"unquoted\" (server, local_dir) the ~ rule does not apply" {
+  for n in server local_dir; do
+    for v in '~' '~/'; do
+      run validate_path "${n}" "${v}"
+      if [ "${status}" -ne 0 ] || [ -n "${output}" ]; then
+        printf 'CASE name=%s value=[%s] status=%s output=[%s]\n' "${n}" "${v}" "${status}" "${output}"
+        return 1
+      fi
+    done
+  done
+}
+
+# Entrypoint level: the rejection exits 2 before any network activity (the lftp
+# stub records every call) and before the .netrc is written.
+_fnd113_entrypoint() {
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local app="${BATS_TEST_TMPDIR}/app"
+  local out
+  rm -rf "${BATS_TEST_TMPDIR}/home" "${BATS_TEST_TMPDIR}/lftp.calls"
+  mkdir -p "${app}" "${BATS_TEST_TMPDIR}/home/lftp" "${BATS_TEST_TMPDIR}/ws" "${BATS_TEST_TMPDIR}/fakebin"
+  cp "${LIB_SRC:-${root}/lib.sh}" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  printf '\nwrite_netrc() { printf "PAST_PATH_GATE\\n"; exit 0; }\n' >> "${app}/lib.sh"
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${BATS_TEST_TMPDIR}/home/lftp#g" \
+    "${ENTRYPOINT_SRC:-${root}/entrypoint.sh}" > "${app}/entrypoint.sh"
+  printf '#!/bin/sh\necho "$*" >> "%s"\nexit 1\n' "${BATS_TEST_TMPDIR}/lftp.calls" > "${BATS_TEST_TMPDIR}/fakebin/lftp"
+  printf '#!/bin/sh\nexit 0\n' > "${BATS_TEST_TMPDIR}/fakebin/sleep"
+  chmod +x "${BATS_TEST_TMPDIR}/fakebin/lftp" "${BATS_TEST_TMPDIR}/fakebin/sleep"
+  # bash, not sh: entrypoint.sh needs `set -o pipefail` (dash lacks it).
+  out=$(cd "${BATS_TEST_TMPDIR}/ws" && env PATH="${BATS_TEST_TMPDIR}/fakebin:${PATH}" HOME="${BATS_TEST_TMPDIR}/home" \
+    INPUT_SERVER="ftp.example.com" INPUT_USER="ftptest" INPUT_PASSWORD="pw" INPUT_LOCAL_DIR="./" \
+    INPUT_MAX_RETRIES=1 "$@" bash "${app}/entrypoint.sh" 2>&1) && status=0 || status=$?
+  output="${out}"
+}
+
+@test "entrypoint: FND-0113: concurrency_lock_path '~' or '~/lk' with concurrency_lock true exits 2 before any lftp call" {
+  for v in '~' '~/lk'; do
+    _fnd113_entrypoint INPUT_CONCURRENCY_LOCK=true INPUT_CONCURRENCY_LOCK_PATH="${v}" INPUT_REMOTE_DIR="./"
+    echo "lock_path=${v} status=${status}"; echo "${output}"
+    [ "${status}" -eq 2 ] || return 1
+    [[ "${output}" == *"ERROR: concurrency_lock_path starts with \"~\": ${v};"* ]] || return 1
+    [ ! -e "${BATS_TEST_TMPDIR}/lftp.calls" ] || { cat "${BATS_TEST_TMPDIR}/lftp.calls"; return 1; }
+    [ ! -e "${BATS_TEST_TMPDIR}/home/lftp/.netrc" ] || return 1
+  done
+}
+
+@test "entrypoint: FND-0113: remote_dir '~' (normalized to '~/') or '~/site/' exits 2 before any lftp call" {
+  for entry in '~|~/' '~/site/|~/site/'; do
+    _fnd113_entrypoint INPUT_CONCURRENCY_LOCK=false INPUT_REMOTE_DIR="${entry%%|*}"
+    echo "remote_dir=${entry%%|*} status=${status}"; echo "${output}"
+    [ "${status}" -eq 2 ] || return 1
+    [[ "${output}" == *"ERROR: remote_dir starts with \"~\": ${entry#*|};"* ]] || return 1
+    [ ! -e "${BATS_TEST_TMPDIR}/lftp.calls" ] || { cat "${BATS_TEST_TMPDIR}/lftp.calls"; return 1; }
+  done
+}
+
+@test "entrypoint: FND-0113: literal ~ forms (lock path a~b, ~lk; remote_dir x/~/) still get past the gate" {
+  _fnd113_entrypoint INPUT_CONCURRENCY_LOCK=true INPUT_CONCURRENCY_LOCK_PATH='a~b' INPUT_REMOTE_DIR='x/~/'
+  echo "status=${status}"; echo "${output}"
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"PAST_PATH_GATE"* ]]
+  _fnd113_entrypoint INPUT_CONCURRENCY_LOCK=true INPUT_CONCURRENCY_LOCK_PATH='~lk' INPUT_REMOTE_DIR='./'
+  echo "status=${status}"; echo "${output}"
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"PAST_PATH_GATE"* ]]
 }
