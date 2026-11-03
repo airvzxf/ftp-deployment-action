@@ -6,7 +6,9 @@
 
 setup() {
   set +u
-  LIB="${BATS_TEST_DIRNAME}/../../lib.sh"
+  # LIB_SRC overrides the lib.sh under test (used to prove the FND-0097
+  # write_netrc test fails on the pre-fix lib.sh).
+  LIB="${LIB_SRC:-${BATS_TEST_DIRNAME}/../../lib.sh}"
   # shellcheck disable=SC1090
   . "${LIB}"
 }
@@ -478,4 +480,42 @@ _wn_run() {
   [ "$status" -ne 0 ]
   [[ "$output" != *reached-after-write_netrc* ]]
   [ "$(cat "${netrc}")" = "old" ]
+}
+
+# FND-0097: busybox ash does not run the EXIT trap when INT/TERM kills it,
+# so write_netrc installs HUP/INT/TERM traps that exit through it. The
+# `chmod` stub sees the traps as they are while the password is on disk.
+@test "write_netrc: FND-0097: HUP/INT/TERM traps that exit 129/130/143 through the EXIT trap are in place before the write" {
+  netrc="${BATS_TEST_TMPDIR}/netrc"
+  # bash, not sh: on Ubuntu (CI) sh is dash, whose `trap` has no -p.
+  run bash -eu -c '
+    . "$1"
+    chmod() {
+      [ -f "$2" ] && printf "file-present\n"
+      trap -p HUP INT TERM
+      command chmod "$@"
+    }
+    write_netrc "$2" example.com deploy pw
+  ' _ "${LIB}" "${netrc}"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "file-present" ]
+  [ "${lines[1]}" = "trap -- 'exit_on_signal 129' SIGHUP" ]
+  [ "${lines[2]}" = "trap -- 'exit_on_signal 130' SIGINT" ]
+  [ "${lines[3]}" = "trap -- 'exit_on_signal 143' SIGTERM" ]
+}
+
+@test "write_netrc: FND-0097: a SIGTERM after write_netrc exits 143 and removes the file" {
+  netrc="${BATS_TEST_TMPDIR}/netrc"
+  run timeout 30 bash -eu -c '
+    . "$1"
+    write_netrc "$2" example.com deploy pw
+    [ -f "$2" ] || exit 3
+    kill -TERM $$
+    sleep 5
+    echo not-reached
+  ' _ "${LIB}" "${netrc}"
+  [ "$status" -eq 143 ]
+  [[ "$output" != *not-reached* ]]
+  [ ! -e "${netrc}" ]
 }

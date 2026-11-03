@@ -167,9 +167,51 @@ teardown() {
 # including the `set -e` the function runs itself; the function
 # always leaves `set -e` on when it returns, so every assertion
 # after the call gates the test.
+#
+# FND-0096: every test below that runs the loop with a timeout > 0 uses a
+# virtual clock (_install_virtual_clock, or _install_lock_fakes further
+# down). With the real clock, a timeout of 1 s could expire before the first
+# iteration (the second ticks between the deadline and the first check: no
+# MKD at all), a real `sleep 1` on a loaded machine could push the next
+# iteration past a 5 s deadline, and sentinel ages depended on the real time
+# elapsed (and on DST, as mawk's mktime() reads local time).
 # ----------------------------------------------------------------------------
 
+# _install_virtual_clock: the loop reads its deadline and the empty-dir
+# grace through `date +%s`, stamps and ages sentinels through
+# `date -u +%Y%m%dT%H%M%SZ`, and waits through `sleep`. These stubs serve all
+# three from one counter file, FAKE_CLOCK (epoch seconds, starting at
+# VCLOCK_START = 2026-07-01T12:00:00Z, far from any DST change): `date +%s`
+# prints it, `date -u +%Y%m%dT%H%M%SZ` formats it, `sleep N` advances it by
+# N. Nothing else moves it, so time passes only where the code under test
+# sleeps (or a fake lftp advances it). Other `date` calls, such as the
+# `date -u -d @N` in _stamp_seconds_ago, go to the real date. Install it
+# before computing any stamp, so stamps are relative to the virtual now.
+# Same counter-file mechanism as _install_lock_fakes.
+VCLOCK_START=1782907200
+_install_virtual_clock() {
+  export FAKE_CLOCK="${BATS_TEST_TMPDIR}/clock"
+  export FAKE_REAL_DATE
+  FAKE_REAL_DATE=$(PATH=${PATH#"${BATS_TEST_TMPDIR}/bin:"} command -v date)
+  echo "${VCLOCK_START}" > "${FAKE_CLOCK}"
+  cat > "${BATS_TEST_TMPDIR}/bin/date" <<'FAKE'
+#!/usr/bin/env bash
+case "$*" in
+  "+%s") cat "${FAKE_CLOCK}"; exit 0 ;;
+  "-u +%Y%m%dT%H%M%SZ")
+    exec "${FAKE_REAL_DATE}" -u -d "@$(cat "${FAKE_CLOCK}")" +%Y%m%dT%H%M%SZ ;;
+esac
+exec "${FAKE_REAL_DATE}" "$@"
+FAKE
+  cat > "${BATS_TEST_TMPDIR}/bin/sleep" <<'FAKE'
+#!/usr/bin/env bash
+echo $(( $(cat "${FAKE_CLOCK}") + $1 )) > "${FAKE_CLOCK}"
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/date" "${BATS_TEST_TMPDIR}/bin/sleep"
+}
+
 @test "acquire_lock_with_recovery: MKD success writes sentinel and returns 0" {
+  _install_virtual_clock
   export FAKE_LFTP_RC="0"
   unset INPUT_SERVER INPUT_CONCURRENCY_LOCK_PATH INPUT_CONCURRENCY_LOCK_TIMEOUT INPUT_CONCURRENCY_LOCK_POLL_INTERVAL
   INPUT_SERVER="ftp://example.test"
@@ -206,6 +248,7 @@ teardown() {
 }
 
 @test "acquire_lock_with_recovery: MKD 550 then stale listing -> takes over, returns 0" {
+  _install_virtual_clock
   # Scripted fake-lftp response sequence:
   #   1) MKD      -> exit 1 (held)
   #   2) LIST     -> echo stale sentinel listing
@@ -290,6 +333,7 @@ FAKE
 }
 
 @test "acquire_lock_with_recovery: MKD 550 then recent listing -> sleeps, returns 1 on timeout" {
+  _install_virtual_clock
   # Scripted fake-lftp response sequence (count=1: one attempt):
   #   1) MKD      -> exit 1 (held)
   #   2) LIST     -> echo RECENT sentinel listing (current second)
@@ -332,6 +376,10 @@ FAKE
   acquire_lock_with_recovery \
     "ftp://example.test" ".lftp-deployment.lock" "1" "1" "ftptest" || rc=$?
   [ "${rc:-0}" -eq 1 ]
+  # FND-0096: the one iteration really ran (MKD and LIST), so the negative
+  # checks below are not vacuous.
+  grep -q "mkdir .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
+  grep -q "cls -la" "${FAKE_LFTP_LOG}"
   # Recent sentinel -> NO DELE / RMD cleanup, no sentinel write.
   if grep -q "quote DELE" "${FAKE_LFTP_LOG}"; then
     echo "recent sentinel should not trigger DELE"
@@ -425,6 +473,7 @@ FAKE
 # non-zero LIST exit code triggers sleep+continue (respect the lock,
 # back off and retry) without any DELE/RMD.
 @test "acquire_lock_with_recovery: LIST lftp failure does NOT trigger takeover (issue #268)" {
+  _install_virtual_clock
   # count=1 means a single iteration: MKD fail, LIST fail, then
   # sleep+continue → loop exits, return 1.
   export FAKE_LFTP_SCRIPT="${BATS_TEST_TMPDIR}/fake-lftp-script.txt"
@@ -492,6 +541,7 @@ _stamp_seconds_ago() {
 }
 
 @test "acquire_lock_with_recovery: sentinel older than timeout but younger than 6 h is a live holder (issue #250)" {
+  _install_virtual_clock
   export FAKE_LFTP_SCRIPT="${BATS_TEST_TMPDIR}/fake-lftp-script.txt"
   live_stamp=$(_stamp_seconds_ago 600)
   printf 'exit 1\necho .lftp-deployment.lock.%s.7.info\n' "${live_stamp}" > "${FAKE_LFTP_SCRIPT}"
@@ -512,6 +562,7 @@ _stamp_seconds_ago() {
 }
 
 @test "acquire_lock_with_recovery: sentinel older than 6 h is stale and taken over (issue #250)" {
+  _install_virtual_clock
   export FAKE_LFTP_SCRIPT="${BATS_TEST_TMPDIR}/fake-lftp-script.txt"
   stale_stamp=$(_stamp_seconds_ago 21660)
   printf 'exit 1\necho .lftp-deployment.lock.%s.7.info\nexit 0\nexit 0\nexit 0\n' "${stale_stamp}" > "${FAKE_LFTP_SCRIPT}"
@@ -527,6 +578,7 @@ _stamp_seconds_ago() {
 }
 
 @test "acquire_lock_with_recovery: on timeout, names the holder's sentinel and how to clear it (issue #250)" {
+  _install_virtual_clock
   export FAKE_LFTP_SCRIPT="${BATS_TEST_TMPDIR}/fake-lftp-script.txt"
   live_stamp=$(_stamp_seconds_ago 600)
   printf 'exit 1\necho .lftp-deployment.lock.%s.7.info\n' "${live_stamp}" > "${FAKE_LFTP_SCRIPT}"
@@ -577,6 +629,7 @@ _stamp_seconds_ago() {
 # empty listing) propagates through `set -o pipefail` and `set
 # -e` and aborts the function before recovery can run.
 @test "acquire_lock_with_recovery: MKD 550 + empty listing past LOCK_EMPTY_GRACE -> RMDs lock dir (no sentinel to DELE), takes over" {
+  _install_virtual_clock
   LOCK_EMPTY_GRACE=0
   # Scripted fake-lftp sequence:
   #   1) MKD  -> exit 1 (held)
@@ -758,16 +811,23 @@ LIST
 # regardless of how much per-iteration network work happens.
 #
 # The fake lftp here simulates 1s of network work per call
-# (a `sleep 1` injected via FAKE_LFTP_WORK) so the pre-fix
-# fixed-iteration loop blows past the documented timeout
-# while the post-fix wall-clock loop honors it. Without the
-# simulated work, both loops would complete in ~timeout
-# seconds (sleep poll dominates) and the test could not
-# distinguish them.
+# (FAKE_LFTP_WORK) so the pre-fix fixed-iteration loop blows
+# past the documented timeout while the post-fix wall-clock
+# loop honors it. Without the simulated work, both loops would
+# complete in ~timeout seconds (sleep poll dominates) and the
+# test could not distinguish them.
+#
+# FND-0096: time is virtual (_install_virtual_clock). Each fake
+# lftp call advances the clock by FAKE_LFTP_WORK seconds instead
+# of really sleeping, and the loop's `sleep 1` advances it by 1,
+# so the elapsed time below is exact and costs no real time. It
+# used to be real (about 5 s against a 7 s bound) and failed on
+# loaded machines.
 @test "acquire_lock_with_recovery: wall-clock timeout respects concurrency_lock_timeout (issue #294)" {
+  _install_virtual_clock
   # Stateful fake-lftp that always returns MKD-fail + recent
-  # sentinel + exit 0, after sleeping 1s to simulate network
-  # work. Pre-fill enough script lines for the worst case
+  # sentinel + exit 0, after advancing the virtual clock 1s to
+  # simulate network work. Pre-fill enough script lines for the worst case
   # (count = ceil(timeout/poll) iterations, two lftp calls
   # each: MKD + LIST).
   export FAKE_LFTP_SCRIPT="${BATS_TEST_TMPDIR}/fake-lftp-script.txt"
@@ -782,10 +842,10 @@ LIST
 #!/bin/sh
 # Simulate network latency so the pre-fix fixed-iteration
 # loop's per-iteration "work" is non-trivial. Without this,
-# fake-lftp is sub-millisecond and the wall-clock blowup is
+# fake-lftp takes no virtual time and the wall-clock blowup is
 # invisible.
 if [ -n "${FAKE_LFTP_WORK:-}" ]; then
-  sleep "${FAKE_LFTP_WORK}"
+  echo $(( $(cat "${FAKE_CLOCK}") + ${FAKE_LFTP_WORK} )) > "${FAKE_CLOCK}"
 fi
 line=$(head -n 1 "${FAKE_LFTP_SCRIPT:-/dev/null}" 2>/dev/null) || true
 if [ -n "${line:-}" ]; then
@@ -803,10 +863,9 @@ FAKE
   unset ACQUIRED_LOCK_SENTINEL
   _start=$(date +%s)
   # timeout=3, poll=1: pre-fix count=3, each iter is
-  # (1s MKD + 1s LIST + 1s sleep) = 3s, total ~9s.
-  # Post-fix: bounded at 3s + one iter of slack = ~5s.
-  # Allow 7s for CI clock granularity (sleep 1s is ±0.5s on
-  # busy runners).
+  # (1s MKD + 1s LIST + 1s sleep) = 3s, total 9s.
+  # Post-fix: bounded at 3s + one iter of slack = at most 6s
+  # (with this timeline exactly 3s: the check at t=3 ends it).
   acquire_lock_with_recovery \
     "ftp://example.test" ".lftp-deployment.lock" "3" "1" "ftptest" || rc=$?
   _end=$(date +%s)
@@ -816,8 +875,8 @@ FAKE
 
   [ "${rc:-0}" -eq 1 ]
   # Pre-fix: ceil(3/1)=3 iters * (1s work + 1s LIST + 1s
-  # sleep) ~= 9s. Post-fix: bounded at timeout + one iter
-  # ~= 5s. A regression to fixed-iteration counting blows
+  # sleep) = 9s. Post-fix: bounded at timeout + one iter
+  # <= 6s. A regression to fixed-iteration counting blows
   # past 7s; wall-clock tracking stays under 7s.
   [ "${_elapsed}" -le 7 ]
 }
@@ -966,7 +1025,11 @@ LIST
     "ftptest"
   [ "$status" -eq 0 ]
   grep -q "quote DELE .lftp-deployment.lock/.lftp-deployment.lock.20260707T080000Z.1234.info" "${FAKE_LFTP_LOG}"
-  grep -q "quote RMD .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
+  # FND-0105: lftp `rmdir` (its exit code reflects a refused RMD), never
+  # `quote RMD` (exit 0 on a 5xx). The positive grep proves the log is not
+  # empty, so the negative one is not vacuous.
+  grep -q "; rmdir .lftp-deployment.lock; quit;" "${FAKE_LFTP_LOG}"
+  if grep -qF "quote RMD" "${FAKE_LFTP_LOG}"; then exit 1; fi
   # v2.11.x (#132): the EXIT-trap release URL must carry the
   # embedded user, same as acquire_lock_with_recovery.
   grep -q "ftp://ftptest@example.test" "${FAKE_LFTP_LOG}"
@@ -996,7 +1059,8 @@ LIST
     "ftp://example.test" ".lftp-deployment.lock" "" "ftptest"
   [ "$status" -eq 0 ]
   grep -q "quote DELE .lftp-deployment.lock/.lftp-deployment.lock.20260707T080000Z.1234.info" "${FAKE_LFTP_LOG}"
-  grep -q "quote RMD .lftp-deployment.lock" "${FAKE_LFTP_LOG}"
+  grep -q "; rmdir .lftp-deployment.lock; quit;" "${FAKE_LFTP_LOG}"
+  if grep -qF "quote RMD" "${FAKE_LFTP_LOG}"; then exit 1; fi
 }
 
 # FND-0004: the sentinel lives inside the lock dir, so release must DELE it
@@ -1008,7 +1072,7 @@ LIST
   run release_lock_safely "ftp://example.test" "deploy/lock" "${s}" "ftptest"
   [ "$status" -eq 0 ] || exit 1
   [ "$(wc -l < "${FAKE_LFTP_LOG}")" -eq 1 ] || exit 1
-  grep -qF "quote DELE deploy/lock/${s}; quote RMD deploy/lock; quit;" "${FAKE_LFTP_LOG}" || {
+  grep -qF "quote DELE deploy/lock/${s}; rmdir deploy/lock; quit;" "${FAKE_LFTP_LOG}" || {
     echo "release script wrong:"; cat "${FAKE_LFTP_LOG}"; exit 1
   }
   # No login-dir DELE of the bare sentinel name.
@@ -1106,7 +1170,7 @@ FND3_OLD=".lftp-deployment.lock.20260101T000000Z.1234.info"
   export FAKE_LFTP_RC=0
   release_lock_safely "ftp://example.test" "${FND3_LOCK}" "${ACQUIRED_LOCK_SENTINEL}" "ftptest" || exit 1
   [ "$(wc -l < "${FAKE_LFTP_LOG}")" -eq 1 ] || { cat "${FAKE_LFTP_LOG}"; exit 1; }
-  grep -qF "quote DELE ${FND3_LOCK}/${FND3_OLD}; quote DELE ${FND3_LOCK}/${t1}; quote DELE ${FND3_LOCK}/${t2}; quote RMD ${FND3_LOCK}; quit;" "${FAKE_LFTP_LOG}" || {
+  grep -qF "quote DELE ${FND3_LOCK}/${FND3_OLD}; quote DELE ${FND3_LOCK}/${t1}; quote DELE ${FND3_LOCK}/${t2}; rmdir ${FND3_LOCK}; quit;" "${FAKE_LFTP_LOG}" || {
     echo "release script wrong:"; cat "${FAKE_LFTP_LOG}"; exit 1
   }
 }
@@ -1125,7 +1189,7 @@ FND3_OLD=".lftp-deployment.lock.20260101T000000Z.1234.info"
   [ -z "${ACQUIRED_LOCK_SENTINEL_TRIED}" ] || exit 1
   rm -f "${FAKE_LFTP_LOG}"
   release_lock_safely "ftp://example.test" "${FND3_LOCK}" "${ACQUIRED_LOCK_SENTINEL}" "ftptest" || exit 1
-  grep -qF " quote DELE ${FND3_LOCK}/${new}; quote RMD ${FND3_LOCK}; quit;" "${FAKE_LFTP_LOG}" || {
+  grep -qF " quote DELE ${FND3_LOCK}/${new}; rmdir ${FND3_LOCK}; quit;" "${FAKE_LFTP_LOG}" || {
     echo "release script wrong:"; cat "${FAKE_LFTP_LOG}"; exit 1
   }
 }
@@ -1135,6 +1199,125 @@ FND3_OLD=".lftp-deployment.lock.20260101T000000Z.1234.info"
   run release_lock_safely "ftp://example.test" "" "" "ftptest"
   [ "$status" -eq 0 ]
   [ ! -s "${FAKE_LFTP_LOG}" ]
+}
+
+# ----------------------------------------------------------------------------
+# FND-0105: release_lock_safely ends with lftp `rmdir` (a refused RMD gives a
+# non-zero exit, as the FND-0092 probe showed; `quote RMD` exits 0) and
+# prints a ::warning:: naming the lock dir when it fails, still returning 0.
+# The fake below behaves like lftp 4.9.3: the exit code is that of the last
+# command, so with FAKE_RMD_FAIL=1 a script ending in `rmdir` exits 1 while a
+# `quote RMD` script exits 0 (that is what made the old release silent).
+# FAKE_RMD_RC overrides the failing exit code (e.g. 124 for the wrapper).
+# ----------------------------------------------------------------------------
+
+_install_release_fake() {
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "$*" >> "${FAKE_LFTP_LOG}"
+case "$*" in
+  *" rmdir "*) [ "${FAKE_RMD_FAIL:-0}" = 1 ] && exit "${FAKE_RMD_RC:-1}" ;;
+esac
+exit 0
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/lftp"
+}
+
+FND105_WARN="::warning::concurrency lock: could not remove the lock dir"
+
+@test "release_lock_safely: FND-0105: RMD refused -> returns 0, one ::warning:: naming the lock dir, script ends 'rmdir <path>; quit;'" {
+  _install_release_fake
+  export FAKE_RMD_FAIL=1
+  s=".lftp-deployment.lock.20260707T080000Z.1234.info"
+  run release_lock_safely "ftp://example.test" "deploy/lock" "${s}" "ftptest"
+  echo "status=${status}"; echo "${output}"; cat "${FAKE_LFTP_LOG}"
+  [ "${status}" -eq 0 ]
+  [ "$(wc -l < "${FAKE_LFTP_LOG}")" -eq 1 ]
+  grep -qF "quote DELE deploy/lock/${s}; rmdir deploy/lock; quit;" "${FAKE_LFTP_LOG}"
+  if grep -qF "quote RMD" "${FAKE_LFTP_LOG}"; then exit 1; fi
+  [ "$(printf '%s\n' "${output}" | wc -l)" -eq 1 ]
+  [[ "${output}" == "${FND105_WARN} deploy/lock after the run (lftp exit 1: RMD refused or failed, or the dir is not empty). "* ]]
+  [[ "${output}" == *"their timeout is over 120 s"* ]]
+  [[ "${output}" == *"Remove it on the server by hand, or check the delete permission under concurrency_lock_path." ]]
+}
+
+@test "release_lock_safely: FND-0105: the warning reports the timeout wrapper's exit code too, and returns 0" {
+  _install_release_fake
+  export FAKE_RMD_FAIL=1 FAKE_RMD_RC=124
+  run release_lock_safely "ftp://example.test" ".lftp-deployment.lock" ".lftp-deployment.lock.20260707T080000Z.1234.info" "ftptest"
+  echo "status=${status}"; echo "${output}"
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == "${FND105_WARN} .lftp-deployment.lock after the run (lftp exit 124: "* ]]
+}
+
+@test "release_lock_safely: FND-0105: RMD ok -> no warning, no output" {
+  _install_release_fake
+  export FAKE_RMD_FAIL=0
+  run release_lock_safely "ftp://example.test" ".lftp-deployment.lock" ".lftp-deployment.lock.20260707T080000Z.1234.info" "ftptest"
+  echo "status=${status}"; echo "${output}"; cat "${FAKE_LFTP_LOG}"
+  [ "${status}" -eq 0 ]
+  grep -qF "; rmdir .lftp-deployment.lock; quit;" "${FAKE_LFTP_LOG}"
+  [ -z "${output}" ]
+}
+
+@test "release_lock_safely: FND-0105: the #188 guard is still a no-op (no lftp call, no warning) even when RMD would fail" {
+  _install_release_fake
+  export FAKE_RMD_FAIL=1
+  unset ACQUIRED_LOCK_SENTINEL
+  ACQUIRED_LOCK_SENTINEL_TRIED="some-tried-name"
+  run release_lock_safely "ftp://example.test" ".lftp-deployment.lock" "" "ftptest"
+  echo "status=${status}"; echo "${output}"
+  [ "${status}" -eq 0 ]
+  [ ! -e "${FAKE_LFTP_LOG}" ]
+  [ -z "${output}" ]
+}
+
+@test "release_lock_safely: FND-0105: with RMD refused the sentinel and every TRIED name are still DELEd first, in the same single session" {
+  _install_release_fake
+  export FAKE_RMD_FAIL=1
+  p=".lftp-deployment.lock"
+  ACQUIRED_LOCK_SENTINEL="${p}.20260707T080000Z.1.info"
+  ACQUIRED_LOCK_SENTINEL_TRIED="${p}.20260707T090000Z.1.info ${p}.20260707T100000Z.1.info"
+  run release_lock_safely "ftp://example.test" "${p}" "" "ftptest"
+  echo "status=${status}"; echo "${output}"; cat "${FAKE_LFTP_LOG}"
+  [ "${status}" -eq 0 ]
+  [ "$(wc -l < "${FAKE_LFTP_LOG}")" -eq 1 ]
+  grep -qF " quote DELE ${p}/${p}.20260707T080000Z.1.info; quote DELE ${p}/${p}.20260707T090000Z.1.info; quote DELE ${p}/${p}.20260707T100000Z.1.info; rmdir ${p}; quit;" "${FAKE_LFTP_LOG}"
+  # The 30 s wrapper and the tightened preamble are unchanged.
+  grep -qF "set net:max-retries 1;" "${FAKE_LFTP_LOG}"
+  [[ "${output}" == "${FND105_WARN} ${p} after the run"* ]]
+}
+
+@test "release_lock_safely: FND-0105: a caller under set -e keeps running after a refused RMD" {
+  _install_release_fake
+  export FAKE_RMD_FAIL=1
+  set -e
+  release_lock_safely "ftp://example.test" ".lftp-deployment.lock" ".lftp-deployment.lock.20260707T080000Z.1234.info" "ftptest" > "${BATS_TEST_TMPDIR}/out"
+  reached=1
+  [ "${reached}" = 1 ]
+  grep -qF "${FND105_WARN} .lftp-deployment.lock after the run" "${BATS_TEST_TMPDIR}/out"
+}
+
+@test "release_lock_safely: FND-0105: a failing warning printf (closed stdout) cannot abort the release or change its return value" {
+  _install_release_fake
+  export FAKE_RMD_FAIL=1
+  # The warning printf must run under set +e: with stdout closed it fails,
+  # and a printf after `set -e` would kill a set -e caller (the EXIT trap)
+  # before it could return 0. A bash child, because the shell state of the
+  # test itself must not be touched.
+  export LIB
+  run bash -c '
+    set -e
+    . "$LIB"
+    release_lock_safely "ftp://example.test" ".lftp-deployment.lock" ".lftp-deployment.lock.20260707T080000Z.1234.info" "ftptest" >&- 2>/dev/null
+    echo "returned=$?" > "$BATS_TEST_TMPDIR/after"
+  '
+  echo "status=${status}"; echo "${output}"
+  [ "${status}" -eq 0 ]
+  # The RMD really did fail in this run (the warning path was taken) ...
+  grep -qF "; rmdir .lftp-deployment.lock; quit;" "${FAKE_LFTP_LOG}"
+  # ... and the caller still ran its next command with a 0 return.
+  [ "$(cat "${BATS_TEST_TMPDIR}/after")" = "returned=0" ]
 }
 
 # F2 audit (#312): the mktemp fallback branch in
@@ -1150,6 +1333,7 @@ FND3_OLD=".lftp-deployment.lock.20260101T000000Z.1234.info"
 # to capture the body file path so we can stat() its mode after
 # the function returns. Same trick as the FAKE_LFTP shim above.
 @test "acquire_lock_with_recovery: mktemp fallback branch sets sentinel body mode to 0600 (issue #312)" {
+  _install_virtual_clock
   export FAKE_LFTP_RC="0"
 
   # mktemp() override: return 1 so the `|| _alwr_sentinel_body="..."`
@@ -1844,7 +2028,7 @@ _call_kinds() {
   n2=${n2%"; quit;"}
   [ "${n1}" != "${n2}" ] || exit 1
   rel=$(grep '^LFTP release' "${CALL_LOG}")
-  [ "${rel}" = "LFTP release ${n2}; quote RMD ${p}; quit;" ] || { echo "release: ${rel}"; exit 1; }
+  [ "${rel}" = "LFTP release ${n2}; rmdir ${p}; quit;" ] || { echo "release: ${rel}"; exit 1; }
 }
 
 @test "entrypoint: FND-0003: a refresh failure during the run only warns; the deploy still succeeds and the release DELEs the TRIED names" {
@@ -1861,7 +2045,7 @@ _call_kinds() {
   old="${p}/.lftp-deployment.lock.20200101T000000Z.1234.info"
   [ "$(grep -c "^LFTP mv ${old} " "${CALL_LOG}")" -eq 2 ] || exit 1
   rel=$(grep '^LFTP release' "${CALL_LOG}")
-  [[ "${rel}" == "LFTP release ${old}; quote DELE ${p}/.lftp-deployment.lock.2026"*".info; quote DELE ${p}/.lftp-deployment.lock.2026"*".info; quote RMD ${p}; quit;" ]] || { echo "release: ${rel}"; exit 1; }
+  [[ "${rel}" == "LFTP release ${old}; quote DELE ${p}/.lftp-deployment.lock.2026"*".info; quote DELE ${p}/.lftp-deployment.lock.2026"*".info; rmdir ${p}; quit;" ]] || { echo "release: ${rel}"; exit 1; }
 }
 
 @test "entrypoint: FND-0003: concurrency_lock=false makes no refresh and no release call" {
@@ -1909,10 +2093,17 @@ STUB
 printf 'LFTP %s\n' "$*" >> "${CALL_LOG}"
 case " $* " in
   *" mv "*) [ -z "${FAKE_MV_FAIL:-}" ] || exit 5 ;;
+  *" rmdir "*) [ -z "${FAKE_RMD_FAIL:-}" ] || exit 1 ;;
+  *" mirror "*) exit "${FAKE_MIRROR_RC:-0}" ;;
 esac
 exit 0
 FAKE
   chmod +x "${BATS_TEST_TMPDIR}/bin/lftp"
+  # FND-0096: the heartbeat's new sentinel name takes its stamp from
+  # `date -u`; the virtual clock pins it to 2026-07-01, so the
+  # `.lftp-deployment.lock.2026*` patterns below do not depend on the real
+  # year (they would fail from 2027-01-01).
+  _install_virtual_clock
   # bash, not sh: see _run_entrypoint_with_lock_rc. timeout: a regression
   # must fail the test, never hang it.
   HOME="${BATS_TEST_TMPDIR}/home" \
@@ -1935,7 +2126,7 @@ FAKE
   [ ! -s "${CALL_LOG}" ]
   run grep -cF 'quote DELE' "${CALL_LOG}"
   [ "${output}" = "0" ]
-  run grep -cF 'quote RMD' "${CALL_LOG}"
+  run grep -cE 'quote RMD|rmdir ' "${CALL_LOG}"
   [ "${output}" = "0" ]
   run grep -cF 'PWNED' "${CALL_LOG}"
   [ "${output}" = "0" ]
@@ -1958,7 +2149,7 @@ FAKE
   # The heartbeat renamed the stubbed name to a fresh stamp; the release
   # DELEs that current name (exactly one DELE), then RMDs.
   [ "$(grep -cF 'quote DELE' "${CALL_LOG}")" -eq 1 ]
-  [[ "${rel}" == *"quote DELE ${p}/.lftp-deployment.lock.2026"*".info; quote RMD ${p}; quit;" ]] || { echo "release: ${rel}"; exit 1; }
+  [[ "${rel}" == *"quote DELE ${p}/.lftp-deployment.lock.2026"*".info; rmdir ${p}; quit;" ]] || { echo "release: ${rel}"; exit 1; }
 }
 
 # The TRIED reset is invisible on a failed acquire (TRIED is read only when a
@@ -1977,10 +2168,236 @@ FAKE
   p=".lftp-deployment.lock"
   rel=$(grep -F 'quote DELE' "${CALL_LOG}")
   [ "$(grep -cF 'quote DELE' "${CALL_LOG}")" -eq 1 ]
-  [[ "${rel}" == *"quote DELE ${p}/.lftp-deployment.lock.20200101T000000Z.1234.info; quote DELE ${p}/.lftp-deployment.lock.2026"*".info; quote RMD ${p}; quit;" ]] || { echo "release: ${rel}"; exit 1; }
+  [[ "${rel}" == *"quote DELE ${p}/.lftp-deployment.lock.20200101T000000Z.1234.info; quote DELE ${p}/.lftp-deployment.lock.2026"*".info; rmdir ${p}; quit;" ]] || { echo "release: ${rel}"; exit 1; }
   run grep -cF 'inh-tried-marker' "${CALL_LOG}"
   [ "${output}" = "0" ]
   run grep -cF 'PWNED' "${CALL_LOG}"
   [ "${output}" = "0" ]
   [ ! -e "${pwned}" ]
+}
+
+# FND-0105 at the entrypoint level: the REAL release_lock_safely runs in the
+# EXIT trap (stubbed acquire, harness above) against a fake lftp whose
+# `rmdir` fails (FAKE_RMD_FAIL) and whose mirror exits FAKE_MIRROR_RC. The
+# warning is printed, and the action's exit code is the one it would have had
+# with a working RMD: 0 after a successful deploy, the mirror failure's code
+# otherwise.
+@test "entrypoint: FND-0105: RMD refused at release -> the warning names the lock dir and a successful run still exits 0" {
+  unset ACQUIRED_LOCK_SENTINEL ACQUIRED_LOCK_SENTINEL_TRIED
+  FAKE_RMD_FAIL=1 _run_entrypoint_inherited_sentinel 0
+  echo "status=${status}"; echo "${output}"; cat "${CALL_LOG}"
+  [ "${status}" -eq 0 ]
+  [ "$(grep -c ' mirror ' "${CALL_LOG}")" -ge 1 ]
+  [ "$(grep -cF '; rmdir .lftp-deployment.lock; quit;' "${CALL_LOG}")" -eq 1 ]
+  [ "$(printf '%s\n' "${output}" | grep -cF '::warning::concurrency lock: could not remove the lock dir .lftp-deployment.lock after the run (lftp exit 1: ')" -eq 1 ]
+  # The release runs in the EXIT trap, so the warning is the last line.
+  [[ "$(printf '%s\n' "${output}" | tail -n 1)" == "::warning::concurrency lock: could not remove the lock dir"* ]]
+}
+
+@test "entrypoint: FND-0105: RMD refused at release does not change a failed run's exit code" {
+  unset ACQUIRED_LOCK_SENTINEL ACQUIRED_LOCK_SENTINEL_TRIED
+  FAKE_MIRROR_RC=1 _run_entrypoint_inherited_sentinel 0
+  echo "status=${status}"; echo "${output}"
+  ok_status=${status}
+  [ "${ok_status}" -ne 0 ]
+  [[ "${output}" != *"could not remove the lock dir"* ]]
+  FAKE_MIRROR_RC=1 FAKE_RMD_FAIL=1 _run_entrypoint_inherited_sentinel 0
+  echo "status=${status}"; echo "${output}"
+  [ "${status}" -eq "${ok_status}" ]
+  [[ "${output}" == *"could not remove the lock dir .lftp-deployment.lock after the run"* ]]
+}
+
+# ----------------------------------------------------------------------------
+# FND-0097 / FND-0002: a signal must run the EXIT trap (.netrc removal and lock
+# release). busybox ash, like dash, dies on an untrapped INT/TERM without
+# running it, and the shell runs a trap only after the foreground command, so
+# the mirror runs in the background (run_lftp_once) and the HUP/INT/TERM traps
+# stop it and exit 129/130/143 through the EXIT trap. A scratch entrypoint
+# (paths rewritten as above) runs under bash in the background with the REAL
+# run_lftp_once, refresh_lock_sentinel and release_lock_safely and a stubbed
+# acquire; the fake lftp logs to CALL_LOG, and its mirror sleeps 30 s and logs
+# when it gets SIGTERM. bash, unlike busybox ash, runs the EXIT trap on a
+# fatal HUP/TERM by itself, so the ash case (no cleanup at all) is shown by the
+# image probe in the fix log; here the order (mirror stopped before the
+# release), INT and the second signal are what fail without the fix. The test
+# signals the shell (only its PID, as the runtime does with PID 1) once the
+# mirror runs, and kills it after 15 s so a hang fails instead of blocking.
+# SECOND_SIG is sent while the release runs (FAKE_RELEASE_SLEEP keeps it
+# busy). ENTRYPOINT_SRC / LIB_SRC select the files under test (the tests were
+# proven to fail on the HEAD files).
+# ----------------------------------------------------------------------------
+
+_run_entrypoint_signal() {
+  local sig=$1 lock=$2
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local src="${ENTRYPOINT_SRC:-${root}/entrypoint.sh}"
+  local app="${BATS_TEST_TMPDIR}/app"
+  # Fail loudly (not with a vanished child and a confusing `kill` error) when
+  # this env cannot reset SIGINT (needs GNU coreutils >= 8.31; ubuntu 24.04 has 9.4).
+  if ! env --default-signal=INT true 2>/dev/null; then
+    echo "env --default-signal is unsupported here (GNU coreutils >= 8.31 needed): the signal tests cannot run" >&2
+    return 1
+  fi
+  SIG_HOME="${BATS_TEST_TMPDIR}/home/lftp"
+  mkdir -p "${app}" "${SIG_HOME}" "${BATS_TEST_TMPDIR}/site"
+  cp "${LIB}" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  cat >> "${app}/lib.sh" <<'STUB'
+
+acquire_lock_with_recovery() {
+  printf 'ACQUIRE\n' >> "${CALL_LOG}"
+  ACQUIRED_LOCK_SENTINEL=".lftp-deployment.lock.20200101T000000Z.1234.info"
+  return 0
+}
+STUB
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${SIG_HOME}#g" \
+    "${src}" > "${app}/entrypoint.sh"
+
+  export CALL_LOG="${BATS_TEST_TMPDIR}/calls.log"
+  : > "${CALL_LOG}"
+  cat > "${BATS_TEST_TMPDIR}/bin/lftp" <<'FAKE'
+#!/bin/bash
+all="$*"
+case "${all}" in
+  *" mv "*) printf 'LFTP mv\n' >> "${CALL_LOG}" ;;
+  *"quote DELE"*)
+    printf 'LFTP release %s\n' "${all#*; quote DELE }" >> "${CALL_LOG}"
+    sleep "${FAKE_RELEASE_SLEEP:-0}"
+    printf 'LFTP release done\n' >> "${CALL_LOG}"
+    [ -z "${FAKE_RMD_FAIL:-}" ] || exit 1 ;;
+  *mirror*)
+    trap 'printf "MIRROR got TERM\n" >> "${CALL_LOG}"; kill "${sp}" 2>/dev/null; exit 143' TERM
+    printf 'MIRROR start\n' >> "${CALL_LOG}"
+    sleep 30 & sp=$!
+    wait "${sp}"
+    printf 'MIRROR ended\n' >> "${CALL_LOG}" ;;
+  *) printf 'LFTP other %s\n' "${all}" >> "${CALL_LOG}" ;;
+esac
+exit 0
+FAKE
+  chmod +x "${BATS_TEST_TMPDIR}/bin/lftp"
+
+  # bash, not sh: see _run_entrypoint_with_lock_rc. fd 3 (bats) is closed so
+  # a leftover process cannot hold the test open. A background job of a
+  # shell without job control starts with SIGINT ignored, and a signal
+  # ignored on entry cannot be trapped, so env (GNU coreutils) resets it;
+  # the runtime starts the container's PID 1 with default dispositions.
+  HOME="${BATS_TEST_TMPDIR}/home" \
+  INPUT_SERVER="ftp://example.test" INPUT_USER="ftptest" INPUT_PASSWORD="pw" \
+  INPUT_LOCAL_DIR="${BATS_TEST_TMPDIR}/site/" INPUT_REMOTE_DIR="./" \
+  INPUT_CONCURRENCY_LOCK="${lock}" INPUT_MAX_RETRIES="1" \
+    env --default-signal=INT bash -eu "${app}/entrypoint.sh" > "${BATS_TEST_TMPDIR}/out" 2>&1 3>&- &
+  local pid=$! i
+  for i in $(seq 100); do
+    grep -q '^MIRROR start' "${CALL_LOG}" && break
+    sleep 0.1
+  done
+  NETRC_DURING=absent
+  [ -f "${SIG_HOME}/.netrc" ] && NETRC_DURING=present
+  local t0=${SECONDS}
+  kill -s "${sig}" "${pid}"
+  if [ -n "${SECOND_SIG:-}" ]; then
+    for i in $(seq 100); do
+      grep -q '^LFTP release ' "${CALL_LOG}" && break
+      sleep 0.1
+    done
+    kill -s "${SECOND_SIG}" "${pid}" 2>/dev/null || :
+  fi
+  HUNG=""
+  for i in $(seq 150); do
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "${pid}" 2>/dev/null; then
+    HUNG=1
+    kill -s KILL "${pid}" 2>/dev/null || :
+  fi
+  status=0
+  wait "${pid}" || status=$?
+  ELAPSED=$((SECONDS - t0))
+  output=$(cat "${BATS_TEST_TMPDIR}/out")
+}
+
+_sig_report() {
+  echo "status=${status} elapsed=${ELAPSED}s hung=${HUNG} netrc_during=${NETRC_DURING}"
+  echo "${output}"
+  echo "--- calls"; cat "${CALL_LOG}"
+}
+
+@test "entrypoint: FND-0097/FND-0002: SIGTERM mid-mirror stops lftp, releases the lock (DELE + RMD), removes the .netrc and exits 143 at once" {
+  _run_entrypoint_signal TERM true
+  _sig_report
+  [ -z "${HUNG}" ]
+  [ "${NETRC_DURING}" = present ]
+  [ "${status}" -eq 143 ]
+  [ "${ELAPSED}" -lt 10 ]
+  [ ! -e "${SIG_HOME}/.netrc" ]
+  # The mirror got SIGTERM before the release ran, and the release ran once.
+  kinds=$(sed -e 's/^\(LFTP release\) [^d].*/\1/' "${CALL_LOG}" | tr '\n' ',')
+  [ "${kinds}" = "ACQUIRE,LFTP mv,MIRROR start,MIRROR got TERM,LFTP release,LFTP release done," ] || { echo "order: ${kinds}"; exit 1; }
+  p=".lftp-deployment.lock"
+  rel=$(grep '^LFTP release \.' "${CALL_LOG}")
+  [[ "${rel}" == "LFTP release ${p}/.lftp-deployment.lock.2026"*".info; rmdir ${p}; quit;" ]] || { echo "release: ${rel}"; exit 1; }
+  [[ "${output}" != *"FTP UPLOADED FINISHED"* ]]
+}
+
+# FND-0105: a refused RMD in the release that the signal's EXIT trap runs
+# warns but keeps the signal's exit status.
+@test "entrypoint: FND-0105: SIGTERM mid-mirror with the release RMD refused still exits 143 and warns" {
+  FAKE_RMD_FAIL=1 _run_entrypoint_signal TERM true
+  _sig_report
+  [ -z "${HUNG}" ]
+  [ "${status}" -eq 143 ]
+  [ "${ELAPSED}" -lt 10 ]
+  [ ! -e "${SIG_HOME}/.netrc" ]
+  grep -q '^LFTP release done' "${CALL_LOG}"
+  [[ "${output}" == *"::warning::concurrency lock: could not remove the lock dir .lftp-deployment.lock after the run (lftp exit 1: "* ]]
+}
+
+@test "entrypoint: FND-0097/FND-0002: SIGINT mid-mirror stops lftp, releases the lock, removes the .netrc and exits 130 at once" {
+  _run_entrypoint_signal INT true
+  _sig_report
+  [ -z "${HUNG}" ]
+  [ "${NETRC_DURING}" = present ]
+  [ "${status}" -eq 130 ]
+  [ "${ELAPSED}" -lt 10 ]
+  [ ! -e "${SIG_HOME}/.netrc" ]
+  kinds=$(sed -e 's/^\(LFTP release\) [^d].*/\1/' "${CALL_LOG}" | tr '\n' ',')
+  [ "${kinds}" = "ACQUIRE,LFTP mv,MIRROR start,MIRROR got TERM,LFTP release,LFTP release done," ] || { echo "order: ${kinds}"; exit 1; }
+}
+
+@test "entrypoint: FND-0097/FND-0002: SIGHUP mid-mirror releases the lock, removes the .netrc and exits 129" {
+  _run_entrypoint_signal HUP true
+  _sig_report
+  [ -z "${HUNG}" ]
+  [ "${status}" -eq 129 ]
+  [ "${ELAPSED}" -lt 10 ]
+  [ ! -e "${SIG_HOME}/.netrc" ]
+  # bash runs the EXIT trap on a fatal HUP/TERM by itself (busybox ash does
+  # not), so the order is what fails under bash without the fix: the lock
+  # was released while the mirror was still running.
+  kinds=$(sed -e 's/^\(LFTP release\) [^d].*/\1/' "${CALL_LOG}" | tr '\n' ',')
+  [ "${kinds}" = "ACQUIRE,LFTP mv,MIRROR start,MIRROR got TERM,LFTP release,LFTP release done," ] || { echo "order: ${kinds}"; exit 1; }
+}
+
+@test "entrypoint: FND-0097: concurrency_lock=false: SIGTERM mid-mirror removes the .netrc and exits 143, no release call" {
+  _run_entrypoint_signal TERM false
+  _sig_report
+  [ -z "${HUNG}" ]
+  [ "${NETRC_DURING}" = present ]
+  [ "${status}" -eq 143 ]
+  [ "${ELAPSED}" -lt 10 ]
+  [ ! -e "${SIG_HOME}/.netrc" ]
+  kinds=$(tr '\n' ',' < "${CALL_LOG}")
+  [ "${kinds}" = "MIRROR start,MIRROR got TERM," ] || { echo "calls: ${kinds}"; exit 1; }
+}
+
+@test "entrypoint: FND-0097/FND-0002: a second signal during the release does not cut it short or run the cleanup twice; exit status stays the first signal's" {
+  FAKE_RELEASE_SLEEP=2 SECOND_SIG=TERM _run_entrypoint_signal INT true
+  _sig_report
+  [ -z "${HUNG}" ]
+  [ "${status}" -eq 130 ]
+  [ ! -e "${SIG_HOME}/.netrc" ]
+  [ "$(grep -c '^LFTP release \.' "${CALL_LOG}")" -eq 1 ]
+  [ "$(grep -c '^LFTP release done' "${CALL_LOG}")" -eq 1 ]
 }

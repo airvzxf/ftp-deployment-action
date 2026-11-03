@@ -3,20 +3,24 @@
 #
 # Scenario 04 (variant C, closes #120 half 2): implicit FTPS upload.
 #
-#   * Boots docker.io/fauria/vsftpd with implicit_ssl=YES. vsftpd
-#     binds 2122 inside the container and expects TLS from the
-#     very first byte (no FTP-greeting-then-AUTH-TLS upgrade —
+#   * Boots the pre-baked FTPS test-server image (alpine vsftpd, built
+#     from tests/integration/Dockerfile.test-server) via
+#     start_ftps_server, with implicit_ssl=YES. The container runs
+#     with --network host, so vsftpd listens directly on
+#     ${FTP_IMPLICIT_PORT} (2122) on the host and expects TLS from
+#     the very first byte (no FTP-greeting-then-AUTH-TLS upgrade —
 #     the connection is encrypted at the transport layer from the
-#     start). The host-side port is also 2122 (unprivileged, no
-#     `ip_unprivileged_port_start` workaround needed).
+#     start). The port is unprivileged, so no
+#     `ip_unprivileged_port_start` workaround is needed.
 #   * Generates an ephemeral self-signed cert (same helper as
 #     scenario 03, see tests/integration/lib/self-signed-cert.sh).
 #   * Invokes the ftp-deployment-action image end-to-end with
-#     INPUT_SERVER=ftps://ftptest@127.0.0.1:2122. The `ftps://`
-#     scheme is what tells lftp to start TLS from byte 0 (no AUTH
-#     upgrade). The user is embedded in the URL for the same
-#     .netrc-lookup reason scenario 03 documents (acquire_lock_
-#     with_recovery does not apply run_lftp_once's URL rewrite).
+#     INPUT_SERVER=ftps://<user>@127.0.0.1:2122, where <user> is the
+#     per-scenario random FTP_USER. The `ftps://` scheme is what
+#     tells lftp to start TLS from byte 0 (no AUTH upgrade). The
+#     user in the URL is not required (rewrite_lftp_url embeds
+#     INPUT_USER when it is missing, for every lftp the action
+#     forks); see scenario 03.
 #   * INPUT_FTP_SSL_ALLOW=true / INPUT_SSL_VERIFY_CERTIFICATE=
 #     false / INPUT_SSL_CHECK_HOSTNAME=false: same rationale as
 #     scenario 03 — the cert is self-signed /CN=localhost.
@@ -34,14 +38,12 @@
 # pinpointed by the scenario that failed, not by a flag inside
 # scenario 03.
 #
-# Why we do NOT fall back to alpine+vsftpd: fauria/vsftpd's
-# vsftpd is compiled against libssl/libcrypto (verified via
-# `ldd`), and `implicit_ssl` is a standard vsftpd directive —
-# the fauria image just does not expose it via env vars. We
-# bind-mount a custom vsftpd.conf that sets `implicit_ssl=YES`
-# and the entrypoint's append-env-vars step preserves it. No
-# reason to drag in a second image and ~30 LoC of db_load
-# boilerplate when this works.
+# Why a bind-mounted vsftpd.conf: `implicit_ssl` is a standard
+# vsftpd directive. start_ftps_server bind-mounts an overlay
+# vsftpd.conf (written by _write_ftps_vsftpd_conf in
+# tests/integration/lib/self-signed-cert.sh) that sets
+# `implicit_ssl=YES` for MODE="implicit"; the same image and helper
+# serve scenario 03, where the directive is omitted.
 #
 # v2.11.9 (#232): the action's captured log (_log) and the
 # per-scenario env-file (_env) are cleaned up by the EXIT trap
@@ -66,9 +68,9 @@ scenario_setup "04-ftps-implicit-upload"
 _cert=$(generate_self_signed_cert)
 log_info "using cert ${_cert}"
 
-# MODE="implicit" maps host port $FTP_IMPLICIT_PORT -> container
-# port $FTP_IMPLICIT_PORT, with implicit_ssl=YES (TLS from byte
-# 0). FTP_IMPLICIT_PORT is exported from
+# MODE="implicit": under --network host vsftpd listens directly on
+# $FTP_IMPLICIT_PORT on the host, with implicit_ssl=YES (TLS from
+# byte 0). FTP_IMPLICIT_PORT is exported from
 # tests/integration/lib/self-signed-cert.sh (default 2122) so the
 # port literal lives in exactly one place; the INPUT_SERVER URL
 # below reads from the same variable. The shared PASV range is
@@ -81,7 +83,8 @@ start_ftps_server "${FTP_USER}" "${FTP_PASSWORD}" "${FTP_DATA_DIR}" "${_cert}" "
 # ftps:// (NOT ftp://): lftp treats ftps:// as "TLS from byte 0",
 # which is what implicit FTPS expects on the wire.
 #
-# Same user-in-URL / SSL-flag reasoning as scenario 03.
+# Same user-in-URL (optional, not required) / SSL-flag reasoning as
+# scenario 03.
 _env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env failed"
 # FTP_VSFTPD_CONF is the overlay vsftpd.conf bind-mounted into the
 # FTPS container (exported by start_ftps_server). Cleanup mirrors
@@ -94,9 +97,13 @@ _env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env failed"
 # not just the success branch.
 #
 # F2 audit (v2.11.9 +1 day): every variable in the trap uses the
-# `${VAR:-}` default form so a failure before _log / _env are
-# assigned does not abort the trap under `set -u` and leak the FTP
-# container. See scenario 03 for the full rationale.
+# `${VAR:-}` default form so a failure before _log is assigned does
+# not abort the trap under `set -u` and leak the FTP container. The
+# trap is installed after _env is assigned; until then the EXIT trap
+# is scenario_setup's `trap stop_ftp_server EXIT`, so a failing
+# `mktemp` for _env still removes the container and the data dir and
+# leaves only the vsftpd conf overlay behind. See scenario 03 for the
+# full rationale.
 trap 'rm -f "${_env:-}" "${_log:-}" "${FTP_VSFTPD_CONF:-}"; stop_ftp_server' EXIT
 
 {
@@ -121,9 +128,11 @@ trap 'rm -f "${_env:-}" "${_log:-}" "${FTP_VSFTPD_CONF:-}"; stop_ftp_server' EXI
   printf 'INPUT_LFTP_SETTINGS=set ftp:ssl-force true;set net:persist-retries 0;\n'
 } > "${_env}"
 # v2.11.3 (#158): see scenario 03 — INPUT_PASSWORD in this tmpfile
-# must not be world-readable. mktemp on alpine busybox defaults to
-# mode 0644; chmod 0600 closes the gap (matches tests/integration/
-# lib/common.sh:406 for the scenarios that go through
+# must not be readable by other users. This mktemp runs on the host;
+# GNU coreutils and alpine busybox mktemp both create the file with
+# mode 0600 (measured), and chmod 0600 keeps that explicit instead
+# of relying on the host's mktemp (matches build_action_env_file in
+# tests/integration/lib/common.sh for the scenarios that go through
 # lftp_build_open_script / build_action_env_file).
 chmod 0600 "${_env}"
 

@@ -93,7 +93,7 @@ export TEST_SERVER_IMAGE
 export SMOKE_IMAGE
 
 # ----------------------------------------------------------------------------
-# Lint: shellcheck on the .sh files listed in the recipe, actionlint on
+# Lint: shellcheck on the discovered shell scripts (SHELLCHECK_FILES), actionlint on
 # the workflows (the recipe passes no file arguments, so it lints
 # .github/workflows; action.yml is not a workflow and is checked by
 # tests/contract.sh instead), hadolint on every Dockerfile in the repo
@@ -107,33 +107,50 @@ export SMOKE_IMAGE
 .PHONY: lint
 lint: shellcheck actionlint hadolint
 
+# The lint set is discovered, not listed by hand (FND-0094): every
+# tracked *.sh file plus every other tracked file whose first line is
+# a sh/bash/dash/ksh/ash shebang, minus *.bats (bats syntax, not
+# shellchecked). $(sort) makes the order deterministic. Discovery
+# needs a git checkout (git ls-files); without one the target fails
+# loudly instead of falling back to `find`, which would also pick up
+# untracked scratch files and lint a different set than CI does.
+# tests/acceptance/static.sh S26 checks that `make -n shellcheck`
+# names every tracked shell script.
+SHELLCHECK_SHEBANG_RE := ^\#![[:space:]]*[^[:space:]]*/(env[[:space:]]+)?(sh|bash|dash|ksh|ash)([[:space:]]|$$)
+SHELLCHECK_GIT = $(shell cd "$(ROOT)" && git rev-parse --is-inside-work-tree 2>/dev/null)
+SHELLCHECK_FILES = $(sort $(shell cd "$(ROOT)" && git ls-files 2>/dev/null | \
+	while IFS= read -r f; do \
+		case "$$f" in (*.bats) continue ;; esac; \
+		[ -f "$$f" ] || continue; \
+		case "$$f" in (*.sh) printf '%s\n' "$$f"; continue ;; esac; \
+		head -n 1 "$$f" | grep -Eq '$(SHELLCHECK_SHEBANG_RE)' && printf '%s\n' "$$f"; \
+	done))
+# Per-file exceptions. self-signed-cert.sh has known SC2016 false
+# positives (v2.11.13, #317): the user_sub_token and local_root printf
+# lines in _write_ftps_vsftpd_conf write $USER literals that are
+# consumed by vsftpd's *own* template expansion at runtime, not by the
+# outer shell; the docker -c body in start_ftps_server (adduser,
+# chpasswd, chmod) uses the `'"${var}"'` close-quote /
+# open-double-quote trick to smuggle outer-shell expansions into a
+# `-c '...'` docker body, and shellcheck parses the in-line
+# `"${var}"` segment as outer shell code that looks like an
+# unexpanded literal. Excluding SC2016 per file keeps a future real
+# SC2016 elsewhere (entrypoint.sh, lib.sh, etc.) caught.
+SHELLCHECK_SC2016_FILES := tests/integration/lib/self-signed-cert.sh
+
 .PHONY: shellcheck
 shellcheck:
 	@command -v shellcheck >/dev/null 2>&1 || { \
 		echo "shellcheck not found; install with: apt-get install shellcheck / apk add shellcheck"; \
 		exit 1; }
+	$(if $(filter true,$(SHELLCHECK_GIT)),,$(error shellcheck: $(ROOT) is not a git checkout; the lint set comes from `git ls-files` (clone the repository instead of using a tarball)))
+	$(if $(SHELLCHECK_FILES),,$(error shellcheck: no shell scripts discovered by git ls-files))
 	# -x: follow `shellcheck source=` directives (entrypoint.sh sources lib.sh,
 	# tests/integration/scenarios/*.sh source tests/integration/lib/common.sh).
-	# Pass common.sh alongside each scenario so shellcheck's source= path
-	# resolution can find the shared library.
-	shellcheck -x entrypoint.sh lib.sh tests/acceptance/static.sh tests/contract.sh tests/smoke.sh tests/release-smoke.sh
-	shellcheck -x tests/integration/lib/common.sh tests/integration/run-integration-tests.sh
-	shellcheck -x tests/integration/scenarios/*.sh
-	# v2.11.13 (#317): include the FTPS-cert helper and the
-	# tag-verifier script in the lint sweep. verify-tag.sh is clean;
-	# self-signed-cert.sh has known SC2016 false positives
-	# (the user_sub_token and local_root printf lines in
-	# _write_ftps_vsftpd_conf write $$USER literals that are consumed by
-	# vsftpd's *own* template expansion at
-	# runtime, not by the outer shell; the docker -c body in
-	# start_ftps_server (adduser, chpasswd, chmod) uses the
-	# `'"$${var}"'` close-quote / open-double-quote trick to smuggle
-	# outer-shell expansions into a `-c '...'` docker body, and
-	# shellcheck parses the in-line `"$${var}"` segment as outer
-	# shell code that looks like an unexpanded literal). Excluding
-	# SC2016 is per-file (`-e`) so a future real SC2016 elsewhere
-	# (entrypoint.sh, lib.sh, etc.) is still caught.
-	shellcheck -x scripts/verify-tag.sh tests/integration/lib/self-signed-cert.sh -e SC2016
+	# common.sh is in the same invocation as the scenarios, so
+	# shellcheck's source= path resolution can find the shared library.
+	shellcheck -x $(filter-out $(SHELLCHECK_SC2016_FILES),$(SHELLCHECK_FILES))
+	shellcheck -x -e SC2016 $(SHELLCHECK_SC2016_FILES)
 
 .PHONY: actionlint
 actionlint:
@@ -207,7 +224,8 @@ unit:
 	@command -v bats >/dev/null 2>&1 || { \
 		echo "bats not found; install with: apt-get install -y bats"; \
 		echo "(see tests/unit/README.md for alternatives)"; \
-		exit 0; }
+		exit 0; }; \
+	set -x; \
 	bats tests/unit
 
 # ----------------------------------------------------------------------------
@@ -307,7 +325,8 @@ build-smoke-image:
 integration:
 	@command -v docker >/dev/null 2>&1 || command -v podman >/dev/null 2>&1 || { \
 		echo "no docker/podman found; skipping integration tests"; \
-		exit 0; }
+		exit 0; }; \
+	set -x; \
 	$(SH) tests/integration/run-integration-tests.sh
 
 .PHONY: run

@@ -26,7 +26,8 @@
 #  10. Write credentials to ~/.netrc with mode 0600 (write_netrc).
 #  11. Reset ACQUIRED_LOCK_SENTINEL and ACQUIRED_LOCK_SENTINEL_TRIED
 #      and install the EXIT trap that releases the lock (only when
-#      concurrency_lock is on) and removes the .netrc.
+#      concurrency_lock is on) and removes the .netrc, and the
+#      HUP/INT/TERM traps that exit through it.
 #  12. Acquire the server-side concurrency lock (only when enabled;
 #      exit 1 if it cannot be acquired).
 #  13. Upload retry loop with exponential backoff + jitter, capturing
@@ -294,7 +295,9 @@ fi
 # /proc/<pid>/cmdline and in the GH Actions runner log. Writing it
 # to ~/.netrc with mode 0600 is the POSIX-blessed way to feed lftp a
 # password. The file is removed via an EXIT trap so it does not
-# survive a `set -e` abort, a SIGINT, or a normal exit.
+# survive a `set -e` abort or a normal exit, and HUP/INT/TERM traps
+# exit through that EXIT trap (FND-0097; see the traps below). SIGKILL
+# runs no trap.
 #
 # v2.11.0: pin NETRC and HOME to the path the Dockerfile guarantees to be
 # writable for the `lftp` user. Self-hosted runners that forward
@@ -345,13 +348,26 @@ write_netrc "${NETRC}" "${NETRC_HOST}" "${INPUT_USER}" "${INPUT_PASSWORD}"
 # FND-0101: the trap reads these, so clear them before it is set; a
 # value inherited from the environment must never reach the release.
 # FND-0003: names of unconfirmed sentinel renames, DELEd by the release.
+#
+# FND-0097 / FND-0002: busybox ash does not run the EXIT trap when a
+# signal kills it, and as PID 1 it ignores an untrapped INT/TERM until
+# SIGKILL. The HUP/INT/TERM traps (also set by write_netrc, so there
+# is no gap) stop a running mirror and exit 129/130/143 through the
+# EXIT trap (exit_on_signal, lib.sh). The EXIT trap runs once (the
+# shell clears it before running it) and first sets HUP/INT/TERM to a
+# no-op, so a second signal (e.g. INT, then TERM) cannot cut the lock
+# release or the rm short; the signal-killed shell still exits with
+# the first signal's status. SIGKILL runs no trap.
 ACQUIRED_LOCK_SENTINEL=""
 ACQUIRED_LOCK_SENTINEL_TRIED=""
 if [ "${INPUT_CONCURRENCY_LOCK}" = "true" ]; then
-  trap 'release_lock_safely "${INPUT_SERVER}" "${INPUT_CONCURRENCY_LOCK_PATH}" "${ACQUIRED_LOCK_SENTINEL:-}" "${INPUT_USER}"; rm -f "${NETRC}"' EXIT
+  trap 'trap : HUP INT TERM; release_lock_safely "${INPUT_SERVER}" "${INPUT_CONCURRENCY_LOCK_PATH}" "${ACQUIRED_LOCK_SENTINEL:-}" "${INPUT_USER}"; rm -f "${NETRC}"' EXIT
 else
-  trap 'rm -f "${NETRC}"' EXIT
+  trap 'trap : HUP INT TERM; rm -f "${NETRC}"' EXIT
 fi
+trap 'exit_on_signal 129' HUP
+trap 'exit_on_signal 130' INT
+trap 'exit_on_signal 143' TERM
 
 # ------------------------------------------------------------------------------
 # v2.9.0: acquire the server-side concurrency lock BEFORE the

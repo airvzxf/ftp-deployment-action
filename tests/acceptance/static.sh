@@ -1353,6 +1353,67 @@ else
   fail "S25 release.yml PGP detection:${_s25}"
 fi
 
+# S26 — every tracked shell script is in the shellcheck lint set
+#       (FND-0094). The expected set is computed here with the rule the
+#       Makefile documents: every tracked *.sh, plus every other tracked
+#       file (not *.bats) whose first line is a sh/bash/dash/ksh/ash
+#       shebang. The actual set is every non-option word of the
+#       `shellcheck` lines that `make -n shellcheck` prints (a glob word
+#       counts for the scripts it matches), so a hand-kept list that
+#       misses a script, a narrowed glob or a filter that drops one fails.
+#       Fails closed: no git checkout or no make is a FAIL.
+_s26=""
+_tmp26=$(mktemp -d 2>/dev/null) || _tmp26=""
+if [ -z "${_tmp26}" ]; then
+  _s26=" cannot create a temporary directory"
+elif ! command -v git >/dev/null 2>&1; then
+  _s26=" git not found (the lint set is discovered with git ls-files)"
+elif [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]; then
+  _s26=" ${ROOT} is not a git checkout"
+elif ! command -v make >/dev/null 2>&1; then
+  _s26=" make not found"
+elif ! git ls-files >"${_tmp26}/tracked" 2>"${_tmp26}/err"; then
+  _s26=" git ls-files failed: $(cat "${_tmp26}/err")"
+elif ! make -n --no-print-directory shellcheck >"${_tmp26}/plan" 2>"${_tmp26}/err"; then
+  _s26=" make -n shellcheck failed: $(cat "${_tmp26}/err")"
+else
+  : >"${_tmp26}/expected"
+  while IFS= read -r _f26; do
+    case "${_f26}" in (*.bats) continue ;; esac
+    [ -f "${_f26}" ] || continue
+    case "${_f26}" in
+      (*.sh) printf '%s\n' "${_f26}" >>"${_tmp26}/expected"; continue ;;
+    esac
+    if head -n 1 "${_f26}" \
+        | grep -Eq '^#![[:space:]]*[^[:space:]]*/(env[[:space:]]+)?(sh|bash|dash|ksh|ash)([[:space:]]|$)'; then
+      printf '%s\n' "${_f26}" >>"${_tmp26}/expected"
+    fi
+  done <"${_tmp26}/tracked"
+  awk '$1 == "shellcheck" {
+         for (i = 2; i <= NF; i++) if (substr($i, 1, 1) != "-") print $i
+       }' "${_tmp26}/plan" >"${_tmp26}/linted"
+  if [ ! -s "${_tmp26}/expected" ]; then
+    _s26=" no tracked shell scripts found (git ls-files returned none)"
+  fi
+  # A linted word may be a glob the recipe shell expands
+  # (tests/integration/scenarios/*.sh); match each script against every
+  # word as a case pattern, so a literal path and a glob both count.
+  while IFS= read -r _f26; do
+    _hit26=0
+    while IFS= read -r _w26; do
+      # shellcheck disable=SC2254
+      case "${_f26}" in ${_w26}) _hit26=1; break ;; esac
+    done <"${_tmp26}/linted"
+    [ "${_hit26}" -eq 1 ] || _s26="${_s26} ${_f26}(tracked, not linted)"
+  done <"${_tmp26}/expected"
+fi
+[ -n "${_tmp26}" ] && rm -rf "${_tmp26}"
+if [ -z "${_s26}" ]; then
+  pass "S26 make shellcheck lints every tracked shell script"
+else
+  fail "S26 shellcheck lint set:${_s26}"
+fi
+
 if [ "${_failed}" -ne 0 ]; then
   printf '\nRESULT: FAIL\n'
   exit 1

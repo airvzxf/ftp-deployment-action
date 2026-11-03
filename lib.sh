@@ -1085,6 +1085,46 @@ extract_netrc_host() {
 }
 
 # ------------------------------------------------------------------------------
+# exit_on_signal STATUS
+#   The HUP/INT/TERM trap action (write_netrc, entrypoint.sh): stop the
+#   mirror started by run_lftp_once, if one is running, then `exit
+#   STATUS` (129/130/143), which runs the EXIT trap (.netrc removal and
+#   lock release, FND-0097 / FND-0002). Without such a trap busybox ash
+#   dies on INT/TERM without running the EXIT trap, and as PID 1 (the
+#   container's ENTRYPOINT without --init) it ignores them until SIGKILL.
+#
+#   The shell runs a trap only when the current foreground command
+#   ends, so run_lftp_once runs the 5 h lftp pipeline in the background
+#   and waits for it with `wait`, which a trapped signal interrupts at
+#   once. The pipeline's lftp ignores SIGINT (an asynchronous list in a
+#   shell without job control), and as PID 1 the shell is the only
+#   process that gets the container's signal, so this sends SIGTERM to
+#   every process of the pipeline (`kill %%`: in a shell without job
+#   control busybox ash and bash signal each member) and waits until
+#   they are gone, so the lock is released only after the mirror has
+#   stopped. RUN_LFTP_ACTIVE is set just before the pipeline starts, so
+#   %% is that pipeline; a failing kill (no such job any more) is fine.
+#   A signal during any other foreground command is handled when that
+#   command ends: at most 30 s for an lftp call of the lock code (its
+#   `timeout 30s` or `timeout 10s`), at most 45 s for the retry backoff
+#   sleep (compute_backoff_seconds: 30 s ± 15 s jitter), at most
+#   concurrency_lock_poll_interval seconds for the lock poll sleep.
+#   A signal during the lock acquire can leave the lock to the
+#   stale-lock recovery: during the MKD, a dir without a sentinel
+#   (taken over after LOCK_EMPTY_GRACE, 120 s); during the sentinel
+#   PUT, a fresh sentinel that ACQUIRED_LOCK_SENTINEL does not name
+#   yet, so the release skips it and later runs wait until it is older
+#   than LOCK_STALE_AFTER (6 h) (FND-0108).
+# ------------------------------------------------------------------------------
+exit_on_signal() {
+  if [ -n "${RUN_LFTP_ACTIVE:-}" ]; then
+    kill -TERM %% 2>/dev/null || :
+    wait || :
+  fi
+  exit "$1"
+}
+
+# ------------------------------------------------------------------------------
 # write_netrc NETRC_PATH HOST USER PASSWORD
 #   Install an EXIT trap that removes NETRC_PATH, then write a .netrc
 #   file there that is created with mode 0600. This is the B-03
@@ -1093,7 +1133,8 @@ extract_netrc_host() {
 #   log).
 #
 #   The trap is installed in the parent shell context, so it covers
-#   the entire run from this point onward.
+#   the entire run from this point onward. HUP, INT and TERM traps
+#   (exit_on_signal) are installed with it, so a signal also runs it.
 # ------------------------------------------------------------------------------
 write_netrc() {
   _wn_path=$1
@@ -1106,6 +1147,11 @@ write_netrc() {
   # owns the cleanup from then on; this one covers the write itself
   # and any other caller.
   trap 'rm -f "${_wn_path}"' EXIT
+  # FND-0097: busybox ash does not run the EXIT trap when a signal
+  # kills it, so these make HUP/INT/TERM exit through it.
+  trap 'exit_on_signal 129' HUP
+  trap 'exit_on_signal 130' INT
+  trap 'exit_on_signal 143' TERM
   # A redirection keeps an existing file's mode, so remove any old
   # file first and create the new one under umask 077: it is 0600
   # from the moment it exists. If rm fails, the `&&` skips the write
@@ -1331,12 +1377,23 @@ run_lftp_once() {
   # FND-0015: local_dir is double-quoted in the lftp script, so lftp
   # opens exactly the path validate_local_dir_outside_home checked
   # (quotes, ">", "<", "|" and "#" stay literal; '"' and '\' are rejected).
+  # FND-0097 / FND-0002: the pipeline runs in the background and the
+  # function waits for it, so a HUP/INT/TERM trap (exit_on_signal) runs
+  # at once instead of after the pipeline ends (up to 5 h). `wait $!`
+  # ($! is tee, the last command) returns the status of the whole
+  # pipeline, under pipefail, in busybox ash and in bash, so the return
+  # value is the same as for the foreground pipeline.
   # shellcheck disable=SC3040
   set -o pipefail
+  RUN_LFTP_ACTIVE=1
   timeout -k "${_rlo_kill_after}" "${_rlo_timeout}" lftp \
     "${_rlo_server_eff}" \
     -e "${_rlo_settings} ${_rlo_mirror} \"${_rlo_local}\" ${_rlo_remote}; quit;" \
-    2>&1 | tee -a "${_rlo_log}"
+    2>&1 | tee -a "${_rlo_log}" &
+  wait "$!"
+  _rlo_rc=$?
+  RUN_LFTP_ACTIVE=""
+  return "${_rlo_rc}"
 }
 
 # The holder renames its sentinel to a fresh stamp before every mirror attempt
@@ -1894,9 +1951,11 @@ refresh_lock_sentinel() {
 #   Best-effort release of the server-side concurrency lock:
 #   DELE the sentinel file inside LOCK_PATH (if SENTINEL is provided or
 #   $ACQUIRED_LOCK_SENTINEL is set), then RMD the lock dir. All
-#   failures are silently swallowed because the caller is
-#   typically on the way out (EXIT trap); the whole point of
-#   release is to fail soft.
+#   failures are swallowed because the caller is typically on the
+#   way out (EXIT trap); the whole point of release is to fail
+#   soft. A failed RMD (lftp `rmdir`: refused, failed, or a dir
+#   that is not empty) prints a ::warning:: naming the lock dir
+#   (FND-0105).
 #
 #   SERVER: lftp server URL (e.g. ftp://host).
 #   LOCK_PATH: the lock dir on the FTP server (e.g. .lftp-deployment.lock).
@@ -1973,9 +2032,19 @@ release_lock_safely() {
   for _rls_tried in ${ACQUIRED_LOCK_SENTINEL_TRIED:-}; do
     _rls_dele="${_rls_dele} quote DELE ${_rls_path}/${_rls_tried};"
   done
+  # FND-0105: `rmdir`, not `quote RMD`, so a refused RMD (or a dir
+  # that is not empty) shows in lftp's exit code, which is that of
+  # this last command; a failed DELE of a missing TRIED name before
+  # it does not. Warn and still return 0; the printf stays under
+  # set +e so it cannot change the exit status the EXIT trap keeps.
   timeout 30s lftp "${_rls_server_eff}" \
-    -e "${_rls_preamble} ${_rls_dele} quote RMD ${_rls_path}; quit;" \
+    -e "${_rls_preamble} ${_rls_dele} rmdir ${_rls_path}; quit;" \
     >/dev/null 2>&1
+  _rls_rc=$?
+  if [ "${_rls_rc}" -ne 0 ]; then
+    printf '::warning::concurrency lock: could not remove the lock dir %s after the run (lftp exit %s: RMD refused or failed, or the dir is not empty). Until it is removed, later runs cannot take the lock: they wait up to concurrency_lock_timeout and then fail, and they name this dir only if it holds no sentinel and their timeout is over %s s; otherwise they report a held lock. Remove it on the server by hand, or check the delete permission under concurrency_lock_path.\n' \
+      "${_rls_path}" "${_rls_rc}" "${LOCK_EMPTY_GRACE:-120}"
+  fi
   set -e
   return 0
 }
