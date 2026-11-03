@@ -35,7 +35,7 @@ body:
       description: 'Pin the version you are using today so we can scope docs, CHANGELOG wording, and any backport decision. Anchored to the "Supported versions" table in SECURITY.md.'
       options:
         - "@v4 (latest, current line)"
-        - "specific v4.x tag (e.g. @v4.0.0)"
+        - "specific v4.x tag (e.g. @v4.0.1)"
         - "v3.x, v2.x or v1.x (end of life)"
         - "@main / @master (development branch)"
         - local dev build
