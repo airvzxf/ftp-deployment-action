@@ -562,11 +562,28 @@ If `mkdir` fails (normally a `550`, the directory already
 exists), another run is in flight; the action polls up to
 `concurrency_lock_timeout` seconds (retrying every
 `concurrency_lock_poll_interval` seconds) and then fails
-with a clear error. After the mirror completes (or on
-any exit path — success, error, SIGINT, 5h timeout, or
-signal), the action issues `quote RMD <path>` to release
-the lock, both in the mirror invocation and via the EXIT
-trap as a fallback.
+with a clear error. When the run ends (success, error,
+the 5-hour timeout, or a HUP, INT or TERM signal), the
+EXIT trap deletes this run's sentinel and issues
+`rmdir <path>` to release the lock. A signal during the mirror
+stops lftp at once; the lock is released after lftp has
+exited, and the action exits `129`, `130` or `143` (HUP,
+INT, TERM). A signal during another step takes effect
+when that step ends: after at most 30 seconds for an
+lftp call of the lock code (lock acquire, sentinel
+refresh), at most 45 seconds for the retry backoff, or
+one `concurrency_lock_poll_interval` while waiting for
+the lock. A signal during the lock acquire (the `mkdir`
+or the sentinel upload) can leave the lock to the
+stale-lock recovery below: a lock dir without a sentinel
+is taken over after 120 seconds, but a fresh sentinel
+blocks later runs for up to 6 hours. SIGKILL runs no
+cleanup, so if the runtime kills the container first
+(`docker stop` sends SIGKILL 10 seconds after SIGTERM)
+the lock is left to the stale-lock recovery below. Which
+signal a GitHub Actions cancel sends to the container,
+and how long before SIGKILL, is up to the runner and not
+verified here.
 
 **A wrong password or an unreachable server fails at once.** The
 action reads lftp's `mkdir` output. A login failure
@@ -651,7 +668,15 @@ adds `the lock dir <path> could not be removed either` to its upload
 error. A later run only tries the takeover after 120 seconds, so it
 needs a `concurrency_lock_timeout` longer than that to report this;
 with a shorter timeout (or `"0"`) it reports another deployment in
-progress.
+progress. The release at the end of a run uses lftp's `rmdir` as
+well: if that `RMD` is refused or fails, or the dir is not empty
+(a sentinel `DELE` was refused too), the run keeps its exit code
+(0 after a successful deploy) and the log ends with
+`::warning::concurrency lock: could not remove the lock dir <path>
+after the run (lftp exit <n>: RMD refused or failed, or the dir is
+not empty)`, followed by what later runs will report and how to fix
+it. A `DELE` of a sentinel name that never existed on the server
+fails harmlessly and causes no warning when the `RMD` works.
 
 If a holder died less than 6 hours ago, the next deploys fail
 with that error until you clear the lock. Delete the two entries
@@ -732,7 +757,7 @@ remote directory), give each its own lock path:
 |  5. lftp -e "..."        |--- +5h timeout per attempt
 |     (run_lftp_once +     |   + exponential backoff with jitter
 |      retry loop,         |   + per-attempt net/dns timeouts
-|      max_retries=0..N)   |   + releases lock via `quote RMD` + EXIT trap
+|      max_retries=0..N)   |   + releases lock via `rmdir` + EXIT trap
 |                          |     if it was acquired
 |                          |
 |  6. Result banner        |--- ERROR: UPLOAD FAILED + last lftp exit code
@@ -894,10 +919,15 @@ For how to report vulnerabilities please see [`SECURITY.md`](./SECURITY.md).
 This action runs as the unprivileged `lftp` user inside the container
 (Dockerfile `USER lftp`). The `password` input is never passed to
 `lftp` on the command line: it is written to `~/.netrc` with mode
-`0600` for the duration of the run and removed via an `EXIT` trap
-on any exit path (success, error, `set -e` abort, SIGINT). Combined,
-these mean the password never appears in `/proc/<pid>/cmdline` or in
-the GitHub Actions runner log.
+`0600` for the duration of the run and removed via an `EXIT` trap on
+success, error and `set -e` abort, and on HUP, INT or TERM, whose
+traps exit through it (during the mirror at once, otherwise when the
+current step ends, after at most 30 seconds, 45 seconds in the retry
+backoff, or one lock poll interval). SIGKILL runs no trap; the file
+then stays in the container's own filesystem (`/home/lftp` is not a
+host mount) until the container is removed. Combined, these mean the
+password never appears in `/proc/<pid>/cmdline` or in the GitHub
+Actions runner log.
 
 `server`, `local_dir`, `remote_dir`, and `concurrency_lock_path`
 are all validated against the same deny-list: `..` path-traversal

@@ -3,8 +3,10 @@
 #
 # Scenario 03 (variant C, closes #120 half 1): explicit FTPS upload.
 #
-#   * Boots docker.io/fauria/vsftpd with SSL/TLS enabled (a custom
-#     vsftpd.conf is bind-mounted in, with ssl_enable=YES and the
+#   * Boots the pre-baked FTPS test-server image (alpine vsftpd, built
+#     from tests/integration/Dockerfile.test-server) via
+#     start_ftps_server, with SSL/TLS enabled (a custom vsftpd.conf
+#     overlay is bind-mounted in, with ssl_enable=YES and the
 #     self-signed cert mounted at /etc/vsftpd/vsftpd.pem).
 #   * Generates an ephemeral self-signed cert (see
 #     tests/integration/lib/self-signed-cert.sh). The cert is
@@ -12,12 +14,15 @@
 #     it (INPUT_SSL_VERIFY_CERTIFICATE=false, INPUT_SSL_CHECK_HOSTNAME=
 #     false) so a self-signed cert is sufficient.
 #   * Invokes the ftp-deployment-action image end-to-end with
-#     INPUT_SERVER=ftp://ftptest@127.0.0.1:2121. The user is
-#     embedded in the URL — acquire_lock_with_recovery (which
-#     forks its own lftp without applying run_lftp_once's URL
-#     rewrite) then sees a user, lftp's NetRC::LookupHost fires,
-#     and the password is read from .netrc (B-03). This is the
-#     same workaround scenario 09 uses for the same reason.
+#     INPUT_SERVER=ftp://<user>@127.0.0.1:2121, where <user> is the
+#     per-scenario random FTP_USER. The user in the URL is not
+#     required: run_lftp_once, acquire_lock_with_recovery and
+#     release_lock_safely all pass the URL through rewrite_lftp_url
+#     (lib.sh, #132), which embeds INPUT_USER when the URL has none
+#     and leaves a URL that already has a user unchanged. Either way
+#     lftp sees a user, its .netrc lookup fires, and the password is
+#     read from .netrc (B-03). Scenarios 08 and 09 use the bare
+#     ftp://host:port form instead, to exercise the rewrite.
 #   * INPUT_FTP_SSL_ALLOW=true drives an AUTH TLS upgrade on the
 #     control channel (the defining property of "explicit" FTPS).
 #   * Asserts the action exits 0 AND emits `FTP UPLOADED FINISHED`
@@ -59,23 +64,25 @@ scenario_setup "03-ftps-explicit-upload"
 _cert=$(generate_self_signed_cert)
 log_info "using cert ${_cert}"
 
-# MODE="explicit" maps host port 2121 -> container port 21, with
-# ssl_enable=YES (AUTH TLS upgrade on the control channel).
+# MODE="explicit": the container runs with --network host, so vsftpd
+# listens directly on ${FTP_CONTROL_PORT} (2121) on the host (no port
+# mapping takes effect), with ssl_enable=YES (AUTH TLS upgrade on the
+# control channel).
 start_ftps_server "${FTP_USER}" "${FTP_PASSWORD}" "${FTP_DATA_DIR}" "${_cert}" "explicit"
 
 # --- Step 2: env-file --------------------------------------------------------
 #
 # Critical inputs:
-#   * INPUT_SERVER carries the user. Two reasons:
-#       (1) acquire_lock_with_recovery forks its own lftp without
-#           the URL rewrite run_lftp_once applies; that lftp needs
-#           a user in the URL to trigger its .netrc lookup. See
-#           scenarios 08/09 for the same pattern.
-#       (2) The main mirror lftp is fine either way (the rewrite
-#           is a no-op when the URL already has a user).
+#   * INPUT_SERVER carries the user. This is not required: every
+#     lftp the action forks (the mirror, the lock acquire, the
+#     sentinel refresh and the lock release) applies
+#     rewrite_lftp_url, which is a no-op when
+#     the URL already has a user and embeds INPUT_USER when it does
+#     not. Scenarios 08 and 09 use the bare form to cover the
+#     rewrite; these FTPS scenarios keep the user in the URL.
 #   * INPUT_FTP_SSL_ALLOW=true + INPUT_LFTP_SETTINGS with
-#     `set ftp:ssl-force true;`: lftp 4.9.3 (pinned in the action
-#     image) sends AUTH TLS with ftp:ssl-allow alone, but if the
+#     `set ftp:ssl-force true;`: the lftp in the action image
+#     sends AUTH TLS with ftp:ssl-allow alone, but if the
 #     server refuses it lftp continues in cleartext. ftp:ssl-force
 #     makes that refusal fatal, so this scenario sets it to
 #     guarantee the session really is TLS.
@@ -96,12 +103,18 @@ _env=$(mktemp -t actenv.XXXXXX) || log_fail "mktemp env failed"
 # not just the success branch.
 #
 # F2 audit (v2.11.9 +1 day): every variable in the trap uses the
-# `${VAR:-}` default form. The trap is installed BEFORE _log and
-# _env are assigned; if any failure fires the trap on the way to
-# those assignments, a bare `${_log}` would abort the entire trap
-# string under `set -u` before `stop_ftp_server` runs, leaking the
-# FTP container on the host. The FTP_VSFTPD_CONF:- default was
-# already this pattern; the new _log/_env entries follow it.
+# `${VAR:-}` default form. The trap is installed after _env is
+# assigned (above) but BEFORE _log is assigned (Step 3); if a
+# failure fires the trap on the way to that assignment, a bare
+# `${_log}` would abort the entire trap string under `set -u`
+# before `stop_ftp_server` runs, leaking the FTP container on the
+# host. The FTP_VSFTPD_CONF:- default was already this pattern;
+# the _log entry follows it, and _env gets the same form.
+# Until this trap is installed, the EXIT trap is the one
+# scenario_setup set (`trap stop_ftp_server EXIT`). So if the `mktemp`
+# for _env fails, log_fail's exit still runs stop_ftp_server, which
+# removes the container and the data dir; only the vsftpd conf
+# overlay (FTP_VSFTPD_CONF) is left behind.
 trap 'rm -f "${_env:-}" "${_log:-}" "${FTP_VSFTPD_CONF:-}"; stop_ftp_server' EXIT
 
 {
@@ -118,16 +131,17 @@ trap 'rm -f "${_env:-}" "${_log:-}" "${FTP_VSFTPD_CONF:-}"; stop_ftp_server' EXI
   printf 'INPUT_SSL_CHECK_HOSTNAME=false\n'
   printf 'INPUT_LFTP_SETTINGS=set ftp:ssl-force true;set net:persist-retries 0;\n'
 } > "${_env}"
-# v2.11.3 (#158): mktemp on alpine busybox creates files with mode
-# 0644, not 0600. INPUT_PASSWORD lives in this file (Docker's
+# v2.11.3 (#158): this mktemp runs on the host. GNU coreutils and
+# alpine busybox mktemp both create the file with mode 0600
+# (measured); chmod 0600 keeps that explicit instead of relying on
+# the host's mktemp. INPUT_PASSWORD lives in this file (Docker's
 # --env-file reader is the standard `getline` split, not a keyring),
-# so without the chmod the credential is world-readable for the
-# lifetime of the container. Scenarios 01/02/05/07–12 already go
-# through `lftp_build_open_script` or `build_action_env_file`, which
-# call chmod 0600; 03/04 inlined the write because they need to
-# embed FTP_USER into INPUT_SERVER (see the rewrite_lftp_url /
-# .netrc path), and missed the chmod. Same pattern as #133's fix
-# at tests/integration/lib/common.sh:406.
+# so the file must stay private for the lifetime of the container.
+# Scenarios 01/02/05/07–12 already go through `lftp_build_open_script`
+# or `build_action_env_file`, which call chmod 0600; 03/04 inlined the
+# write because they put FTP_USER into INPUT_SERVER, and missed the
+# chmod. Same pattern as #133's fix in build_action_env_file
+# (tests/integration/lib/common.sh).
 chmod 0600 "${_env}"
 
 # --- Step 3: invoke the action ------------------------------------------------
@@ -157,10 +171,10 @@ assert_action_success "${_log}" "${_rc}"
 #
 # Same observation path as scenario 08: vsftpd's /home/vsftpd is
 # bind-mounted at ${FTP_DATA_DIR}, and the FTP user's home is
-# /home/vsftpd/${FTP_USER}. LOCAL_UMASK=022 (set in
-# start_ftps_server) makes that directory world-readable, so a
-# plain `ls` from the host works regardless of the uid mapping
-# inside the container.
+# /home/vsftpd/${FTP_USER}. start_ftps_server chmods the data dir
+# (and the user's home inside the container) to 0777, so a plain
+# `ls` from the host works regardless of the uid mapping inside the
+# container.
 _ftp_home="${FTP_DATA_DIR}/${FTP_USER}"
 
 assert_present "${_ftp_home}" "index.html"

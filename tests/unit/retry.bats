@@ -11,7 +11,9 @@ setup() {
   # `LIB="/../../lib.sh"` which is non-empty (so the fallback never
   # fires) and the file path is invalid. The other 6 .bats files
   # already use BATS_TEST_DIRNAME directly; align.
-  LIB="${BATS_TEST_DIRNAME}/../../lib.sh"
+  # LIB_SRC overrides the lib.sh under test (used to prove the FND-0097
+  # run_lftp_once tests fail on the pre-fix lib.sh).
+  LIB="${LIB_SRC:-${BATS_TEST_DIRNAME}/../../lib.sh}"
   # shellcheck disable=SC1090
   . "${LIB}"
 }
@@ -286,33 +288,62 @@ setup() {
 # FND-0049: the jitter seed is per process, not per second
 # ----------------------------------------------------------------------------
 # Helper. Runs compute_backoff_seconds in $1 separate bash processes
-# (counter $2) and leaves the values, one per line, in $BATCH. The
-# batch is retried (up to 5 times) when the wall-clock second changed
-# while it ran, so every accepted batch ran inside one second. That
-# is the condition under which the old bare `srand()` gave identical
-# values. A bare `bash -c` is used because /bin/sh is dash on CI and
-# pipefail is a bash feature. BACKOFF_LIB can point at another
-# lib.sh (used to prove the tests fail on the pre-fix file).
+# (counter $2) and leaves the values, one per line, in $BATCH. Every
+# process sees the same time of day: the condition under which the old
+# bare `srand()` gave identical values. awk reads the clock only in a
+# bare `srand()`, so a PATH-first `awk` wrapper rewrites `srand()` to
+# `srand(FAKE_AWK_TIME)` (a fixed second) and then runs the real awk.
+# FND-0107: this replaces a retry until `date +%s` was equal before and
+# after the batch, which failed when 20 spawns did not fit in a second.
+# The wrapper logs one line per rewritten call, `s=<the -v s value>`
+# (`s=-` without one), in $FAKE_AWK_LOG. A bare `bash -c` is used
+# because /bin/sh is dash on CI and pipefail is a bash feature.
+# BACKOFF_LIB can point at another lib.sh (used to prove the tests fail
+# on the pre-fix file).
 _backoff_batch() {
   _bb_n=$1
   _bb_counter=$2
   _bb_lib="${BACKOFF_LIB:-${LIB}}"
-  _bb_try=0
-  while [ "${_bb_try}" -lt 5 ]; do
-    _bb_try=$((_bb_try + 1))
-    _bb_t0=$(date +%s)
-    BATCH=''
-    _bb_i=0
-    while [ "${_bb_i}" -lt "${_bb_n}" ]; do
-      _bb_i=$((_bb_i + 1))
-      _bb_v=$(bash -c 'set -eu; set -o pipefail; . "$1"; compute_backoff_seconds "$2"' _ "${_bb_lib}" "${_bb_counter}")
-      BATCH="${BATCH}${_bb_v}
+  _bb_bin="${BATS_TEST_TMPDIR}/fixed-clock-awk"
+  mkdir -p "${_bb_bin}"
+  FAKE_REAL_AWK=$(command -v awk)
+  FAKE_AWK_TIME=1782907200
+  FAKE_AWK_LOG="${BATS_TEST_TMPDIR}/fixed-clock-awk.log"
+  export FAKE_REAL_AWK FAKE_AWK_TIME FAKE_AWK_LOG
+  : > "${FAKE_AWK_LOG}"
+  cat > "${_bb_bin}/awk" << 'AWK'
+#!/usr/bin/env bash
+_fa_s='-'
+_fa_hit=''
+_fa_args=()
+for _fa_a in "$@"; do
+  case "${_fa_a}" in
+    s=*) _fa_s=${_fa_a#s=} ;;
+    *'srand()'*) _fa_hit=1 ;;
+  esac
+  _fa_args+=("${_fa_a//'srand()'/srand(${FAKE_AWK_TIME})}")
+done
+[ -n "${_fa_hit}" ] && printf 's=%s\n' "${_fa_s}" >> "${FAKE_AWK_LOG}"
+exec "${FAKE_REAL_AWK}" "${_fa_args[@]}"
+AWK
+  chmod +x "${_bb_bin}/awk"
+  BATCH=''
+  _bb_i=0
+  while [ "${_bb_i}" -lt "${_bb_n}" ]; do
+    _bb_i=$((_bb_i + 1))
+    _bb_v=$(PATH="${_bb_bin}:${PATH}" bash -c 'set -eu; set -o pipefail; . "$1"; compute_backoff_seconds "$2"' _ "${_bb_lib}" "${_bb_counter}")
+    BATCH="${BATCH}${_bb_v}
 "
-    done
-    _bb_t1=$(date +%s)
-    [ "${_bb_t0}" = "${_bb_t1}" ] && return 0
   done
-  return 1
+  # The fixed clock was in force in every process.
+  [ "$(wc -l < "${FAKE_AWK_LOG}")" -eq "${_bb_n}" ]
+}
+
+# Asserts every line of $FAKE_AWK_LOG matches the ERE $1 (which seed
+# path compute_backoff_seconds took).
+_assert_seed_log() {
+  _sl_bad=$(grep -Ev "$1" "${FAKE_AWK_LOG}" || true)
+  [ -z "${_sl_bad}" ]
 }
 
 # Asserts every line of $BATCH is an integer in [$1, $2] and that
@@ -336,6 +367,8 @@ _assert_spread_in_range() {
   # (17 values; 20 identical results by chance is about 17^-19).
   _backoff_batch 20 6
   _assert_spread_in_range 8 24
+  # Every process took the /dev/urandom seed.
+  _assert_seed_log '^s=[0-9]+$'
 }
 
 @test "FND-0049: with od failing, the call neither aborts nor collapses to one value" {
@@ -352,6 +385,8 @@ _assert_spread_in_range() {
   [ "$status" -eq 1 ]
   _backoff_batch 20 6
   _assert_spread_in_range 8 24
+  # Every process took the fallback seed (empty -v s).
+  _assert_seed_log '^s=$'
 }
 
 @test "FND-0049: with od printing non-numeric text, the fallback seed is used" {
@@ -363,4 +398,149 @@ _assert_spread_in_range() {
   export PATH
   _backoff_batch 20 6
   _assert_spread_in_range 8 24
+  # Every process took the fallback seed (empty -v s).
+  _assert_seed_log '^s=$'
+}
+
+# ----------------------------------------------------------------------------
+# run_lftp_once: FND-0097 / FND-0002 runs the timeout|tee pipeline in the
+# background and waits for it, so a signal trap runs at once. The return value,
+# the tee -a log and pipefail must stay as for the foreground pipeline. Each
+# case runs in a bash child (pipefail, `wait` and the traps stay out of the
+# bats shell) with a fake lftp (explicit bash shebang: /bin/sh is dash on CI)
+# behind the real `timeout`.
+# ----------------------------------------------------------------------------
+
+# _rlo_run LFTP_BODY: runs run_lftp_once with a fake lftp whose body is
+# LFTP_BODY; the log starts with one line, so tee -a must keep it.
+_rlo_run() {
+  local fb="${BATS_TEST_TMPDIR}/fbrlo"
+  mkdir -p "${fb}"
+  printf '#!/bin/bash\n%s\n' "$1" > "${fb}/lftp"
+  chmod +x "${fb}/lftp"
+  RLO_LOG="${BATS_TEST_TMPDIR}/rlo.log"
+  printf 'earlier attempt\n' > "${RLO_LOG}"
+  run timeout 60 bash -c '
+    . "$1"
+    PATH="$2:${PATH}"
+    run_lftp_once "ftp://h" "set a b;" "mirror -R" "./" "./" "$3" 30s 1s ""
+    echo "rc=$? active=${RUN_LFTP_ACTIVE:-}"
+  ' _ "${LIB}" "${fb}" "${RLO_LOG}"
+}
+
+@test "run_lftp_once: FND-0097: returns lftp's exit status and tees the output to the step log and (appended) to the log file" {
+  _rlo_run 'echo "out line"; echo "err line" >&2; exit 7'
+  echo "${output}"; cat "${RLO_LOG}"
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"out line"* ]]
+  [[ "${output}" == *"err line"* ]]
+  [ "${lines[${#lines[@]}-1]}" = "rc=7 active=" ]
+  [ "$(sed -n 1p "${RLO_LOG}")" = "earlier attempt" ]
+  grep -qx 'out line' "${RLO_LOG}"
+  grep -qx 'err line' "${RLO_LOG}"
+}
+
+@test "run_lftp_once: FND-0097: success returns 0" {
+  _rlo_run 'echo ok-line; exit 0'
+  echo "${output}"
+  [ "${lines[${#lines[@]}-1]}" = "rc=0 active=" ]
+}
+
+@test "run_lftp_once: FND-0097: lftp killed by SIGTERM (as on the 5 h timeout) returns 143, by SIGKILL 137" {
+  _rlo_run 'echo before; kill -TERM $$; sleep 5'
+  echo "${output}"
+  [ "${lines[${#lines[@]}-1]}" = "rc=143 active=" ]
+  grep -qx 'before' "${RLO_LOG}"
+  _rlo_run 'kill -KILL $$'
+  echo "${output}"
+  [ "${lines[${#lines[@]}-1]}" = "rc=137 active=" ]
+}
+
+@test "run_lftp_once: FND-0097: the pipeline runs in the background (a trapped TERM interrupts the wait at once and the trap sees RUN_LFTP_ACTIVE)" {
+  local fb="${BATS_TEST_TMPDIR}/fbrlo"
+  mkdir -p "${fb}"
+  printf '#!/bin/bash\nsleep 20\n' > "${fb}/lftp"
+  chmod +x "${fb}/lftp"
+  local t0=${SECONDS}
+  run timeout 60 bash -c '
+    . "$1"
+    PATH="$2:${PATH}"
+    trap '"'"'echo "trap active=${RUN_LFTP_ACTIVE:-}"; kill -TERM %% 2>/dev/null; wait; exit 143'"'"' TERM
+    ( sleep 1; kill -TERM $$ ) &
+    run_lftp_once "ftp://h" "" "mirror -R" "./" "./" "$3" 30s 1s ""
+    echo "not reached"
+  ' _ "${LIB}" "${fb}" "${BATS_TEST_TMPDIR}/rlo.log"
+  echo "${output}"
+  [ "${status}" -eq 143 ]
+  [ "${output}" = "trap active=1" ]
+  # The TERM comes after 1 s; a foreground pipeline would hold the trap back
+  # for the whole `sleep 20`.
+  [ $((SECONDS - t0)) -lt 10 ]
+}
+
+# ----------------------------------------------------------------------------
+# FND-0093: entrypoint.sh must pass "${LOG_OFFSET}" to classify_permanent_error
+# (FND-0045), so only the current attempt's output is classified. A scratch
+# copy of entrypoint.sh (paths rewritten into BATS_TEST_TMPDIR) runs with a
+# lib.sh copy whose run_lftp_once is a stub appending to LOG_FILE ($6) and
+# whose compute_backoff_seconds is 0. A fake date pins the log name, so the
+# log can be pre-seeded with an earlier "mirror: Login failed: 530 ..." line
+# (permanent if the whole log is read). Attempt 1 appends a transient
+# "max-retries exceeded (530 ...)" line and fails; attempt 2 succeeds. With
+# the offset the run retries and exits 0; without it attempt 1 is classified
+# permanent from the old line. ENTRYPOINT_SRC overrides the entrypoint under
+# test (used to prove the tests fail on a mutant without the offset).
+# ----------------------------------------------------------------------------
+
+_run_entrypoint_offset() {
+  local root="${BATS_TEST_DIRNAME}/../.."
+  local src="${ENTRYPOINT_SRC:-${root}/entrypoint.sh}"
+  local app="${BATS_TEST_TMPDIR}/app"
+  local h="${BATS_TEST_TMPDIR}/home/lftp"
+  mkdir -p "${app}" "${h}/.lftp-logs" "${BATS_TEST_TMPDIR}/site" "${BATS_TEST_TMPDIR}/bin"
+  cp "${LIB}" "${app}/lib.sh"
+  printf '0.0.0-test\n' > "${app}/VERSION"
+  cat >> "${app}/lib.sh" <<'STUB'
+
+run_lftp_once() {
+  _n=$(cat "${MIRROR_COUNT_FILE}" 2>/dev/null || echo 0)
+  _n=$((_n + 1))
+  printf '%s\n' "${_n}" > "${MIRROR_COUNT_FILE}"
+  if [ "${_n}" -ge 2 ]; then
+    printf 'Transferring file\n' >> "$6"
+    return 0
+  fi
+  printf 'mirror: Fatal error: max-retries exceeded (530 Too many connections)\n' >> "$6"
+  return 1
+}
+compute_backoff_seconds() { echo 0; }
+STUB
+  sed -e "s#/app/#${app}/#g" -e "s#/home/lftp#${h}#g" "${src}" > "${app}/entrypoint.sh"
+
+  export MIRROR_COUNT_FILE="${BATS_TEST_TMPDIR}/mirror.count"
+  rm -f "${MIRROR_COUNT_FILE}"
+  printf '#!/bin/sh\nprintf "20260601T120000Z\\n"\n' > "${BATS_TEST_TMPDIR}/bin/date"
+  chmod +x "${BATS_TEST_TMPDIR}/bin/date"
+  # Earlier output in the shared log: permanent only if it is classified.
+  printf 'mirror: Login failed: 530 Login incorrect.\n' > "${h}/.lftp-logs/run-20260601T120000Z.log"
+
+  # bash, not sh: the scratch entrypoint is run like the other harnesses.
+  PATH="${BATS_TEST_TMPDIR}/bin:${PATH}" HOME="${BATS_TEST_TMPDIR}/home" \
+  INPUT_SERVER="ftp://example.test" INPUT_USER="ftptest" INPUT_PASSWORD="pw" \
+  INPUT_LOCAL_DIR="${BATS_TEST_TMPDIR}/site/" INPUT_REMOTE_DIR="./" \
+  INPUT_CONCURRENCY_LOCK="false" INPUT_MAX_RETRIES="3" \
+    run bash -eu "${app}/entrypoint.sh"
+}
+
+@test "entrypoint: FND-0093: an earlier permanent line in the shared log does not stop the retry of a transient failure (offset passed)" {
+  _run_entrypoint_offset
+  echo "status=${status}"; echo "${output}"
+  [ "${status}" -eq 0 ]
+  [ "$(cat "${MIRROR_COUNT_FILE}")" = "2" ]
+  printf '%s\n' "${output}" | grep -F 'Try #2' > /dev/null
+  ! printf '%s\n' "${output}" | grep -F 'Detected permanent error' > /dev/null
+}
+
+@test "entrypoint: FND-0093: the classify_permanent_error call passes LOG_OFFSET (static guard)" {
+  grep -F 'classify_permanent_error "${LOG_FILE}" "${LOG_OFFSET}"' "${ENTRYPOINT_SRC:-${BATS_TEST_DIRNAME}/../../entrypoint.sh}" > /dev/null
 }
