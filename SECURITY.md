@@ -4,12 +4,12 @@
 
 | Track                  | Tag range                                  | Support                                                              |
 |------------------------|--------------------------------------------|-----------------------------------------------------------------------|
-| Currently maintained   | `v4.x` (latest = `v4.0.0`)                                | Active — security and bug fixes published in the next v4.x.y release. |
+| Currently maintained   | `v4.x` (latest = `v4.0.1`)                                | Active — security and bug fixes published in the next v4.x.y release. |
 | End-of-life            | `v3.x` (last: `v3.1.0`), `v2.x` (last: `v2.12.1`), `v1.x`, `v1.0-alpha.*` | No support. Upgrade to v4: see "Upgrading" in the README.             |
 
 Floating refs like `@latest`, `@master`, `@main`, and the major
 alias `@v4` are **not** in the support matrix — pin to a specific
-tag (e.g. `@v4.0.0`) or a full commit SHA so the maintainer can
+tag (e.g. `@v4.0.1`) or a full commit SHA so the maintainer can
 reproduce the exact image you are running. The release pipeline
 does not move `@v4` or `@latest`; the maintainer moves them by
 hand after each release, so they can lag behind the newest tag
