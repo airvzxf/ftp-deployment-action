@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.2] - 2026-11-16
+
+### Changed
+
+- **The action image is built on Alpine 3.24.4.** `Dockerfile`, `tests/Dockerfile.smoke` and `tests/integration/Dockerfile.test-server` now use `FROM alpine:3.24.4@sha256:f59abe65...` instead of 3.24.3 (#416). The digest is the one Docker Hub lists for the `3.24.4` tag. Between the two base images only `apk-tools`/`libapk` (3.0.8 -> 3.0.9) and `alpine-release` change; `lftp` stays pinned at `~4.9.3`. Inputs, outputs and behaviour are unchanged.
+
+- **Release workflow actions updated:** `docker/login-action` 4.7.0 -> 4.8.0 (#413), `sigstore/cosign-installer` 4.1.2 -> 4.1.3 (#414, installs Cosign 3.1.4) and `softprops/action-gh-release` 3.0.3 -> 3.0.4 (#415). Each is pinned by the commit SHA of its tag. These steps run only when a release is published; the action itself does not use them.
+
 ## [4.0.1] - 2026-11-03
 
 ### Fixed
