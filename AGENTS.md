@@ -124,7 +124,7 @@ the release branch BEFORE the tag.
     rewrites the SHA, so the branch-tip tag points at a commit
     that exists on no branch. Re-tag in two steps:
     `git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z`,
-    then `git tag -s vX.Y.Z <merge-commit-sha>` and
+    then `git -c gpg.format=openpgp tag -s vX.Y.Z -u 414687A3CD7E65B9 <merge-commit-sha>` (see ③) and
     `git push origin vX.Y.Z`. Verify with
     `git rev-parse vX.Y.Z^{commit}` — it MUST match
     `git rev-parse main` (step ④ below). That equality is a
@@ -165,12 +165,15 @@ hold.
    (`-u` for GPG, no flag for SSH), pointing at the merge
    SHA.** The signing format determines which entry in the
    in-repo allow-list (`SECURITY.md` table) the workflow will
-   consult.
+   consult. Always pass `-c gpg.format=...`: the maintainer's
+   global git config sets `gpg.format=ssh` (commits are
+   SSH-signed), so a plain `git tag -s -u 414687A3CD7E65B9`
+   fails with `Couldn't load public key 414687A3CD7E65B9`,
+   and a plain `git tag -s` signs with the SSH key instead.
 
    ```bash
-   # PGP (current, every tag since v2.11.12; the maintainer's
-   # git has gpg.format=openpgp, so plain `git tag -s` uses it):
-   git tag -s vX.Y.Z -u 414687A3CD7E65B9 "$(git rev-parse HEAD)"
+   # PGP (current, every tag since v2.11.12):
+   git -c gpg.format=openpgp tag -s vX.Y.Z -u 414687A3CD7E65B9 "$(git rev-parse HEAD)"
    # SSH (v2.11.0 – v2.11.6, v2.11.9 – v2.11.11):
    git -c gpg.format=ssh tag -s vX.Y.Z "$(git rev-parse HEAD)"
    git push origin vX.Y.Z
@@ -230,7 +233,7 @@ git tag -d vX.Y.Z                          # delete local
 git push origin :refs/tags/vX.Y.Z          # delete remote
 git fetch origin main                      # re-sync to trunk
 git checkout main && git reset --hard origin/main
-git tag -s vX.Y.Z "$(git rev-parse origin/main)"
+git -c gpg.format=openpgp tag -s vX.Y.Z -u 414687A3CD7E65B9 "$(git rev-parse origin/main)"
 git push origin vX.Y.Z
 ```
 

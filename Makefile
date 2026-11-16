@@ -371,7 +371,7 @@ release:
 	@echo '"Tag signature guard". In short:'
 	@echo '  1. Open a release branch + PR that bumps VERSION and stamps CHANGELOG.md.'
 	@echo '  2. Wait for green CI, then squash-merge the PR.'
-	@echo '  3. Tag the merge commit on main: git tag -s vX.Y.Z -m "..." <merge-sha>'
+	@echo '  3. Tag the merge commit on main: git -c gpg.format=openpgp tag -s vX.Y.Z -u 414687A3CD7E65B9 -m "..." <merge-sha>'
 	@echo '  4. Push only the tag: git push origin vX.Y.Z'
 	@echo '  5. release.yml checks the tag signature, that the tag commit is on main,'
 	@echo '     and that VERSION matches the tag (vX.Y.Z-rc.N needs VERSION X.Y.Z).'
