@@ -9,22 +9,12 @@ on:
 permissions:
   contents: read
 
-# Serialize per-ref so a burst of pushes does not spawn N
-# parallel runs. cancel-in-progress is conditional on the
-# event type: PR runs cancel so a re-pushed branch never
-# queues a stale full-suite run; push-to-main and manual
-# (workflow_dispatch) runs do NOT cancel so the Actions tab
-# keeps the red run visible while a fix lands.
-#
 # Triggers (see `on:` above): push to main, any pull_request,
 # and workflow_dispatch. There are no paths filters and no tag
 # trigger: pushing a tag does not start this workflow (tag
 # pushes are handled by release.yml). Jobs below are all
 # independent: none declares `needs:`, so they run in parallel
 # and no job gates another.
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   shellcheck:

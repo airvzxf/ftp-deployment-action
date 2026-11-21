@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **CI no longer cancels runs.** `ci.yml` and `e2e.yml` drop their concurrency groups, so pushing again to a pull request no longer cancels the previous run and every commit keeps its own result. No behaviour change in the action.
+
 ## [4.0.2] - 2026-11-16
 
 ### Changed
